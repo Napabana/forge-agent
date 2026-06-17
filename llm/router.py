@@ -87,6 +87,7 @@ def create_backend(
             model=model,
             api_key=resolved_key,
             max_tokens=max_tokens,
+            base_url=base_url or None,
         )
 
     # 所有 OpenAI-compatible providers

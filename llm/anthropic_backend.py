@@ -32,10 +32,19 @@ class AnthropicBackend(LLMBackend):
     - extended thinking（claude-3-7-sonnet 等支持）
     """
 
-    def __init__(self, model: str, api_key: str, max_tokens: int = 4096) -> None:
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        max_tokens: int = 4096,
+        base_url: str | None = None,
+    ) -> None:
         try:
             import anthropic as _anthropic
-            self._client = _anthropic.Anthropic(api_key=api_key)
+            client_kwargs: dict[str, Any] = {"api_key": api_key}
+            if base_url:
+                client_kwargs["base_url"] = base_url
+            self._client = _anthropic.Anthropic(**client_kwargs)
         except ImportError:
             raise ImportError("anthropic package not installed. Run: pip install anthropic")
 
@@ -215,6 +224,7 @@ def _anthropic_stream(
     messages: list,
     tools: list,
     on_text: StreamCallback | None = None,
+    on_thought: StreamCallback | None = None,
 ) -> LLMResponse:
     """
     Anthropic 流式调用实现。
@@ -243,11 +253,22 @@ def _anthropic_stream(
     if api_tools:
         kwargs["tools"] = api_tools
 
-    # 使用 stream() context manager
+    # 使用 stream() context manager；同时分发正文(text)与推理过程(thought)增量。
+    # 没有 thinking_delta 时 on_thought 自然不触发 —— 允许没有思考直接输出正文。
     with self._client.messages.stream(**kwargs) as stream:
-        for text_chunk in stream.text_stream:
-            if on_text and text_chunk:
-                on_text(text_chunk)
+        for event in stream:
+            if event.type != "content_block_delta":
+                continue
+            delta = event.delta
+            delta_type = getattr(delta, "type", None)
+            if delta_type == "text_delta":
+                chunk = getattr(delta, "text", "") or ""
+                if on_text and chunk:
+                    on_text(chunk)
+            elif delta_type == "thinking_delta":
+                chunk = getattr(delta, "thinking", "") or ""
+                if on_thought and chunk:
+                    on_thought(chunk)
 
         # 流结束后拿最终完整响应
         final = stream.get_final_message()

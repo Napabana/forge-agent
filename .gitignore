@@ -4,3 +4,12 @@
 logs/
 __pycache__/
 *.pyc
+config/
+.claude
+
+# Secrets — never commit API keys / tokens
+.env
+.env.*
+!.env.example
+*.md
+!README.md

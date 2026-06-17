@@ -78,6 +78,35 @@ class AppConfig:
 _ENV_RE = re.compile(r"\$\{(\w+)\}")
 
 
+def _load_dotenv() -> None:
+    """从仓库外的 .env 加载环境变量（不覆盖 shell 已设置的值）。
+
+    零依赖：手写解析标准 KEY=VALUE 行，跳过注释与空行。
+    默认复用 ~/learn-claude-code/.env —— key 只保留这一份、且始终在
+    forge-agent 仓库之外，git 永远不会上传它。config/default.yaml 里的
+    ${VAR} 占位符在加载时从这些环境变量展开。
+    可用环境变量 FORGE_ENV_FILE 指向其它路径。
+    """
+    candidates: list[Path] = []
+    custom = os.environ.get("FORGE_ENV_FILE")
+    if custom:
+        candidates.append(Path(custom))
+    candidates.append(Path.home() / "learn-claude-code" / ".env")
+    for env_path in candidates:
+        if not env_path.exists():
+            continue
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+        break
+
+
 def _expand_env(text: str) -> str:
     """展开 ${VAR} 形式的环境变量占位符。"""
     def replace(m: re.Match) -> str:
@@ -95,6 +124,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     Returns:
         AppConfig 实例
     """
+    _load_dotenv()  # 先把 ~/.env 注入环境，使下面的 ${VAR} 能正确展开
     if path is None:
         # 自动查找：当前目录 → 项目根目录
         candidates = [
