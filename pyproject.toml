@@ -39,7 +39,7 @@ agent = "entry.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*"]
+include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*", "runtime*", "ipc*", "harness*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

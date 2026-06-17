@@ -83,10 +83,15 @@ class Agent:
         backend: LLMBackend,
         registry: ToolRegistry,
         config: AgentConfig | None = None,
+        executor: "ToolExecutor | None" = None,
     ) -> None:
         self._backend = backend
         self._registry = registry
         self._cfg = config or AgentConfig()
+        # 默认透明直通：未注入 executor 时用一个无 hooks/permission 的
+        # ToolExecutor 包住 registry，行为等价于直接 registry.execute_tool。
+        # 需要安全管线的地方（如 --confirm / 多智能体入口）显式注入 executor。
+        self._executor = executor or _default_executor(registry)
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -201,7 +206,7 @@ class Agent:
             # ── 5. 执行工具 ─────────────────────────────────────────────
             if action.action_type == ActionType.TOOL_CALL and action.tool_call:
                 tc = action.tool_call
-                result = self._registry.execute_tool(tc.name, tc.params)
+                result = self._executor.execute(tc.name, tc.params)
                 observation = result.to_observation(tc.name)
 
                 # 追踪是否有文件写操作
@@ -407,3 +412,12 @@ class Agent:
             return diff if diff else None
         except Exception:
             return None
+
+
+def _default_executor(registry: ToolRegistry) -> "ToolExecutor":
+    """
+    构造一个透明直通的 ToolExecutor：无 hooks、无 permission，
+    行为等价于直接调 registry.execute_tool。延迟 import 避免 agent <-> harness 循环。
+    """
+    from harness.executor import ToolExecutor
+    return ToolExecutor(registry)
