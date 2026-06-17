@@ -11,5 +11,8 @@ config/
 .env
 .env.*
 !.env.example
+
+# TaskEngine state (SQLite WAL)
+.forge/
 *.md
 !README.md
