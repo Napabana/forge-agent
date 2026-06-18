@@ -31,39 +31,32 @@
 
 ## 当前进度（截至 2026-06-18）
 
-- **M1 — 事务与状态**：✅ 完成。`task/engine.py`(379L) + `runtime/worktree.py`(210L) + `scripts/m1_demo.py`。提交 `aede64b`。
-- **M2 — Harness 与 Bus**：✅ 完成。`ipc/bus.py`(174L) + `harness/{hooks,permission,executor}.py`。提交 `817f92d`。
-- **测试**：M1/M2 模块测试 102 passed / 7 skipped（Docker）。健康，无 stub/TODO。
-- **M3 — 沙箱加固**：⚠️ 部分（~40%）。`tools/runtime.py` 有 `DockerRuntime` 和 `--network none`，但缺 `mem_limit`/`nano_cpus`/`read_only`/`tmpfs` + Worktree rw/ro 白名单。
-- **M4 — 集成**：⚠️ 部分（~30%）。测试在，但 **`agent/core.py` 尚未接入 TaskEngine/AgentBus/WorktreeSession**，主循环仍是旧 forge-agent 版本。这是最大的缺口。
+> 详细版见 `进度.md`（需 `git add -f`，受 `*.md` 忽略规则影响）。
 
-> 分支 `feature/s20-integration`。**2026-06-18 wsl 重启丢失的是未提交工作进度，已提交的 M1/M2 代码完好。**
+- **M1 — 事务与状态**：✅ 完成。`task/engine.py`(379L) + `runtime/worktree.py`(295L) + `scripts/m1_demo.py`。提交 `aede64b`。
+- **M2 — Harness 与 Bus**：✅ 完成。`ipc/bus.py`(174L) + `harness/{hooks,permission,executor}.py`。提交 `817f92d`。
+- **M3 — 沙箱加固**：✅ 完成。`tools/runtime.py`(521L) 加 `build_docker_run_args()` 纯函数 + `mem_limit`/`--cpus`/`network=none`/`--read-only`/`tmpfs` + Worktree rw/ro 白名单；worktree 加 `discard_changes`/`keep`/`count_changes`。提交 `0ecf992`。本机 Docker 已配（systemd+Docker CE，`jfm` 免 sudo）。
+- **M4 — 主循环集成（第一波·核心闭环）**：✅ 完成。`agent/orchestrate.py`(213L) async 组合根，`async with WorktreeSession` + `asyncio.to_thread(Agent.run)`。`agent/core.py` 一行未改。safe_path 零侵入（复用 `PermissionManager(workspace=wt.path)`，读写工具都覆盖）。4 个新 EventType + executor `decision_callback`。`scripts/m4_demo.py` 全部断言通过。提交 `fc9a7d0`。
+- **测试**：全量 **498 passed / 0 failed**。核心模块 14 文件 ~3400 行。无 stub/TODO。
+
+> 分支 `feature/s20-integration`。M1-M4 第一波均已提交。
 
 ## 接下来要做（按优先级）
 
-### 第 0 步：先提交现有未保存改动
-`entry/cli.py`（修复 `input()` 提示符 ANSI 颜色被 readline 吞掉 → `_rl_magenta` + `\001/\002` 包裹）和 `scripts/start.sh`（激活+注入.env 启动脚本）。commit 后再开新工作。
+### Step 1 — M4 第二波（工程化收尾，核心闭环已通）
+- **CLI `--isolate` 标志**（`entry/cli.py` run 命令）：触发 `orchestrate_run`，跳过内联 `agent.run`。`_build_registry` 加 `worktree_path` 参数。`chat` 暂不接。
+- **非 Docker 路径工具 cwd 接线**：`tools/{shell,test,git}_tool.py` 加 `cwd` 参数（additive），LocalRuntime 下工具在 worktree 内执行。Docker 路径由 runtime 内部翻译。
+- **bus `on_append→forwarder` 逐步事件转发**：第一波只发任务生命周期事件；逐步事件经 `on_append` 回调 → `asyncio.Queue` → forwarder 协程。`to_thread` 工作线程触发回调，用 `put_nowait`。
 
-### Step 1 — M3 沙箱加固（`tools/runtime.py`）
-目标：把 `DockerRuntime` 的容器启动参数改硬核，满足 `任务规划.md` Task 3.1/3.2。
-- 强制注入：`mem_limit`（默认 512m，可配）、`nano_cpus`（单核）、`network_mode='none'`、`read_only=True`、`/tmp` 挂 tmpfs。
-- Worktree 白名单：与 `WorktreeSession` 联动，**仅当前任务 worktree 路径 `rw` 挂载**，主库/依赖 `ro`。
-- 验证：`tests/test_sandbox.py` 目前 7 个 skip（无 Docker）。要么在有 Docker 的环境跑，要么把"启动参数构造"抽成纯函数单测（不依赖真容器），先保证参数正确性。
-
-### Step 2 — M4 主循环集成（`agent/core.py`，最大块）
-把 M1/M2/M3 接进 ReAct 主循环，这是整个合并项目的闭环。
-- `TaskEngine`：每次 run 绑定一个 task，`claim_task` → 跑 → `complete_task`/失败标记。
-- `WorktreeSession`：`async with` 包住整个 run，隔离代码工作区，崩溃自动回滚。
-- `AgentBus` + `Hooks`：工具调用走 `ToolExecutor`（已部分接入），事件上 bus。
-- 保留现有 JSONL EventLog，新增 worktree 创建/销毁、权限决策事件。
-- 验证：`scripts/` 加一个 M4 端到端 demo（输入 Issue 文本 → 触发完整循环 → 产出 JSONL）。`smoke_test.py` 是参考样板。
-
-### Step 3 — 测试补强（`任务规划.md` Task 4.1）
-SQLite 并发读写一致性、Worktree 强制中断（KeyboardInterrupt 模拟）后清理断言、Docker 超载配置校验。核心模块覆盖率 ≥85%。
+### Step 2 — 测试补强（`任务规划.md` Task 4.1）
+SQLite 并发读写一致性、Worktree 强制中断（KeyboardInterrupt 模拟）后清理断言、Docker 超载配置校验。核心模块覆盖率 ≥85%（当前用例充足，需 `pytest --cov` 量化）。
 
 ## 关键约束 / 易踩坑
 
 - **不要把 API key 提交进仓库**：key 只在仓库外的 `~/learn-claude-code/.env`。`config/default.yaml` 只放 `${VAR}` 占位。
-- **`agent/core.py` 当前是旧 forge-agent 循环**：集成时别推倒重来，增量接入（先 WorktreeSession 包 run，再 TaskEngine 记账，最后 Bus）。
-- **Docker 测试在本机 skip**：写沙箱逻辑时，把"构造容器参数"和"真正起容器"分开，前者可纯单测。
-- **async 边界**：内核主循环保持同步 ReAct（清晰可测），I/O 边界（LLM/子进程/Docker）走 `asyncio`/`asyncio.to_thread`。别全局 async 化。
+- **`agent/core.py` 保持同步 ReAct 循环**：已通过 `orchestrate_run`（async 组合根 + `to_thread`）接入，core.py 不改。继续遵守"内核同步、I/O 异步"。
+- **Docker 测试本机可跑**：systemd+Docker CE 已配，免 sudo。沙箱逻辑仍建议"参数构造"与"起容器"分离，前者纯单测。
+- **async 边界**：内核同步 ReAct，`orchestrate_run` 是唯一 async 组合根，I/O（Worktree/Bus/LLM/Docker）在边界走 asyncio。
+- **safe_path 在 executor 层不在工具层**：`PermissionManager(workspace=)` 强制边界，工具零改动，边界由 orchestrator 设（不信 LLM params）。读写都覆盖。
+- **`*.md` 被 gitignore**：只留 README/USAGE；新增 .md（如 `进度.md`）要 `git add -f`。
+- **易错 API**：`AgentBus.subscribe` 一次一个 topic；Docker CLI 无 `--nano-cpus`（用 `--cpus`）；`event_log` 含下划线的 task_id 别用 filename 解析。
