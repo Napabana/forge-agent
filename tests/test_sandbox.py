@@ -18,6 +18,7 @@ import pytest
 
 from tools.runtime import (
     DockerRuntime, LocalRuntime, RunResult, create_runtime,
+    build_docker_run_args,
     CONTAINER_WORKDIR, SANDBOX_IMAGE,
 )
 from tools.shell_tool import ShellTool
@@ -316,6 +317,173 @@ class TestDockerRuntimeUnit:
         assert rm_call is not None
         assert "abc123" in rm_call
 
+    # --- M3 加固参数透传到 docker run argv ---
+
+    def _capture_run_args(self, rt, tmp_path):
+        """触发 exec → 捕获 docker run 的 argv（mock subprocess.run）。"""
+        runs = []
+
+        def mock_run(args, **kwargs):
+            runs.append(args)
+            m = MagicMock()
+            if "info" in args:
+                m.returncode = 0; m.stdout = ""; m.stderr = ""
+            elif "run" in args:
+                m.returncode = 0; m.stdout = "fakecid\n"; m.stderr = ""
+            elif "exec" in args:
+                m.returncode = 0; m.stdout = "ok"; m.stderr = ""
+            return m
+
+        with patch("subprocess.run", side_effect=mock_run):
+            rt.exec("echo hi")
+        return next(a for a in runs if "run" in a)
+
+    def test_init_defaults_backward_compat(self, tmp_path):
+        """回归守卫：裸 DockerRuntime(run) 的 run args 含加固默认值且保持旧行为。"""
+        rt = DockerRuntime(repo_path=str(tmp_path))
+        args = self._capture_run_args(rt, tmp_path)
+        # 加固默认值（M3 新增）
+        assert args[args.index("--memory") + 1] == "1g"
+        assert args[args.index("--cpus") + 1] == "2.0"
+        assert "--network" in args and args[args.index("--network") + 1] == "none"
+        assert "--tmpfs" in args and args[args.index("--tmpfs") + 1] == "/tmp"
+        # 旧行为保持：repo rw 挂载，无只读根
+        assert args[args.index("-v") + 1] == f"{tmp_path}:{CONTAINER_WORKDIR}:rw"
+        assert "--read-only" not in args
+        assert "--nano-cpus" not in args   # 不该用这个无效 flag
+
+    def test_init_readonly_root_adds_flag_and_ro_mount(self, tmp_path):
+        rt = DockerRuntime(repo_path=str(tmp_path), readonly_root=True)
+        args = self._capture_run_args(rt, tmp_path)
+        assert "--read-only" in args
+        assert args[args.index("-v") + 1] == f"{tmp_path}:{CONTAINER_WORKDIR}:ro"
+
+    def test_init_mem_limit_propagates(self, tmp_path):
+        rt = DockerRuntime(repo_path=str(tmp_path), mem_limit="512m")
+        args = self._capture_run_args(rt, tmp_path)
+        assert args[args.index("--memory") + 1] == "512m"
+
+    def test_init_network_true_omits_network_none(self, tmp_path):
+        rt = DockerRuntime(repo_path=str(tmp_path), network=True)
+        args = self._capture_run_args(rt, tmp_path)
+        assert "--network" not in args
+
+
+# ===========================================================================
+# build_docker_run_args — 纯函数单测（零 Docker 依赖）
+# ===========================================================================
+
+class TestBuildDockerRunArgs:
+    """build_docker_run_args 是纯函数，任何环境都能跑。"""
+
+    def _build(self, **kw):
+        defaults = dict(container_name="c", repo_path="/repo", image="img")
+        defaults.update(kw)
+        return build_docker_run_args(**defaults)
+
+    def test_starts_with_docker_run(self):
+        a = self._build()
+        assert a[:2] == ["docker", "run"]
+        # 尾部：image + tail -f /dev/null
+        assert a[-4:] == ["img", "tail", "-f", "/dev/null"]
+
+    def test_basic_flags_present(self):
+        a = self._build(container_name="mybox")
+        assert "--detach" in a
+        assert "--rm" in a
+        assert "--workdir" in a
+        assert a[a.index("--name") + 1] == "mybox"
+
+    def test_default_repo_mount_is_rw(self):
+        a = self._build()
+        assert a[a.index("-v") + 1] == "/repo:/workspace:rw"
+
+    def test_readonly_root_makes_repo_ro(self):
+        a = self._build(readonly_root=True)
+        assert a[a.index("-v") + 1] == "/repo:/workspace:ro"
+        assert "--read-only" in a
+
+    def test_readonly_root_false_no_read_only_flag(self):
+        a = self._build(readonly_root=False)
+        assert "--read-only" not in a
+
+    def test_memory_default_and_custom(self):
+        assert self._build()[self._build().index("--memory") + 1] == "1g"
+        a = self._build(mem_limit="512m")
+        assert a[a.index("--memory") + 1] == "512m"
+
+    def test_cpus_default_and_custom(self):
+        # 默认 2 核 → --cpus 2.0
+        a = self._build()
+        assert a[a.index("--cpus") + 1] == "2.0"
+        # nano_cpus=1e9 → 1 核
+        a2 = self._build(nano_cpus=1_000_000_000)
+        assert a2[a2.index("--cpus") + 1] == "1.0"
+        assert "--nano-cpus" not in a2
+
+    @pytest.mark.parametrize("readonly", [True, False])
+    def test_tmpfs_always_present(self, readonly):
+        a = self._build(readonly_root=readonly)
+        assert a[a.index("--tmpfs") + 1] == "/tmp"
+
+    def test_network_none_by_default(self):
+        a = self._build()
+        assert "--network" in a and a[a.index("--network") + 1] == "none"
+
+    def test_network_true_omits_none(self):
+        a = self._build(network=True)
+        assert "--network" not in a
+
+    def test_worktree_mount_is_rw_after_repo(self):
+        a = self._build(worktree_mount=("/host/wt", "/workspace"))
+        vs = [a[i + 1] for i, t in enumerate(a) if t == "-v"]
+        assert "/repo:/workspace:rw" in vs
+        assert "/host/wt:/workspace:rw" in vs
+        # worktree 挂载在 repo 之后（rw 盖住 ro）
+        assert vs.index("/host/wt:/workspace:rw") > vs.index("/repo:/workspace:rw")
+
+    def test_worktree_rw_even_when_readonly_root(self):
+        a = self._build(readonly_root=True, worktree_mount=("/host/wt", "/workspace"))
+        vs = [a[i + 1] for i, t in enumerate(a) if t == "-v"]
+        assert "/repo:/workspace:ro" in vs
+        assert "/host/wt:/workspace:rw" in vs   # worktree 始终可写
+
+    def test_extra_mounts_appended_in_order(self):
+        a = self._build(extra_mounts=[("/a", "/ca"), ("/b", "/cb")])
+        vs = [a[i + 1] for i, t in enumerate(a) if t == "-v"]
+        assert "/a:/ca" in vs and "/b:/cb" in vs
+        assert vs.index("/a:/ca") < vs.index("/b:/cb")
+
+    def test_no_worktree_no_extra_exactly_one_mount(self):
+        a = self._build()
+        assert a.count("-v") == 1   # 只有 repo 挂载
+
+
+# ===========================================================================
+# create_runtime — 工厂函数（参数透传 + 死代码已删）
+# ===========================================================================
+
+class TestCreateRuntimeHardened:
+    def test_network_true_propagates(self, tmp_path):
+        with patch("tools.runtime.DockerRuntime") as mk:
+            create_runtime(sandbox=True, repo_path=str(tmp_path), network=True)
+        assert mk.call_args.kwargs["network"] is True
+
+    def test_readonly_and_worktree_propagate(self, tmp_path):
+        with patch("tools.runtime.DockerRuntime") as mk:
+            create_runtime(
+                sandbox=True, repo_path=str(tmp_path),
+                readonly_root=True, worktree_mount=("/h", "/workspace"),
+            )
+        assert mk.call_args.kwargs["readonly_root"] is True
+        assert mk.call_args.kwargs["worktree_mount"] == ("/h", "/workspace")
+
+    def test_no_allow_network_attribute(self, tmp_path):
+        """死代码 _allow_network 已删除。"""
+        with patch("subprocess.run"):   # 阻止真起容器
+            rt = create_runtime(sandbox=True, repo_path=str(tmp_path))
+        assert not hasattr(rt, "_allow_network")
+
 
 # ===========================================================================
 # DockerRuntime — 集成测试（需要真实 Docker）
@@ -378,6 +546,64 @@ class TestDockerRuntimeIntegration:
             result = tool.execute({"cmd": "python3 --version"})
         assert result.success
         assert "Python" in result.output
+
+    # --- M3 加固参数的真实容器行为验证 ---
+
+    def test_read_only_root_blocks_write_to_workspace(self, tmp_path):
+        """readonly_root=True：写 /workspace 应失败（read-only file system）。"""
+        with DockerRuntime(repo_path=str(tmp_path), readonly_root=True) as rt:
+            result = rt.exec("touch /workspace/x", timeout=15)
+        assert not result.success
+        assert "read-only" in result.output.lower()
+
+    def test_tmpfs_writable_when_readonly_root(self, tmp_path):
+        """readonly_root=True 下 /tmp（tmpfs）仍可写。"""
+        with DockerRuntime(repo_path=str(tmp_path), readonly_root=True) as rt:
+            result = rt.exec("echo ok > /tmp/y && cat /tmp/y", timeout=15)
+        assert result.success
+        assert "ok" in result.output
+
+    def test_memory_limit_reflected_in_inspect(self, tmp_path):
+        """--memory 1g 应在 docker inspect 里体现。"""
+        rt = DockerRuntime(repo_path=str(tmp_path))
+        try:
+            rt.exec("echo start")   # 触发启动
+            cid = rt.container_id
+            assert cid is not None
+            out = subprocess.run(
+                ["docker", "inspect", "-f", "{{.HostConfig.Memory}}", cid],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            assert out == "1073741824"   # 1g = 1024^3
+        finally:
+            rt.cleanup()
+
+    def test_cpu_limit_reflected_in_inspect(self, tmp_path):
+        """--cpus 2.0 应在 docker inspect 里体现（NanoCpus=2e9）。"""
+        rt = DockerRuntime(repo_path=str(tmp_path))
+        try:
+            rt.exec("echo start")
+            cid = rt.container_id
+            assert cid is not None
+            out = subprocess.run(
+                ["docker", "inspect", "-f", "{{.HostConfig.NanoCpus}}", cid],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            assert out == "2000000000"   # 2 核
+        finally:
+            rt.cleanup()
+
+    def test_network_true_allows_egress(self, tmp_path):
+        """network=True：可访问外网（与默认断网对照）。"""
+        with DockerRuntime(repo_path=str(tmp_path), network=True) as rt:
+            result = rt.exec(
+                "python3 -c \"import urllib.request; "
+                "urllib.request.urlopen('https://example.com', timeout=5)\" 2>&1 | head -1",
+                timeout=30,
+            )
+        # 默认 bridge 网络下应能连通（成功或重定向都算，关键是没被 DNS/网络拒绝）
+        assert not ("Temporary failure" in result.output
+                    or "Network is unreachable" in result.output)
 
 
 # ===========================================================================

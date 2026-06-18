@@ -78,6 +78,11 @@ class WorktreeSession:
             ...
         # 退出时（含异常）自动 git worktree remove --force + 删分支
 
+    安全清理（M3，参考 s20 code.py:240-281）：
+    - __aexit__ 始终强制回滚（事务一致性，不可妥协），无视 discard_changes。
+    - 显式 close(discard_changes=False) 可保护有改动的 worktree 不被误删。
+    - keep() 标记保留，跳过清理供 review。
+
     Args:
         repo_path:    宿主 git 仓库根目录（必须有至少一次提交）
         name:         worktree 名字（须通过 validate_worktree_name）
@@ -85,6 +90,9 @@ class WorktreeSession:
         task_id:      配合 task_engine，要绑定的任务 id
         base:         worktree 基点，默认 "HEAD"
         worktrees_dir: worktree 存放目录，默认 repo_path/.worktrees
+        discard_changes: close() 时的默认清理策略。True（默认）= 无脑 force 清理，
+                       保持事务回滚语义；False = 有改动时 refuse 清理（保护用户劳动）。
+                       仅影响显式 close()，不影响 __aexit__。
     """
 
     def __init__(
@@ -95,6 +103,7 @@ class WorktreeSession:
         task_id: str | None = None,
         base: str = "HEAD",
         worktrees_dir: str | Path | None = None,
+        discard_changes: bool = True,
     ) -> None:
         err = validate_worktree_name(name)
         if err:
@@ -111,6 +120,8 @@ class WorktreeSession:
         )
         self.path: Path = self._worktrees_dir / name   # 隔离工作区路径
         self._created = False   # __aenter__ 是否成功创建了 worktree
+        self._discard_changes = discard_changes
+        self._keep = False      # keep() 标记：跳过清理
 
     # ------------------------------------------------------------------
     # 上下文协议
@@ -142,20 +153,48 @@ class WorktreeSession:
         """
         无论是否异常，强制清理：git worktree remove --force → 删分支 → 兜底 rmtree。
         清理本身的错误只记日志，不抛出（避免掩盖原始异常）。
+
+        注意：__aexit__ 无视 discard_changes / keep —— 事务回滚语义必须可靠。
+        要保留 worktree，请在 with 块外用 keep()（但 with 退出时仍会清，因为
+        __aexit__ 是事务边界）。
         """
-        await self._cleanup()
+        await self._cleanup(force=True)
         # exc_val 不处理 → 原异常正常传播
 
     # ------------------------------------------------------------------
     # 显式清理（也可手动调用）
     # ------------------------------------------------------------------
 
-    async def _cleanup(self) -> None:
+    async def _cleanup(self, force: bool = True) -> None:
+        """
+        实际清理逻辑。force=True（__aexit__ 路径）始终强删；force=False
+        （显式 close(discard_changes=False)）会先检查改动，有改动则 refuse。
+        """
+        if self._keep:
+            logger.info("[worktree] kept for review: %s (branch wt/%s)",
+                        self._name, self._name)
+            return
+
         if not self._created:
             # __aenter__ 没成功创建，无需 git 清理（但兜底删可能残留的目录）
             if self.path.exists():
                 shutil.rmtree(self.path, ignore_errors=True)
             return
+
+        # 安全门：非强制模式下，有改动则 refuse 清理（参考 s20 code.py:253-266）
+        if not force:
+            files, commits = await self.count_changes()
+            if files < 0:
+                logger.warning("[worktree] cannot verify status of %s; force=True "
+                               "to clean anyway", self._name)
+                return
+            if files > 0 or commits > 0:
+                logger.info(
+                    "[worktree] refuse to remove '%s': %d file(s), %d commit(s) "
+                    "uncommitted. Use discard_changes=True or keep().",
+                    self._name, files, commits,
+                )
+                return
 
         # 1. 强制删除 worktree
         ok, out = await self._run_git(
@@ -176,9 +215,40 @@ class WorktreeSession:
         self._created = False
         logger.info("[worktree] removed: %s", self._name)
 
-    async def close(self) -> None:
-        """显式清理（不依赖 with 时用）。"""
-        await self._cleanup()
+    async def count_changes(self) -> tuple[int, int]:
+        """
+        统计 worktree 内未提交的改动（参考 s20 code.py:240-250）。
+        返回 (未暂存/已暂存文件数, 未推送提交数)。无法判定时返回 (-1, -1)。
+        """
+        if not self._created or not self.path.exists():
+            return 0, 0
+        try:
+            # 未提交文件（porcelain 一行一个变更）
+            r1 = await self._run_git_in(str(self.path), ["status", "--porcelain"])
+            files = len([l for l in r1.splitlines() if l.strip()]) if r1 else 0
+            # 未推送提交（无上游分支时 git 报错 → 视为 0 或无法判定）
+            r2 = await self._run_git_in(
+                str(self.path), ["log", "@{push}..HEAD", "--oneline"]
+            )
+            commits = len([l for l in r2.splitlines() if l.strip()]) if r2 else 0
+            return files, commits
+        except Exception:  # noqa: BLE001
+            return -1, -1
+
+    def keep(self) -> None:
+        """标记保留 worktree 供 review，后续 _cleanup 跳过清理（参考 s20 code.py:276）。"""
+        self._keep = True
+
+    async def close(self, discard_changes: bool | None = None) -> None:
+        """
+        显式清理（不依赖 with 时用）。
+
+        Args:
+            discard_changes: 覆盖构造时的策略。True = 强制清理；False = 有改动则
+                           refuse（保护用户劳动）。None = 用构造时 discard_changes。
+        """
+        force = self._discard_changes if discard_changes is None else discard_changes
+        await self._cleanup(force=force)
 
     # ------------------------------------------------------------------
     # 内部：async git 执行
@@ -201,6 +271,21 @@ class WorktreeSession:
             return False, "Error: git timeout (60s)"
         except Exception as e:  # noqa: BLE001
             return False, f"Error: {e}"
+
+    async def _run_git_in(self, cwd: str, args: list[str]) -> str:
+        """在指定 cwd 跑 git，返回合并输出。失败返回空串（供 count_changes 容错）。"""
+        cmd = "git " + " ".join(_shell_quote(a) for a in args)
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            return (stdout.decode(errors="replace") + stderr.decode(errors="replace")).strip()
+        except Exception:  # noqa: BLE001
+            return ""
 
 
 def _shell_quote(arg: str) -> str:

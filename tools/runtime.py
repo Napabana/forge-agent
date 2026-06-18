@@ -163,6 +163,84 @@ SANDBOX_IMAGE = "python:3.11-slim"
 # 容器内 repo 的挂载路径
 CONTAINER_WORKDIR = "/workspace"
 
+# 默认资源配额：1g 内存 + 2 核（nano_cpus，1e9 = 1 核）。
+# nano_cpus 用整数（cgroup v2 cpu.max 语义），不用 --cpus 浮点，避免歧义。
+DEFAULT_MEM_LIMIT = "1g"
+DEFAULT_NANO_CPUS = 2_000_000_000
+
+
+def build_docker_run_args(
+    *,
+    container_name: str,
+    repo_path: str,
+    image: str,
+    workdir: str = CONTAINER_WORKDIR,
+    extra_mounts: list[tuple[str, str]] | None = None,
+    readonly_root: bool = False,
+    worktree_mount: tuple[str, str] | None = None,
+    mem_limit: str = DEFAULT_MEM_LIMIT,
+    nano_cpus: int = DEFAULT_NANO_CPUS,
+    network: bool = False,
+) -> list[str]:
+    """构造 `docker run` 的完整 argv（纯函数，零副作用，便于单测）。
+
+    安全加固（任务规划.md Task 3.1/3.2）：
+    - `--memory` / `--cpus`：硬性约束 CPU/内存，防止异常代码耗尽宿主。
+      （CPU 限额以 nano_cpus 入参，1e9=1核，CLI 换算成 `--cpus` 核数。）
+    - `--network none`：默认断网（network=False 时），阻断未授权外联。
+    - `--read-only`：只读根文件系统（readonly_root=True 时）。
+    - `--tmpfs /tmp`：始终挂载，让只读根下仍有可写临时区（apt/pip scratch）。
+    - 挂载白名单：主 repo 默认 :rw；readonly_root=True 时变 :ro；worktree_mount
+      始终 :rw。M4 让 worktree 挂到 workdir 即可用 rw worktree 盖住 ro 主库。
+
+    Args:
+        container_name: 容器名（--name）。
+        repo_path:      宿主 repo 绝对路径，挂载到 workdir。
+        image:          Docker 镜像。
+        workdir:        容器内工作目录，repo 挂载目标。
+        extra_mounts:   额外 bind mount [(host, container), ...]，按序追加，无模式后缀。
+        readonly_root:  True → --read-only + 主 repo :ro。
+        worktree_mount: (host_path, container_path)；非 None 时以 :rw 追加。
+        mem_limit:      --memory 值，默认 "1g"。
+        nano_cpus:      --nano-cpus 值，默认 2_000_000_000（2 核）。
+        network:        True 则不注入 --network none（用默认 bridge）。
+
+    Returns:
+        完整 argv，含 image + `tail -f /dev/null` 常驻进程。
+    """
+    args: list[str] = [
+        "docker", "run",
+        "--detach",
+        "--name", container_name,
+        "--rm",
+        "--memory", mem_limit,
+        # CPU 限额：nano_cpus 是 Docker API 字段（1e9=1核），但 CLI 没有
+        # --nano-cpus flag（实测报 unknown flag），只有 --cpus（decimal 核数）。
+        # 这里换算后用 --cpus。
+        "--cpus", str(nano_cpus / 1_000_000_000),
+    ]
+    if not network:
+        args += ["--network", "none"]
+    if readonly_root:
+        args += ["--read-only"]
+    args += ["--tmpfs", "/tmp"]
+
+    # 主 repo 挂载：readonly_root 决定 ro/rw
+    repo_mode = "ro" if readonly_root else "rw"
+    args += ["-v", f"{repo_path}:{workdir}:{repo_mode}"]
+
+    # 额外挂载，保留调用方顺序，无模式后缀（沿用旧行为）
+    for host_path, container_path in extra_mounts or []:
+        args += ["-v", f"{host_path}:{container_path}"]
+
+    # worktree 挂载：始终 :rw（M4 用它盖住 ro 主库，实现"仅 worktree 可写"白名单）
+    if worktree_mount is not None:
+        host_path, container_path = worktree_mount
+        args += ["-v", f"{host_path}:{container_path}:rw"]
+
+    args += ["--workdir", workdir, image, "tail", "-f", "/dev/null"]
+    return args
+
 
 class DockerRuntime(Runtime):
     """
@@ -176,11 +254,27 @@ class DockerRuntime(Runtime):
 
     这样比每条命令都 docker run 快得多（避免反复启动容器的开销）。
 
+    安全加固（任务规划.md Task 3.1/3.2，M3）：
+    - 资源配额：mem_limit / nano_cpus 默认 1g / 2 核，硬性约束容器。
+    - 网络：network=False（默认）→ --network none，断网。
+    - 只读根 + tmpfs：readonly_root=True → 根 FS 只读，/tmp 走 tmpfs 仍可写。
+    - 挂载白名单（Task 3.2）：readonly_root=True 时主 repo :ro，worktree_mount
+      始终 :rw。M4 用 worktree_mount=(wt.path, /workspace) 让 rw worktree 盖住
+      ro 主库，实现"仅当前任务工作区可写"。
+
     Args:
-        repo_path:   宿主机上 repo 的绝对路径，会被 mount 进容器
-        image:       Docker 镜像名，默认 python:3.11-slim
+        repo_path:    宿主机上 repo 的绝对路径，会被 mount 进容器
+        image:        Docker 镜像名，默认 python:3.11-slim
         extra_mounts: 额外的 bind mount，格式 [(host_path, container_path), ...]
-        setup_cmds:  容器启动后执行的初始化命令（如 pip install -r requirements.txt）
+        setup_cmds:   容器启动后执行的初始化命令（如 pip install -r requirements.txt）
+        readonly_root: True → 根 FS 只读 + 主 repo :ro。注意：此模式下 setup_cmds 若
+                       写 /workspace 或 /root/.cache 会失败；需配合 worktree_mount
+                       让工作区可写，或把依赖预装进镜像。
+        worktree_mount: (host_path, container_path)，始终以 :rw 挂载。M4 联动
+                       WorktreeSession 时传入 (wt.path, /workspace)。
+        mem_limit:    --memory 值，默认 "1g"。
+        nano_cpus:    --nano-cpus 值，默认 2_000_000_000（2 核）。
+        network:      True 则允许网络（不加 --network none）。默认 False 断网。
     """
 
     def __init__(
@@ -189,11 +283,22 @@ class DockerRuntime(Runtime):
         image: str = SANDBOX_IMAGE,
         extra_mounts: list[tuple[str, str]] | None = None,
         setup_cmds: list[str] | None = None,
+        *,
+        readonly_root: bool = False,
+        worktree_mount: tuple[str, str] | None = None,
+        mem_limit: str = DEFAULT_MEM_LIMIT,
+        nano_cpus: int = DEFAULT_NANO_CPUS,
+        network: bool = False,
     ) -> None:
         self._repo_path = str(Path(repo_path).resolve())
         self._image = image
         self._extra_mounts = extra_mounts or []
         self._setup_cmds = setup_cmds or []
+        self._readonly_root = readonly_root
+        self._worktree_mount = worktree_mount
+        self._mem_limit = mem_limit
+        self._nano_cpus = nano_cpus
+        self._network = network
         self._container_id: str | None = None
         # 容器名加随机后缀，避免冲突
         self._container_name = f"coding-agent-sandbox-{uuid.uuid4().hex[:8]}"
@@ -311,22 +416,20 @@ class DockerRuntime(Runtime):
                 ),
             )
 
-        # 构建 docker run 命令
-        run_args = [
-            "docker", "run",
-            "--detach",                                 # 后台运行
-            "--name", self._container_name,
-            "--rm",                                     # 停止时自动删除
-            "-v", f"{self._repo_path}:{CONTAINER_WORKDIR}",  # mount repo
-            "--workdir", CONTAINER_WORKDIR,
-            "--network", "none",                        # 默认断网，更安全
-        ]
-
-        # 额外 mount
-        for host_path, container_path in self._extra_mounts:
-            run_args += ["-v", f"{host_path}:{container_path}"]
-
-        run_args += [self._image, "tail", "-f", "/dev/null"]
+        # 构建 docker run 命令（资源/网络/只读根/tmpfs/挂载白名单等加固参数
+        # 全部集中在 build_docker_run_args 纯函数里，便于单测）
+        run_args = build_docker_run_args(
+            container_name=self._container_name,
+            repo_path=self._repo_path,
+            image=self._image,
+            workdir=CONTAINER_WORKDIR,
+            extra_mounts=self._extra_mounts,
+            readonly_root=self._readonly_root,
+            worktree_mount=self._worktree_mount,
+            mem_limit=self._mem_limit,
+            nano_cpus=self._nano_cpus,
+            network=self._network,
+        )
 
         try:
             proc = subprocess.run(
@@ -380,15 +483,24 @@ def create_runtime(
     repo_path: str | None = None,
     image: str = SANDBOX_IMAGE,
     network: bool = False,
+    *,
+    readonly_root: bool = False,
+    worktree_mount: tuple[str, str] | None = None,
+    mem_limit: str = DEFAULT_MEM_LIMIT,
+    nano_cpus: int = DEFAULT_NANO_CPUS,
 ) -> Runtime:
     """
     根据配置创建合适的 Runtime。
 
     Args:
-        sandbox:   True 则创建 DockerRuntime，False 则 LocalRuntime
-        repo_path: sandbox=True 时必须提供
-        image:     Docker 镜像名
-        network:   sandbox 模式下是否允许网络（默认 False，更安全）
+        sandbox:    True 则创建 DockerRuntime，False 则 LocalRuntime
+        repo_path:  sandbox=True 时必须提供
+        image:      Docker 镜像名
+        network:    sandbox 模式下是否允许网络（默认 False，更安全）
+        readonly_root: 透传给 DockerRuntime（根 FS 只读 + 主 repo :ro）
+        worktree_mount: 透传给 DockerRuntime（始终 :rw 的 worktree 挂载）
+        mem_limit:  透传给 DockerRuntime（--memory，默认 1g）
+        nano_cpus:  透传给 DockerRuntime（--nano-cpus，默认 2 核）
 
     Returns:
         Runtime 实例
@@ -399,9 +511,12 @@ def create_runtime(
     if not repo_path:
         raise ValueError("repo_path is required when sandbox=True")
 
-    runtime = DockerRuntime(repo_path=repo_path, image=image)
-    if network:
-        # 允许网络时去掉 --network none
-        runtime._allow_network = True  # DockerRuntime._start_container 检查此标志
-
-    return runtime
+    return DockerRuntime(
+        repo_path=repo_path,
+        image=image,
+        network=network,
+        readonly_root=readonly_root,
+        worktree_mount=worktree_mount,
+        mem_limit=mem_limit,
+        nano_cpus=nano_cpus,
+    )

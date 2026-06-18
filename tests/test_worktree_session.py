@@ -193,3 +193,63 @@ class TestTaskBinding:
             assert engine.get_task(tid).worktree == "task-1"
         # 退出后绑定仍在（worktree 名字记录在任务上，便于追溯）
         assert engine.get_task(tid).worktree == "task-1"
+
+
+# ===========================================================================
+# M3 安全清理强化（参考 s20 code.py:240-281）
+# ===========================================================================
+
+class TestSafeCleanup:
+    """discard_changes 安全门 + count_changes 改动计数 + keep() 保留。"""
+
+    async def test_count_changes_clean_worktree(self, repo):
+        """干净的 worktree：count_changes 返回 0。"""
+        async with WorktreeSession(repo, "clean") as wt:
+            files, commits = await wt.count_changes()
+        assert files == 0
+
+    async def test_count_changes_detects_dirty(self, repo):
+        """有未提交文件：count_changes 检测到。"""
+        async with WorktreeSession(repo, "dirty") as wt:
+            (wt.path / "new.txt").write_text("hi")
+            files, commits = await wt.count_changes()
+            assert files >= 1
+
+    async def test_close_refuses_dirty_when_discard_false(self, repo):
+        """有改动 + discard_changes=False → close refuse，worktree 仍在。"""
+        wt = WorktreeSession(repo, "keep1", discard_changes=False)
+        await wt.__aenter__()
+        (wt.path / "work.txt").write_text("work")
+        await wt.close()   # discard_changes=False → refuse 清理
+        assert wt.path.exists(), "有改动时应 refuse 清理，worktree 保留"
+        # 手动清理避免污染后续测试
+        await wt.close(discard_changes=True)
+
+    async def test_close_forces_when_discard_true(self, repo):
+        """有改动 + discard_changes=True → 清理成功。"""
+        wt = WorktreeSession(repo, "keep2", discard_changes=True)
+        await wt.__aenter__()
+        (wt.path / "work.txt").write_text("work")
+        await wt.close()
+        assert not wt.path.exists()
+
+    async def test_keep_skips_cleanup(self, repo):
+        """keep() 标记后，显式 close 跳过清理，worktree 保留。"""
+        wt = WorktreeSession(repo, "review")
+        await wt.__aenter__()
+        wt.keep()
+        await wt.close()
+        assert wt.path.exists(), "keep() 后 worktree 应保留供 review"
+        # 手动清理
+        await wt._cleanup(force=True)
+
+    async def test_aexit_always_forces_regardless_of_discard(self, repo):
+        """__aexit__ 是事务边界，无视 discard_changes，强制回滚。"""
+        wt_ref = {}
+        with pytest.raises(RuntimeError, match="boom"):
+            async with WorktreeSession(repo, "tx", discard_changes=False) as wt:
+                wt_ref["path"] = wt.path
+                (wt.path / "dirty.txt").write_text("dirty")
+                raise RuntimeError("boom")
+        # 即使 discard_changes=False，__aexit__ 仍强制清理（事务一致性）
+        assert not wt_ref["path"].exists()
