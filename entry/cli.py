@@ -49,6 +49,21 @@ from llm.router import create_backend_from_config           # noqa: E402
 def _c(text: str, code: str) -> str:
     return f"\033[{code}m{text}\033[0m" if sys.stdout.isatty() else text
 
+
+def _rl_c(text: str, code: str) -> str:
+    """readline-safe 着色：给 input() 的提示符用。
+
+    GNU readline 接管 input() 提示符渲染时不识别原始 ANSI ESC，会吞掉 \\033
+    字节，导致终端显示成字面的 [35m。用 \\001/\\002 把转义标记为不可打印，
+    readline 才会正确忽略它、且不算入行宽。仅用于 prompt，普通 print 不要用。
+    """
+    if not sys.stdout.isatty():
+        return text
+    return f"\001\033[{code}m\002{text}\001\033[0m\002"
+
+
+def _rl_magenta(t: str) -> str: return _rl_c(t, "35")
+
 def green(t: str) -> str:  return _c(t, "32")
 def yellow(t: str) -> str: return _c(t, "33")
 def red(t: str) -> str:    return _c(t, "31")
@@ -418,7 +433,7 @@ def chat(
             # \r 回到行首，\033[2K 清除整行，然后显示提示符
             sys.stdout.write("\r\033[2K")
             sys.stdout.flush()
-            user_input = input(magenta("you") + " > ").strip()
+            user_input = input(_rl_magenta("you") + " > ").strip()
         except EOFError:
             click.echo()
             break
