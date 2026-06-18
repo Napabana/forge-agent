@@ -136,6 +136,23 @@ class TestPermission:
         dec = perm.check(block("file_write", path="src/app.py"))
         assert dec.is_allow
 
+    def test_file_read_path_escape_denied(self, tmp_path):
+        """M4：读工具也受 workspace 边界约束（防读系统文件泄露）。"""
+        perm = PermissionManager(workspace=str(tmp_path))
+        dec = perm.check(block("file_read", path="/etc/passwd"))
+        assert dec.is_deny
+        assert "escapes" in dec.reason or "workspace" in dec.reason
+
+    def test_file_view_in_workspace_allowed(self, tmp_path):
+        perm = PermissionManager(workspace=str(tmp_path))
+        assert perm.check(block("file_view", path="notes.txt")).is_allow
+
+    def test_workspace_none_skips_path_check(self):
+        """workspace=None 时所有文件工具都放行（向后兼容）。"""
+        perm = PermissionManager()
+        assert perm.check(block("file_read", path="/etc/passwd")).is_allow
+        assert perm.check(block("file_write", path="/etc/x")).is_allow
+
     def test_mcp_deploy_needs_confirm(self):
         perm = PermissionManager()
         dec = perm.check(block("mcp__deploy__trigger", service="prod"))
@@ -183,6 +200,27 @@ class TestToolExecutor:
         ex = ToolExecutor(registry, permission=perm)
         result = ex.execute("shell", {"cmd": "git commit -m x"})
         assert not result.success
+
+    def test_decision_callback_reports_allow_and_deny(self, registry, tmp_path):
+        """M4：decision_callback 在 check 之后触发，allow/deny 都上报。"""
+        perm = PermissionManager(workspace=str(tmp_path))
+        seen = []
+        ex = ToolExecutor(
+            registry, permission=perm,
+            decision_callback=lambda name, params, dec: seen.append((name, dec.decision.value)),
+        )
+        ex.execute("file_read", {"path": "/etc/passwd"})   # deny
+        ex.execute("file_read", {"path": str(tmp_path / "x")})  # allow（文件不存在不影响决策）
+        names = {n for n, _ in seen}
+        assert ("file_read", "deny") in seen
+        assert ("file_read", "allow") in seen
+
+    def test_no_decision_callback_is_noop(self, registry, tmp_path):
+        """默认无 decision_callback：行为不变（零回归）。"""
+        perm = PermissionManager(workspace=str(tmp_path))
+        ex = ToolExecutor(registry, permission=perm)
+        result = ex.execute("file_read", {"path": "/etc/passwd"})
+        assert not result.success   # 仍被 DENY
 
     def test_pre_tool_hook_short_circuits(self, registry):
         hooks = Hooks()

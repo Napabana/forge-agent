@@ -21,7 +21,7 @@ registry.execute_tool —— 保证既有调用方零回归。安全管线按需
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from harness.hooks import HookEvent, Hooks
 from harness.permission import PermissionDecision, PermissionManager, ToolUseBlock
@@ -29,6 +29,12 @@ from tools.base import ToolRegistry, ToolResult
 from tools.shell_tool import ConfirmCallback
 
 logger = logging.getLogger(__name__)
+
+
+# 权限决策观察回调：(tool_name, params_copy, decision) -> None。
+# 在 permission.check 之后、分支处理之前同步触发，allow/deny/confirm 都上报。
+# 供 orchestrator 记 PERMISSION_DECISION 事件 / 转发 AgentBus。
+DecisionCallback = "Callable[[str, dict[str, Any], PermissionDecision], None]"
 
 
 class ToolExecutor:
@@ -40,6 +46,7 @@ class ToolExecutor:
         permission:        权限校验器；None=跳过权限校验
         hooks:             钩子集合；None=不触发任何钩子
         confirm_callback:  CONFIRM 决策时调用，返回 False=拒绝；None=CONFIRM 一律拒绝
+        decision_callback: 权限决策观察回调（M4）；None=不上报（默认，零回归）
     """
 
     def __init__(
@@ -48,11 +55,13 @@ class ToolExecutor:
         permission: PermissionManager | None = None,
         hooks: Hooks | None = None,
         confirm_callback: ConfirmCallback | None = None,
+        decision_callback: Callable[[str, dict[str, Any], PermissionDecision], None] | None = None,
     ) -> None:
         self._registry = registry
         self._permission = permission
         self._hooks = hooks
         self._confirm_callback = confirm_callback
+        self._decision_callback = decision_callback
 
     # ------------------------------------------------------------------
     # 与 ToolRegistry.execute_tool 同签名
@@ -70,6 +79,13 @@ class ToolExecutor:
         # 2. Permission
         if self._permission is not None:
             decision = self._permission.check(block)
+            # 观察决策（allow/deny/confirm 都上报），在分支处理之前，
+            # 这样被 DENY/CONFIRM-拒绝的调用也能被记录（供审计/bus）。
+            if self._decision_callback is not None:
+                try:
+                    self._decision_callback(block.name, dict(block.input), decision)
+                except Exception as exc:  # noqa: BLE001 — 观察者不能影响执行
+                    logger.warning("[executor] decision_callback error: %s", exc)
             if decision.is_deny:
                 return ToolResult(success=False, output="",
                                   error=f"Permission denied: {decision.reason}")

@@ -20,7 +20,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from agent.task import Event, EventType, Task, Action, Observation
 
@@ -44,9 +44,14 @@ class EventLog:
         {log_dir}/{task_id}_{timestamp}.jsonl
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, task_id: str | None = None) -> None:
         self._path = path
         self._file = open(path, "a", encoding="utf-8")  # append mode
+        # 显式记录 task_id，避免依赖文件名解析（orchestrator 的 task_id 含下划线
+        # 会让 _current_task_id 的 stem.split("_")[0] 只取到 "task"）。
+        self._task_id = task_id
+        # on_append 钩子：每条 event 写入后同步触发，供 orchestrator 转发到 AgentBus。
+        self._on_append: "Callable[[Event], None] | None" = None
 
     # ------------------------------------------------------------------
     # 工厂方法
@@ -63,7 +68,7 @@ class EventLog:
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"{task.task_id}_{timestamp}.jsonl"
-        return cls(log_path / filename)
+        return cls(log_path / filename, task_id=task.task_id)
 
     @classmethod
     def open_existing(cls, path: str | Path) -> "EventLog":
@@ -140,6 +145,51 @@ class EventLog:
             payload={
                 "steps":  steps,
                 "reason": reason,
+            },
+        ))
+
+    # --- M4：worktree 生命周期 + 权限决策 + 任务认领 ---
+    # 这些方法显式收 task_id（orchestrator 的 task_id 含下划线，会破坏文件名解析）。
+
+    def log_task_claimed(self, task_id: str, owner: str) -> None:
+        """任务被认领（TaskEngine.claim_task 后）。"""
+        self._append(Event(
+            event_type=EventType.TASK_CLAIMED,
+            task_id=task_id,
+            payload={"task_id": task_id, "owner": owner},
+        ))
+
+    def log_worktree_created(
+        self, task_id: str, name: str, path: str, base: str = "HEAD"
+    ) -> None:
+        """隔离工作区已创建。"""
+        self._append(Event(
+            event_type=EventType.WORKTREE_CREATED,
+            task_id=task_id,
+            payload={"name": name, "path": path, "base": base},
+        ))
+
+    def log_worktree_removed(
+        self, task_id: str, name: str, path: str, reason: str
+    ) -> None:
+        """隔离工作区已移除。reason ∈ {"normal","exception","kept"}。"""
+        self._append(Event(
+            event_type=EventType.WORKTREE_REMOVED,
+            task_id=task_id,
+            payload={"name": name, "path": path, "reason": reason},
+        ))
+
+    def log_permission_decision(
+        self, task_id: str, tool: str, decision: str,
+        reason: str, params: dict,
+    ) -> None:
+        """一次权限决策。decision ∈ {"allow","deny","confirm"}。params 原样记录。"""
+        self._append(Event(
+            event_type=EventType.PERMISSION_DECISION,
+            task_id=task_id,
+            payload={
+                "tool": tool, "decision": decision,
+                "reason": reason, "params": params,
             },
         ))
 
@@ -225,8 +275,15 @@ class EventLog:
 
     @property
     def _current_task_id(self) -> str:
-        """从文件名中提取 task_id（8位前缀）。"""
+        """task_id：优先用 create() 时显式存的值；兜底从文件名前缀解析。"""
+        if self._task_id:
+            return self._task_id
         return self._path.stem.split("_")[0]
+
+    def on_append(self, cb: "Callable[[Event], None] | None") -> None:
+        """注册同步回调：每条 event 写入后触发（供 orchestrator 转发到 AgentBus）。
+        传 None 清除。回调异常被吞掉——观察者绝不破坏日志写入。"""
+        self._on_append = cb
 
     # ------------------------------------------------------------------
     # 内部方法
@@ -240,6 +297,11 @@ class EventLog:
         line = json.dumps(event.to_dict(), ensure_ascii=False)
         self._file.write(line + "\n")
         self._file.flush()
+        if self._on_append is not None:
+            try:
+                self._on_append(event)
+            except Exception:  # noqa: BLE001 — 观察者失败不能影响日志
+                pass
 
     def close(self) -> None:
         """显式关闭文件。通常在 Agent.run() 结束时调用。"""

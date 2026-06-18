@@ -31,6 +31,11 @@ class EventType(str, Enum):
     REFLECTION      = "reflection"
     TASK_COMPLETE   = "task_complete"
     TASK_FAILED     = "task_failed"
+    # M4 主循环集成：worktree 生命周期 + 权限决策 + 任务认领
+    TASK_CLAIMED      = "task_claimed"
+    WORKTREE_CREATED  = "worktree_created"
+    WORKTREE_REMOVED  = "worktree_removed"
+    PERMISSION_DECISION = "permission_decision"
 
 
 class ActionType(str, Enum):
@@ -182,6 +187,12 @@ class Event:
     - REFLECTION:    {"step": int, "reason": str, "prompt": str}
     - TASK_COMPLETE: {"steps": int, "summary": str}
     - TASK_FAILED:   {"steps": int, "reason": str}
+    - TASK_CLAIMED:      {"task_id": str, "owner": str}
+    - WORKTREE_CREATED:  {"name": str, "path": str, "base": str}
+    - WORKTREE_REMOVED:  {"name": str, "path": str, "reason": str}
+        reason ∈ {"normal", "exception", "kept"}
+    - PERMISSION_DECISION: {"tool": str, "decision": str, "reason": str, "params": dict}
+        decision ∈ {"allow", "deny", "confirm"}
     """
     event_type: EventType
     task_id: str
