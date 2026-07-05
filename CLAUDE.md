@@ -36,20 +36,20 @@
 - **M1 — 事务与状态**：✅ 完成。`task/engine.py`(379L) + `runtime/worktree.py`(295L) + `scripts/m1_demo.py`。提交 `aede64b`。
 - **M2 — Harness 与 Bus**：✅ 完成。`ipc/bus.py`(174L) + `harness/{hooks,permission,executor}.py`。提交 `817f92d`。
 - **M3 — 沙箱加固**：✅ 完成。`tools/runtime.py`(521L) 加 `build_docker_run_args()` 纯函数 + `mem_limit`/`--cpus`/`network=none`/`--read-only`/`tmpfs` + Worktree rw/ro 白名单；worktree 加 `discard_changes`/`keep`/`count_changes`。提交 `0ecf992`。本机 Docker 已配（systemd+Docker CE，`jfm` 免 sudo）。
-- **M4 — 主循环集成（第一波·核心闭环）**：✅ 完成。`agent/orchestrate.py`(213L) async 组合根，`async with WorktreeSession` + `asyncio.to_thread(Agent.run)`。`agent/core.py` 一行未改。safe_path 零侵入（复用 `PermissionManager(workspace=wt.path)`，读写工具都覆盖）。4 个新 EventType + executor `decision_callback`。`scripts/m4_demo.py` 全部断言通过。提交 `fc9a7d0`。
-- **测试**：全量 **498 passed / 0 failed**。核心模块 14 文件 ~3400 行。无 stub/TODO。
+- **M4 — 主循环集成**：✅ 完成（第一波核心闭环 `fc9a7d0` + 第二波工程化 `8249678`）。
+  - 第一波：`agent/orchestrate.py` async 组合根，`async with WorktreeSession` + `asyncio.to_thread(Agent.run)`。`agent/core.py` 一行未改。safe_path 零侵入（`PermissionManager(workspace=wt.path)`，读写都覆盖）。4 个新 EventType + executor `decision_callback`。`scripts/m4_demo.py` 全断言通过。
+  - 第二波：CLI `agent run --isolate [--sandbox]` 直接触发 orchestrator；工具 `default_cwd`（LocalRuntime 下默认在 worktree 内执行）；bus `on_append→queue→forwarder` 转发每条事件到 `events.*`。
+- **测试**：全量 **504 passed / 0 failed**。核心模块 14 文件 ~3400 行。无 stub/TODO。
 
-> 分支 `feature/s20-integration`。M1-M4 第一波均已提交。
+> 分支 `feature/s20-integration`。M1-M4 全部完成。
 
-## 接下来要做（按优先级）
+## 接下来要做
 
-### Step 1 — M4 第二波（工程化收尾，核心闭环已通）
-- **CLI `--isolate` 标志**（`entry/cli.py` run 命令）：触发 `orchestrate_run`，跳过内联 `agent.run`。`_build_registry` 加 `worktree_path` 参数。`chat` 暂不接。
-- **非 Docker 路径工具 cwd 接线**：`tools/{shell,test,git}_tool.py` 加 `cwd` 参数（additive），LocalRuntime 下工具在 worktree 内执行。Docker 路径由 runtime 内部翻译。
-- **bus `on_append→forwarder` 逐步事件转发**：第一波只发任务生命周期事件；逐步事件经 `on_append` 回调 → `asyncio.Queue` → forwarder 协程。`to_thread` 工作线程触发回调，用 `put_nowait`。
-
-### Step 2 — 测试补强（`任务规划.md` Task 4.1）
-SQLite 并发读写一致性、Worktree 强制中断（KeyboardInterrupt 模拟）后清理断言、Docker 超载配置校验。核心模块覆盖率 ≥85%（当前用例充足，需 `pytest --cov` 量化）。
+### 测试补强（`任务规划.md` Task 4.1）
+- SQLite 并发读写一致性（多线程 claim/complete）。
+- Worktree 强制中断（KeyboardInterrupt 模拟）后清理断言。
+- Docker 超载配置校验（边界值）。
+- 核心模块覆盖率 ≥85%（用例充足，跑 `pytest --cov` 量化）。
 
 ## 关键约束 / 易踩坑
 
