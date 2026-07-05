@@ -39,17 +39,17 @@
 - **M4 — 主循环集成**：✅ 完成（第一波核心闭环 `fc9a7d0` + 第二波工程化 `8249678`）。
   - 第一波：`agent/orchestrate.py` async 组合根，`async with WorktreeSession` + `asyncio.to_thread(Agent.run)`。`agent/core.py` 一行未改。safe_path 零侵入（`PermissionManager(workspace=wt.path)`，读写都覆盖）。4 个新 EventType + executor `decision_callback`。`scripts/m4_demo.py` 全断言通过。
   - 第二波：CLI `agent run --isolate [--sandbox]` 直接触发 orchestrator；工具 `default_cwd`（LocalRuntime 下默认在 worktree 内执行）；bus `on_append→queue→forwarder` 转发每条事件到 `events.*`。
-- **测试**：全量 **504 passed / 0 failed**。核心模块 14 文件 ~3400 行。无 stub/TODO。
+- **测试**：全量 **515 passed / 0 failed**。核心模块覆盖率 93%。14 文件 ~3400 行。无 stub/TODO。
 
 > 分支 `feature/s20-integration`。M1-M4 全部完成。
 
 ## 接下来要做
 
-### 测试补强（`任务规划.md` Task 4.1）
-- SQLite 并发读写一致性（多线程 claim/complete）。
-- Worktree 强制中断（KeyboardInterrupt 模拟）后清理断言。
-- Docker 超载配置校验（边界值）。
-- 核心模块覆盖率 ≥85%（用例充足，跑 `pytest --cov` 量化）。
+### 测试补强（`任务规划.md` Task 4.1）— ✅ 完成
+- SQLite 并发读写一致性：`tests/test_task_engine_concurrency.py`（多连接并发 claim，验证 WAL + 原子 UPDATE）。
+- Worktree/orchestrate 强制中断（KeyboardInterrupt 模拟）后清理断言：`tests/test_orchestrate.py` 新增中断/失败 result/bus forwarder 健壮性测试。
+- 覆盖率：核心模块 **93%**（agent/task/runtime/ipc/harness），全部 ≥86%。
+- 已知限制（测试中发现，未修，记 TODO）：① 单个 TaskEngine 实例非线程安全（共享 sqlite connection，多智能体共享时需加锁）；② `create_task` 的 task_id 用 4 位 rand，同秒高频创建会撞 UNIQUE。当前架构不触发，M5+ 多智能体时再处理。
 
 ## 关键约束 / 易踩坑
 

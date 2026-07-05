@@ -6,6 +6,8 @@ __pycache__/
 *.pyc
 config/
 .claude
+.coverage
+htmlcov/
 
 # Secrets — never commit API keys / tokens
 .env
