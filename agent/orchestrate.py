@@ -60,6 +60,46 @@ def _default_agent_factory(backend, registry, config, executor) -> Agent:
     return Agent(backend, registry, config=config, executor=executor)
 
 
+async def _bus_forwarder(
+    q: asyncio.Queue, bus: AgentBus, task_id: str,
+) -> None:
+    """把 EventLog 的 on_append 事件转发到 AgentBus。
+
+    从 asyncio.Queue 取 Event，publish 到 `events.{event_type}` topic。
+    None 是哨兵：收到即退出。事件由 to_thread 工作线程经 on_append put_nowait，
+    CPython 3.10+ 下 put_nowait 跨线程安全（仅取 deque 锁，不调度回调）。
+    """
+    while True:
+        ev = await q.get()
+        if ev is None:
+            return
+        try:
+            await bus.publish(
+                f"events.{ev.event_type.value}",
+                sender="orchestrator",
+                content=ev.to_dict(),
+                metadata={"task_id": task_id},
+            )
+        except Exception as exc:  # noqa: BLE001 — bus 故障不能影响运行
+            logger.warning("[orchestrate] bus forward error: %s", exc)
+
+
+async def _stop_forwarder(q: asyncio.Queue | None, task: asyncio.Task | None) -> None:
+    """哨兵终止 forwarder 并等它退出。None 时空操作。"""
+    if q is None or task is None:
+        return
+    try:
+        q.put_nowait(None)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        await asyncio.wait_for(task, timeout=1.0)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        task.cancel()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def orchestrate_run(
     *,
     backend,
@@ -120,6 +160,15 @@ async def orchestrate_run(
         )
 
     wt_name = worktree_name or f"task-{task_id}"
+
+    # bus 逐步事件转发（M4 第二波）：on_append → queue → forwarder 协程。
+    # 工作线程每写一条 event 就 put_nowait，forwarder 异步 publish 到 events.* 。
+    bus_q: asyncio.Queue | None = None
+    forwarder_task: asyncio.Task | None = None
+    if bus is not None:
+        bus_q = asyncio.Queue()
+        log.on_append(lambda ev: bus_q.put_nowait(ev))   # type: ignore[arg-type]
+        forwarder_task = asyncio.create_task(_bus_forwarder(bus_q, bus, task_id))
 
     result: RunResult | None = None
     exc_info: BaseException | None = None
@@ -189,6 +238,7 @@ async def orchestrate_run(
             logger.warning("[orchestrate] fail_task on exception path: %s", e)
         log.log_task_failed(steps=0, reason=f"exception: {exc!r}")
         log.close()
+        await _stop_forwarder(bus_q, forwarder_task)
         raise
 
     # 7. 正常退出：记账 + 清理意图
@@ -210,4 +260,5 @@ async def orchestrate_run(
             )
 
     log.close()
+    await _stop_forwarder(bus_q, forwarder_task)
     return result

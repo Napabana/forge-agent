@@ -210,6 +210,31 @@ class TestShellTool:
         result = self.tool.execute({"cmd": ""})
         assert not result.success
 
+    def test_default_cwd_used_when_param_absent(self, tmp_path):
+        """M4 第二波：构造时传 default_cwd，LLM 未传 cwd 时用它。"""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        tool = ShellTool(default_cwd=str(sub))
+        result = tool.execute({"cmd": "pwd"})
+        assert result.success
+        assert str(sub) in result.output
+
+    def test_param_cwd_overrides_default(self, tmp_path):
+        """LLM 显式传 cwd 仍可覆盖 default_cwd。"""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        tool = ShellTool(default_cwd=str(sub))
+        result = tool.execute({"cmd": "pwd", "cwd": str(tmp_path)})
+        assert result.success
+        assert str(tmp_path) in result.output
+
+    def test_no_default_cwd_uses_process_cwd(self):
+        """不传 default_cwd：保持旧行为（进程 cwd）。"""
+        tool = ShellTool()
+        assert tool._default_cwd is None
+        result = tool.execute({"cmd": "pwd"})
+        assert result.success
+
     def test_cwd_respected(self, tmp_path):
         result = self.tool.execute({"cmd": "pwd", "cwd": str(tmp_path)})
         assert result.success

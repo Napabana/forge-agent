@@ -114,9 +114,13 @@ class ShellTool(BaseTool):
         self,
         confirm_callback: ConfirmCallback | None = None,
         runtime: Runtime | None = None,
+        default_cwd: str | None = None,
     ) -> None:
         self._confirm_callback = confirm_callback
         self._runtime = runtime or LocalRuntime()
+        # default_cwd：LLM 未在 params 里显式传 cwd 时的默认工作目录。
+        # orchestrator 用它把工具执行锁定到 worktree（M4 第二波）。
+        self._default_cwd = default_cwd
 
     @property
     def name(self) -> str:
@@ -154,7 +158,7 @@ class ShellTool(BaseTool):
     def execute(self, params: dict[str, Any]) -> ToolResult:
         cmd: str = params.get("cmd", "").strip()
         timeout: int = int(params.get("timeout", 30))
-        cwd: str | None = params.get("cwd", None)
+        cwd: str | None = params.get("cwd", None) or self._default_cwd
 
         if not cmd:
             return ToolResult(success=False, output="", error="cmd is required")

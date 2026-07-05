@@ -50,9 +50,11 @@ class GitStatusTool(BaseTool):
     (see class docstring below)
     """
 
-    def __init__(self, runtime: Runtime | None = None) -> None:
+    def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
         from tools.runtime import LocalRuntime
         self._runtime = runtime or LocalRuntime()
+        # LLM 未传 cwd 时的默认 repo 根（orchestrator 注入 worktree，M4 第二波）。
+        self._default_cwd = default_cwd
 
     """
     查看工作区状态。
@@ -83,7 +85,7 @@ class GitStatusTool(BaseTool):
         }
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
-        cwd = params.get("cwd")
+        cwd = params.get("cwd") or self._default_cwd
         success, output = _run_git(["status", "--short", "--branch"], cwd=cwd, runtime=self._runtime)
         if not output:
             output = "Nothing to commit, working tree clean"
@@ -95,9 +97,11 @@ class GitDiffTool(BaseTool):
     (see class docstring below)
     """
 
-    def __init__(self, runtime: Runtime | None = None) -> None:
+    def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
         from tools.runtime import LocalRuntime
         self._runtime = runtime or LocalRuntime()
+        # LLM 未传 cwd 时的默认 repo 根（orchestrator 注入 worktree，M4 第二波）。
+        self._default_cwd = default_cwd
 
     """
     查看变更 diff。
@@ -139,7 +143,7 @@ class GitDiffTool(BaseTool):
         }
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
-        cwd = params.get("cwd")
+        cwd = params.get("cwd") or self._default_cwd
         staged = params.get("staged", False)
         path = params.get("path")
 
@@ -169,9 +173,11 @@ class GitAddTool(BaseTool):
     (see class docstring below)
     """
 
-    def __init__(self, runtime: Runtime | None = None) -> None:
+    def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
         from tools.runtime import LocalRuntime
         self._runtime = runtime or LocalRuntime()
+        # LLM 未传 cwd 时的默认 repo 根（orchestrator 注入 worktree，M4 第二波）。
+        self._default_cwd = default_cwd
 
     """
     暂存文件。
@@ -208,7 +214,7 @@ class GitAddTool(BaseTool):
         }
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
-        cwd = params.get("cwd")
+        cwd = params.get("cwd") or self._default_cwd
         paths: list[str] = params.get("paths", ["."])
         if not paths:
             paths = ["."]
@@ -224,9 +230,11 @@ class GitCommitTool(BaseTool):
     (see class docstring below)
     """
 
-    def __init__(self, runtime: Runtime | None = None) -> None:
+    def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
         from tools.runtime import LocalRuntime
         self._runtime = runtime or LocalRuntime()
+        # LLM 未传 cwd 时的默认 repo 根（orchestrator 注入 worktree，M4 第二波）。
+        self._default_cwd = default_cwd
 
     """
     提交暂存的变更。
@@ -263,7 +271,7 @@ class GitCommitTool(BaseTool):
         }
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
-        cwd = params.get("cwd")
+        cwd = params.get("cwd") or self._default_cwd
         message = params.get("message", "").strip()
 
         if not message:

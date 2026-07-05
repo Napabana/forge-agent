@@ -34,8 +34,10 @@ class PytestTool(BaseTool):
         cwd (str):   工作目录（默认当前目录）
     """
 
-    def __init__(self, runtime: Runtime | None = None) -> None:
+    def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
         self._runtime = runtime or LocalRuntime()
+        # LLM 未传 cwd 时的默认目录（orchestrator 注入 worktree 路径，M4 第二波）。
+        self._default_cwd = default_cwd
 
     @property
     def name(self) -> str:
@@ -71,7 +73,7 @@ class PytestTool(BaseTool):
         }
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
-        cwd = params.get("cwd", None)
+        cwd = params.get("cwd", None) or self._default_cwd
         cwd_path = Path(cwd) if cwd else Path.cwd()
 
         # 决定测试路径

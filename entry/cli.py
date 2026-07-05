@@ -77,8 +77,13 @@ def magenta(t: str) -> str: return _c(t, "35")
 # 构建 agent 各组件
 # ---------------------------------------------------------------------------
 
-def _build_registry(cfg, confirm_callback=None, runtime=None):
-    """根据配置组装工具注册表。"""
+def _build_registry(cfg, confirm_callback=None, runtime=None, worktree_path=None):
+    """根据配置组装工具注册表。
+
+    worktree_path：M4 第二波——非 None 时把它作为 shell/test/git 工具的 default_cwd，
+    让 LocalRuntime 路径下工具默认在 worktree 内执行（LLM 仍可用 params cwd 覆盖）。
+    Docker 路径由 runtime 内部翻译 cwd，default_cwd 不影响。
+    """
     from tools.base import ToolRegistry
     from tools.file_tool import FileReadTool, FileViewTool, FileWriteTool
     from tools.git_tool import GitAddTool, GitCommitTool, GitDiffTool, GitStatusTool
@@ -86,20 +91,22 @@ def _build_registry(cfg, confirm_callback=None, runtime=None):
     from tools.shell_tool import ShellTool
     from tools.test_tool import PytestTool
 
+    wt = str(worktree_path) if worktree_path else None
+
     return (
         ToolRegistry()
-        .register(ShellTool(confirm_callback=confirm_callback, runtime=runtime))
+        .register(ShellTool(confirm_callback=confirm_callback, runtime=runtime, default_cwd=wt))
         .register(FileReadTool())
         .register(FileViewTool())
         .register(FileWriteTool())
         .register(SearchTextTool())
         .register(FindFilesTool())
         .register(FindSymbolTool())
-        .register(PytestTool(runtime=runtime))
-        .register(GitStatusTool(runtime=runtime))
-        .register(GitDiffTool(runtime=runtime))
-        .register(GitAddTool(runtime=runtime))
-        .register(GitCommitTool(runtime=runtime))
+        .register(PytestTool(runtime=runtime, default_cwd=wt))
+        .register(GitStatusTool(runtime=runtime, default_cwd=wt))
+        .register(GitDiffTool(runtime=runtime, default_cwd=wt))
+        .register(GitAddTool(runtime=runtime, default_cwd=wt))
+        .register(GitCommitTool(runtime=runtime, default_cwd=wt))
     )
 
 
@@ -186,6 +193,9 @@ def cli(ctx: click.Context, config: str | None) -> None:
 @click.option("--stream", "-s", is_flag=True, default=True, help="Enable streaming output (default: on)")
 @click.option("--confirm", is_flag=True, default=False, help="Ask confirmation before running dangerous shell commands")
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
+@click.option("--isolate", is_flag=True, default=False,
+              help="Run in an isolated git worktree + TaskEngine tracking (M4). "
+                   "Combines with --sandbox for Docker hardening.")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logs")
 @click.pass_context
 def run(
@@ -199,6 +209,7 @@ def run(
     stream: bool,
     confirm: bool,
     sandbox: bool,
+    isolate: bool,
     verbose: bool,
 ) -> None:
     """Run the coding agent on a repository."""
@@ -296,6 +307,33 @@ def run(
         budget_tokens=config.agent.budget_tokens,
     )
 
+    # M4 第二波：--isolate 走 async 组合根（worktree + TaskEngine + permission workspace）
+    if isolate:
+        import asyncio
+        from agent.orchestrate import orchestrate_run
+        from ipc.bus import AgentBus
+        from task.engine import TaskEngine
+
+        engine = TaskEngine(Path(config.agent.log_dir) / "tasks.db")
+        bus = AgentBus() if verbose else None
+        click.echo(dim(f"  Isolate: worktree + TaskEngine ({engine.__class__.__name__})\n"))
+
+        t0 = time.time()
+        result = asyncio.run(orchestrate_run(
+            backend=backend,
+            task=task_obj,
+            engine=engine,
+            registry_builder=_build_registry,
+            bus=bus,
+            log_dir=config.agent.log_dir,
+            sandbox=sandbox,
+            config=agent_config,
+            confirm_callback=confirm_cb,
+        ))
+        elapsed = time.time() - t0
+        _print_run_result(result, elapsed)
+        ctx.exit(0 if result.is_success() else 1)
+
     if verbose:
         click.echo(dim(
             f"  tiktoken: {'yes' if is_tiktoken_available() else 'no (char estimate)'}\n"
@@ -311,8 +349,13 @@ def run(
             _print_step(event)
 
     elapsed = time.time() - t0
+    _print_run_result(result, elapsed)
 
-    # 打印结果
+    sys.exit(0 if result.is_success() else 1)
+
+
+def _print_run_result(result, elapsed: float) -> None:
+    """打印 RunResult 摘要（run 同步路径与 --isolate 路径共用）。"""
     click.echo(bold("─" * 60))
     status_str = green("SUCCESS") if result.is_success() else red(result.status.value.upper())
     click.echo(f"Status  : {status_str}")
@@ -322,8 +365,6 @@ def run(
     if result.error:
         click.echo(red(f"Error   : {result.error}"))
     click.echo(bold("─" * 60) + "\n")
-
-    sys.exit(0 if result.is_success() else 1)
 
 
 

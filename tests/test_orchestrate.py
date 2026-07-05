@@ -260,3 +260,31 @@ class TestOrchestrateBus:
             agent_factory=FakeAgent,
         )
         assert result.is_success()
+
+    async def test_bus_forwards_step_events(self, repo, tmp_path):
+        """M4 第二波：on_append→forwarder 把每条 event 转发到 events.* 。"""
+        import asyncio
+        engine = TaskEngine(tmp_path / "tasks.db")
+        bus = AgentBus()
+
+        event_types: list[str] = []
+
+        async def collect():
+            async for msg in bus.messages("events.*"):
+                event_types.append(msg.content["event_type"])
+
+        c = asyncio.create_task(collect())
+        result = await orchestrate_run(
+            backend=None,
+            task=Task(description="forward", repo_path=str(repo)),
+            engine=engine, registry_builder=_build_registry,
+            bus=bus, log_dir=str(tmp_path / "logs"),
+            agent_factory=WritingAgent,   # 会触发 task_start + permission_decision + task_complete
+        )
+        # forwarder 在 cleanup 前会收到哨兵终止；给收集任务一点时间
+        await asyncio.sleep(0.05)
+        c.cancel()
+        assert result.is_success()
+        assert "task_start" in event_types
+        assert "permission_decision" in event_types
+        assert "task_complete" in event_types
