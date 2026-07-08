@@ -18,6 +18,7 @@ orchestrate_run 是 async 组合根，把 TaskEngine + WorktreeSession + Permiss
 from __future__ import annotations
 
 import subprocess
+import shutil
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,31 @@ def repo(tmp_path):
     _git(["add", "."], r)
     _git(["commit", "-q", "-m", "init"], r)
     return r
+
+
+@pytest.fixture(autouse=True)
+def fake_worktree_session(monkeypatch):
+    """orchestrate 单测聚焦编排逻辑；真实 git worktree 生命周期由 test_worktree_session 覆盖。"""
+    import agent.orchestrate as orch_mod
+
+    class FakeWorktreeSession:
+        def __init__(self, repo_path, name, task_engine=None, task_id=None, **kwargs):
+            self.repo_path = Path(repo_path)
+            self.name = name
+            self.task_engine = task_engine
+            self.task_id = task_id
+            self.path = self.repo_path / ".worktrees" / name
+
+        async def __aenter__(self):
+            self.path.mkdir(parents=True, exist_ok=True)
+            if self.task_engine is not None and self.task_id is not None:
+                self.task_engine.bind_worktree(self.task_id, self.name)
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            shutil.rmtree(self.path, ignore_errors=True)
+
+    monkeypatch.setattr(orch_mod, "WorktreeSession", FakeWorktreeSession)
 
 
 def _build_registry(cfg, confirm_callback, runtime, worktree_path):
@@ -165,6 +191,45 @@ class TestOrchestrateSuccess:
         # task_claimed 在最前
         assert types[0] == "task_claimed"
 
+    async def test_sandbox_runtime_cleanup_on_success(self, repo, tmp_path, monkeypatch):
+        """sandbox=True 时 DockerRuntime 即使由 orchestrator 创建，也必须释放。"""
+        import agent.orchestrate as orch_mod
+        from tools.runtime import LocalRuntime
+
+        instances = []
+
+        class FakeDockerRuntime(LocalRuntime):
+            def __init__(self, *args, **kwargs):
+                self.cleaned = False
+                self.args = args
+                self.kwargs = kwargs
+                instances.append(self)
+
+            @property
+            def name(self):
+                return "fake-docker"
+
+            def cleanup(self):
+                self.cleaned = True
+
+        monkeypatch.setattr(orch_mod, "DockerRuntime", FakeDockerRuntime)
+
+        engine = TaskEngine(tmp_path / "tasks.db")
+        result = await orchestrate_run(
+            backend=None,
+            task=Task(description="ok", repo_path=str(repo)),
+            engine=engine,
+            registry_builder=_build_registry,
+            log_dir=str(tmp_path / "logs"),
+            sandbox=True,
+            agent_factory=FakeAgent,
+        )
+
+        assert result.is_success()
+        assert instances and instances[0].cleaned is True
+        assert instances[0].kwargs["repo_path"] == str(repo)
+        assert instances[0].kwargs["worktree_mount"][1] == "/workspace"
+
 
 # ---------------------------------------------------------------------------
 # 失败回滚
@@ -191,6 +256,40 @@ class TestOrchestrateRollback:
         # worktree 已清理
         wt_dir = repo / ".worktrees"
         assert not wt_dir.exists() or not any(wt_dir.iterdir())
+
+    async def test_sandbox_runtime_cleanup_on_exception(self, repo, tmp_path, monkeypatch):
+        import agent.orchestrate as orch_mod
+        from tools.runtime import LocalRuntime
+
+        instances = []
+
+        class FakeDockerRuntime(LocalRuntime):
+            def __init__(self, *args, **kwargs):
+                self.cleaned = False
+                instances.append(self)
+
+            @property
+            def name(self):
+                return "fake-docker"
+
+            def cleanup(self):
+                self.cleaned = True
+
+        monkeypatch.setattr(orch_mod, "DockerRuntime", FakeDockerRuntime)
+
+        engine = TaskEngine(tmp_path / "tasks.db")
+        with pytest.raises(RuntimeError):
+            await orchestrate_run(
+                backend=None,
+                task=Task(description="boom", repo_path=str(repo)),
+                engine=engine,
+                registry_builder=_build_registry,
+                log_dir=str(tmp_path / "logs"),
+                sandbox=True,
+                agent_factory=FailingAgent,
+            )
+
+        assert instances and instances[0].cleaned is True
 
     async def test_exception_logs_worktree_removed_reason(self, repo, tmp_path):
         engine = TaskEngine(tmp_path / "tasks.db")
@@ -239,13 +338,7 @@ class TestOrchestrateRollback:
         import asyncio
         engine = TaskEngine(tmp_path / "tasks.db")
         bus = AgentBus()
-        received: list[str] = []
-
-        async def collect():
-            async for msg in bus.messages("worktree.*"):
-                received.append(msg.content.get("reason"))
-
-        c = asyncio.create_task(collect())
+        q = bus.subscribe("worktree.*")
         with pytest.raises(KeyboardInterrupt):
             await orchestrate_run(
                 backend=None,
@@ -255,7 +348,9 @@ class TestOrchestrateRollback:
                 agent_factory=InterruptedAgent,
             )
         await asyncio.sleep(0.05)
-        c.cancel()
+        received: list[str] = []
+        while not q.empty():
+            received.append(q.get_nowait().content.get("reason"))
         assert "exception" in received
 
     async def test_failed_result_marks_task_failed(self, repo, tmp_path):
@@ -318,22 +413,9 @@ class TestOrchestrateBus:
         engine = TaskEngine(tmp_path / "tasks.db")
         bus = AgentBus()
 
-        received: list = []
-        async def collect():
-            async for msg in bus.messages("tasks.*"):
-                received.append(msg.topic)
-                if "completed" in msg.topic or "failed" in msg.topic:
-                    break
-            # 也订 worktree（独立队列）
-        async def collect_wt():
-            async for msg in bus.messages("worktree.*"):
-                received.append(msg.topic)
-                if "created" in msg.topic:
-                    break
-
         import asyncio
-        c1 = asyncio.create_task(collect())
-        c2 = asyncio.create_task(collect_wt())
+        task_q = bus.subscribe("tasks.*")
+        wt_q = bus.subscribe("worktree.*")
         await orchestrate_run(
             backend=None,
             task=Task(description="bus", repo_path=str(repo)),
@@ -341,8 +423,12 @@ class TestOrchestrateBus:
             bus=bus, log_dir=str(tmp_path / "logs"),
             agent_factory=FakeAgent,
         )
-        await asyncio.sleep(0.05)
-        c1.cancel(); c2.cancel()
+        await asyncio.sleep(0)
+        received = []
+        while not task_q.empty():
+            received.append(task_q.get_nowait().topic)
+        while not wt_q.empty():
+            received.append(wt_q.get_nowait().topic)
         assert "tasks.claimed" in received or "tasks.completed" in received
         assert "worktree.created" in received
 
@@ -435,4 +521,3 @@ class TestBusForwarderRobustness:
         # _stop_forwarder 会 put 哨兵让 forwarder 正常退出；这里验证它能干净结束
         await asyncio.wait_for(_stop_forwarder(q, stuck), timeout=2.0)
         assert stuck.done()
-

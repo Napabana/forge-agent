@@ -19,9 +19,10 @@ M1 边界：独立模块，不集成进 agent/core.py 主循环。
 from __future__ import annotations
 
 import os
-import random
 import sqlite3
+import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -116,6 +117,7 @@ class TaskEngine:
         self._conn = sqlite3.connect(self._db_path, isolation_level=None,
                                      check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._init_schema()
@@ -163,93 +165,101 @@ class TaskEngine:
         description: str = "",
         blocked_by: list[str] | None = None,
     ) -> str:
-        """创建任务，返回 task_id。ID = task_{timestamp}_{rand}。"""
-        task_id = f"task_{int(time.time())}_{random.randint(0, 9999):04d}"
-        conn = self._conn
-        conn.execute("BEGIN")
-        try:
-            conn.execute(
-                "INSERT INTO tasks(id, subject, description, status, owner, worktree, created_at) "
-                "VALUES(?, ?, ?, ?, NULL, NULL, ?)",
-                (task_id, subject, description, STATUS_PENDING, time.time()),
-            )
-            for dep in blocked_by or []:
+        """创建任务，返回全局唯一 task_id。"""
+        task_id = f"task_{uuid.uuid4().hex}"
+        created_at = time.time()
+        with self._lock:
+            conn = self._conn
+            conn.execute("BEGIN")
+            try:
                 conn.execute(
-                    "INSERT OR IGNORE INTO task_dependencies(task_id, depends_on_id) VALUES(?, ?)",
-                    (task_id, dep),
+                    "INSERT INTO tasks(id, subject, description, status, owner, worktree, created_at) "
+                    "VALUES(?, ?, ?, ?, NULL, NULL, ?)",
+                    (task_id, subject, description, STATUS_PENDING, created_at),
                 )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+                for dep in blocked_by or []:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO task_dependencies(task_id, depends_on_id) VALUES(?, ?)",
+                        (task_id, dep),
+                    )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
         return task_id
 
     def add_dependency(self, task_id: str, depends_on_id: str) -> None:
         """给已存在任务追加一条依赖。"""
-        if not self._exists(task_id):
-            raise TaskNotFound(task_id)
-        self._conn.execute(
-            "INSERT OR IGNORE INTO task_dependencies(task_id, depends_on_id) VALUES(?, ?)",
-            (task_id, depends_on_id),
-        )
+        with self._lock:
+            if not self._exists(task_id):
+                raise TaskNotFound(task_id)
+            self._conn.execute(
+                "INSERT OR IGNORE INTO task_dependencies(task_id, depends_on_id) VALUES(?, ?)",
+                (task_id, depends_on_id),
+            )
 
     def bind_worktree(self, task_id: str, worktree_name: str) -> None:
         """把任务关联到一个 worktree（M1 Task 1.2 WorktreeSession 会调用）。"""
-        if not self._exists(task_id):
-            raise TaskNotFound(task_id)
-        self._conn.execute(
-            "UPDATE tasks SET worktree=? WHERE id=?",
-            (worktree_name, task_id),
-        )
+        with self._lock:
+            if not self._exists(task_id):
+                raise TaskNotFound(task_id)
+            self._conn.execute(
+                "UPDATE tasks SET worktree=? WHERE id=?",
+                (worktree_name, task_id),
+            )
 
     # ------------------------------------------------------------------
     # 读
     # ------------------------------------------------------------------
 
     def get_task(self, task_id: str) -> Task:
-        row = self._conn.execute(
-            "SELECT * FROM tasks WHERE id=?", (task_id,)
-        ).fetchone()
-        if row is None:
-            raise TaskNotFound(task_id)
-        return _row_to_task(row)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if row is None:
+                raise TaskNotFound(task_id)
+            return _row_to_task(row)
 
     def list_tasks(self, status: str | None = None) -> list[Task]:
-        if status:
-            rows = self._conn.execute(
-                "SELECT * FROM tasks WHERE status=? ORDER BY created_at", (status,)
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM tasks ORDER BY created_at"
-            ).fetchall()
-        return [_row_to_task(r) for r in rows]
+        with self._lock:
+            if status:
+                rows = self._conn.execute(
+                    "SELECT * FROM tasks WHERE status=? ORDER BY created_at", (status,)
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM tasks ORDER BY created_at"
+                ).fetchall()
+            return [_row_to_task(r) for r in rows]
 
     def can_start(self, task_id: str) -> bool:
         """
         是否所有前置依赖都已完成（s20 can_start:123 的语义）。
         一条 JOIN 完成，避免 s20 版逐个 load 文件。
         """
-        if not self._exists(task_id):
-            raise TaskNotFound(task_id)
-        # 未完成依赖计数：==0 即可启动
-        count = self._conn.execute(
-            """
-            SELECT COUNT(*) FROM task_dependencies td
-            JOIN tasks t ON td.depends_on_id = t.id
-            WHERE td.task_id = ? AND t.status != ?
-            """,
-            (task_id, STATUS_COMPLETED),
-        ).fetchone()[0]
-        return count == 0
+        with self._lock:
+            if not self._exists(task_id):
+                raise TaskNotFound(task_id)
+            # 未完成依赖计数：==0 即可启动
+            count = self._conn.execute(
+                """
+                SELECT COUNT(*) FROM task_dependencies td
+                JOIN tasks t ON td.depends_on_id = t.id
+                WHERE td.task_id = ? AND t.status != ?
+                """,
+                (task_id, STATUS_COMPLETED),
+            ).fetchone()[0]
+            return count == 0
 
     def dependencies(self, task_id: str) -> list[str]:
         """某任务的直接前置依赖 id 列表。"""
-        rows = self._conn.execute(
-            "SELECT depends_on_id FROM task_dependencies WHERE task_id=?",
-            (task_id,),
-        ).fetchall()
-        return [r[0] for r in rows]
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT depends_on_id FROM task_dependencies WHERE task_id=?",
+                (task_id,),
+            ).fetchall()
+            return [r[0] for r in rows]
 
     # ------------------------------------------------------------------
     # 状态流转
@@ -268,29 +278,30 @@ class TaskEngine:
         Raises:
             TaskNotFound / TaskNotClaimable（reason 见 REASON_*）。
         """
-        task = self.get_task(task_id)  # 不存在会 raise TaskNotFound
+        with self._lock:
+            task = self.get_task(task_id)  # 不存在会 raise TaskNotFound
 
-        # 依赖未满足
-        if not self.can_start(task_id):
-            blocked_by = [d for d in self.dependencies(task_id)
-                          if self.get_task(d).status != STATUS_COMPLETED]
-            raise TaskNotClaimable(task_id, REASON_BLOCKED, blocked_by)
+            # 依赖未满足
+            if not self.can_start(task_id):
+                blocked_by = [d for d in self.dependencies(task_id)
+                              if self.get_task(d).status != STATUS_COMPLETED]
+                raise TaskNotClaimable(task_id, REASON_BLOCKED, blocked_by)
 
-        # 原子认领：仅当仍为 pending 且无人认领时更新
-        cur = self._conn.execute(
-            "UPDATE tasks SET status=?, owner=? "
-            "WHERE id=? AND status=? AND owner IS NULL",
-            (STATUS_IN_PROGRESS, owner, task_id, STATUS_PENDING),
-        )
-        if cur.rowcount == 1:
-            return True
+            # 原子认领：仅当仍为 pending 且无人认领时更新
+            cur = self._conn.execute(
+                "UPDATE tasks SET status=?, owner=? "
+                "WHERE id=? AND status=? AND owner IS NULL",
+                (STATUS_IN_PROGRESS, owner, task_id, STATUS_PENDING),
+            )
+            if cur.rowcount == 1:
+                return True
 
-        # 认领失败，查因。注意 complete/fail 不会清 owner，所以 owner 非空
-        # 不代表「被别人认领中」——必须先按 status 判断。
-        fresh = self.get_task(task_id)
-        if fresh.status == STATUS_PENDING and fresh.owner is not None:
-            raise TaskNotClaimable(task_id, REASON_ALREADY_OWNED)
-        raise TaskNotClaimable(task_id, REASON_WRONG_STATUS)
+            # 认领失败，查因。注意 complete/fail 不会清 owner，所以 owner 非空
+            # 不代表「被别人认领中」——必须先按 status 判断。
+            fresh = self.get_task(task_id)
+            if fresh.status == STATUS_PENDING and fresh.owner is not None:
+                raise TaskNotClaimable(task_id, REASON_ALREADY_OWNED)
+            raise TaskNotClaimable(task_id, REASON_WRONG_STATUS)
 
     def complete_task(self, task_id: str) -> list[str]:
         """
@@ -299,56 +310,59 @@ class TaskEngine:
         Raises:
             TaskNotFound / TaskNotCompletable（不在 in_progress）。
         """
-        task = self.get_task(task_id)
-        if task.status != STATUS_IN_PROGRESS:
-            raise TaskNotCompletable(task_id, task.status)
+        with self._lock:
+            task = self.get_task(task_id)
+            if task.status != STATUS_IN_PROGRESS:
+                raise TaskNotCompletable(task_id, task.status)
 
-        conn = self._conn
-        conn.execute("BEGIN")
-        try:
-            conn.execute(
-                "UPDATE tasks SET status=? WHERE id=? AND status=?",
-                (STATUS_COMPLETED, task_id, STATUS_IN_PROGRESS),
-            )
-            # 反向 JOIN：依赖本任务、且自身所有依赖都已完成的 pending 任务
-            unblocked = [
-                r[0] for r in conn.execute(
-                    """
-                    SELECT t.id FROM tasks t
-                    WHERE t.status = ?
-                      AND t.id IN (SELECT td.task_id FROM task_dependencies td
-                                   WHERE td.depends_on_id = ?)
-                      AND NOT EXISTS (
-                          SELECT 1 FROM task_dependencies td2
-                          JOIN tasks dep ON td2.depends_on_id = dep.id
-                          WHERE td2.task_id = t.id AND dep.status != ?
-                      )
-                    """,
-                    (STATUS_PENDING, task_id, STATUS_COMPLETED),
-                ).fetchall()
-            ]
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        return unblocked
+            conn = self._conn
+            conn.execute("BEGIN")
+            try:
+                conn.execute(
+                    "UPDATE tasks SET status=? WHERE id=? AND status=?",
+                    (STATUS_COMPLETED, task_id, STATUS_IN_PROGRESS),
+                )
+                # 反向 JOIN：依赖本任务、且自身所有依赖都已完成的 pending 任务
+                unblocked = [
+                    r[0] for r in conn.execute(
+                        """
+                        SELECT t.id FROM tasks t
+                        WHERE t.status = ?
+                          AND t.id IN (SELECT td.task_id FROM task_dependencies td
+                                       WHERE td.depends_on_id = ?)
+                          AND NOT EXISTS (
+                              SELECT 1 FROM task_dependencies td2
+                              JOIN tasks dep ON td2.depends_on_id = dep.id
+                              WHERE td2.task_id = t.id AND dep.status != ?
+                          )
+                        """,
+                        (STATUS_PENDING, task_id, STATUS_COMPLETED),
+                    ).fetchall()
+                ]
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            return unblocked
 
     def fail_task(self, task_id: str) -> None:
         """置任务为 failed（M1 Task 1.3 demo 模拟崩溃回滚用；s20 无此状态）。"""
-        task = self.get_task(task_id)
-        if task.status not in (STATUS_IN_PROGRESS, STATUS_PENDING):
-            raise TaskNotCompletable(task_id, task.status)
-        self._conn.execute(
-            "UPDATE tasks SET status=? WHERE id=?",
-            (STATUS_FAILED, task_id),
-        )
+        with self._lock:
+            task = self.get_task(task_id)
+            if task.status not in (STATUS_IN_PROGRESS, STATUS_PENDING):
+                raise TaskNotCompletable(task_id, task.status)
+            self._conn.execute(
+                "UPDATE tasks SET status=? WHERE id=?",
+                (STATUS_FAILED, task_id),
+            )
 
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def __enter__(self) -> "TaskEngine":
         return self

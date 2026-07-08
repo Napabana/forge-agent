@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -87,8 +88,9 @@ class PytestTool(BaseTool):
         extra_args = params.get("args", "")
 
         # 组装命令：--tb=short 足够 agent 理解，--no-header 减少噪音
+        python_bin = sys.executable if isinstance(self._runtime, LocalRuntime) else "python3"
         cmd_parts = [
-            "python", "-m", "pytest",
+            python_bin, "-m", "pytest",
             test_path,
             "--tb=short",
             "--no-header",

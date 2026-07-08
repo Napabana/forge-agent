@@ -237,3 +237,47 @@ class TestChatCommand:
         runner = CliRunner()
         result = runner.invoke(cli, ["--help"])
         assert "chat" in result.output
+
+    def test_chat_sandbox_injects_runtime_and_cleans_up(self, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+        from entry.cli import cli
+        from tools.runtime import LocalRuntime
+
+        class FakeRuntime(LocalRuntime):
+            name = "fake-docker"
+
+            def __init__(self):
+                self.cleaned = False
+
+            def cleanup(self):
+                self.cleaned = True
+
+        fake_runtime = FakeRuntime()
+        captured = {}
+
+        class FakeSession:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def print_stats(self):
+                pass
+
+        monkeypatch.setattr("entry.cli.create_backend_from_config", lambda cfg: object())
+        monkeypatch.setattr("tools.runtime.create_runtime", lambda **kwargs: fake_runtime)
+        monkeypatch.setattr("entry.chat.ChatSession", FakeSession)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["chat", "--repo", str(tmp_path), "--sandbox"],
+            input="/exit\n",
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert fake_runtime.cleaned is True
+        registry = captured["registry"]
+        shell_tool = registry._tools["shell"]
+        assert shell_tool._runtime is fake_runtime
+        denied = registry.execute_tool("file_read", {"path": "/etc/passwd"})
+        assert not denied.success

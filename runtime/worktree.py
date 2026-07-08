@@ -23,8 +23,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import shutil
+import signal
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -133,9 +136,9 @@ class WorktreeSession:
         if self.path.exists():
             raise WorktreeError(f"Worktree '{self._name}' already exists at {self.path}")
 
-        # git worktree add <path> -b wt/<name> <base>
+        # git worktree add -b wt/<name> <path> <base>
         ok, out = await self._run_git(
-            ["worktree", "add", str(self.path), "-b", f"wt/{self._name}", self._base]
+            ["worktree", "add", "-b", f"wt/{self._name}", str(self.path), self._base]
         )
         if not ok:
             raise WorktreeError(f"git worktree add failed: {out}")
@@ -198,7 +201,7 @@ class WorktreeSession:
 
         # 1. 强制删除 worktree
         ok, out = await self._run_git(
-            ["worktree", "remove", str(self.path), "--force"]
+            ["worktree", "remove", "--force", str(self.path)]
         )
         if not ok:
             logger.warning("[worktree] remove failed for %s: %s", self._name, out)
@@ -225,7 +228,10 @@ class WorktreeSession:
         try:
             # 未提交文件（porcelain 一行一个变更）
             r1 = await self._run_git_in(str(self.path), ["status", "--porcelain"])
-            files = len([l for l in r1.splitlines() if l.strip()]) if r1 else 0
+            files = len([
+                l for l in r1.splitlines()
+                if l.strip() and not l[3:].startswith(".worktrees/")
+            ]) if r1 else 0
             # 未推送提交（无上游分支时 git 报错 → 视为 0 或无法判定）
             r2 = await self._run_git_in(
                 str(self.path), ["log", "@{push}..HEAD", "--oneline"]
@@ -256,40 +262,39 @@ class WorktreeSession:
 
     async def _run_git(self, args: list[str]) -> tuple[bool, str]:
         """跑 git 命令，返回 (success, merged_output)。不抛异常。"""
-        cmd = "git " + " ".join(_shell_quote(a) for a in args)
-        try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                cwd=str(self._repo_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-            out = (stdout.decode(errors="replace") + stderr.decode(errors="replace")).strip()
-            return proc.returncode == 0, (out[:5000] if out else "(no output)")
-        except asyncio.TimeoutError:
-            return False, "Error: git timeout (60s)"
-        except Exception as e:  # noqa: BLE001
-            return False, f"Error: {e}"
+        return self._run_git_sync(str(self._repo_path), args, 60)
 
     async def _run_git_in(self, cwd: str, args: list[str]) -> str:
         """在指定 cwd 跑 git，返回合并输出。失败返回空串（供 count_changes 容错）。"""
-        cmd = "git " + " ".join(_shell_quote(a) for a in args)
-        try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            return (stdout.decode(errors="replace") + stderr.decode(errors="replace")).strip()
-        except Exception:  # noqa: BLE001
+        ok, out = self._run_git_sync(cwd, args, 30)
+        if not ok or out == "(no output)":
             return ""
+        return out
 
-
-def _shell_quote(arg: str) -> str:
-    """简易 shell 引用：含空格等特殊字符时加双引号。"""
-    if arg and re.fullmatch(r"[A-Za-z0-9._/=@:-]+", arg):
-        return arg
-    return '"' + arg.replace('"', r'\"') + '"'
+    @staticmethod
+    def _run_git_sync(cwd: str, args: list[str], timeout: int) -> tuple[bool, str]:
+        """同步 git 执行函数，供 async wrapper 放进自管线程池。"""
+        proc: subprocess.Popen[str] | None = None
+        try:
+            proc = subprocess.Popen(
+                ["git"] + args,
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            stdout, stderr = proc.communicate(timeout=timeout)
+            out = (stdout + stderr).strip()
+            return proc.returncode == 0, (out[:5000] if out else "(no output)")
+        except subprocess.TimeoutExpired:
+            if proc is not None:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    proc.kill()
+                proc.wait(timeout=5)
+            return False, f"Error: git timeout ({timeout}s)"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"Error: git execution failed: {exc}"

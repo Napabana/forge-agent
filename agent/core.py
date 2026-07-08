@@ -97,13 +97,20 @@ class Agent:
     # 公开接口
     # ------------------------------------------------------------------
 
-    def run(self, task: Task, log: EventLog) -> RunResult:
+    def run(
+        self,
+        task: Task,
+        log: EventLog,
+        history: ConversationHistory | None = None,
+    ) -> RunResult:
         """
         执行一次完整的 agent 运行。
 
         Args:
             task: 任务描述
             log:  已初始化的 EventLog（由调用方创建并传入）
+            history: 可选共享对话历史。chat/session 模式传入后跨轮复用；
+                     None 时为单次 run 新建 history。
 
         Returns:
             RunResult，包含最终状态和统计信息
@@ -118,12 +125,8 @@ class Agent:
         log.log_task_start(task)
         logger.info("Agent starting task %s", task.task_id)
 
-        # 初始化上下文管理器
-        # 如果调用方（ChatSession）注入了共享 history，直接复用；
-        # 否则新建（单次 run 模式）
-        if hasattr(self, "_pending_history") and self._pending_history is not None:
-            history = self._pending_history
-        else:
+        # 初始化上下文管理器。chat/session 模式可以传入共享 history；单次 run 新建。
+        if history is None:
             history = ConversationHistory(max_messages=self._cfg.history_max_messages)
             # 单次模式：把任务描述作为第一条 user 消息
             from agent.prompt import build_task_prompt

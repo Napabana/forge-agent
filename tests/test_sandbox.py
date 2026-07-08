@@ -299,6 +299,34 @@ class TestDockerRuntimeUnit:
         container_cwd = docker_exec_call[workdir_idx + 1]
         assert container_cwd == f"{CONTAINER_WORKDIR}/src/module"
 
+    def test_cwd_translation_prefers_worktree_mount(self, tmp_path):
+        """worktree_mount 映射应优先于主 repo 前缀映射。"""
+        wt = tmp_path / ".worktrees" / "task1"
+        sub = wt / "pkg"
+        sub.mkdir(parents=True)
+        rt = DockerRuntime(
+            repo_path=str(tmp_path),
+            worktree_mount=(str(wt), CONTAINER_WORKDIR),
+        )
+        rt._container_id = "fake-container-id"
+
+        exec_calls = []
+
+        def mock_run(args, **kwargs):
+            exec_calls.append(args)
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = "ok"
+            m.stderr = ""
+            return m
+
+        with patch("subprocess.run", side_effect=mock_run):
+            rt.exec("ls", cwd=str(sub))
+
+        docker_exec_call = next(a for a in exec_calls if "exec" in a)
+        workdir_idx = docker_exec_call.index("--workdir")
+        assert docker_exec_call[workdir_idx + 1] == f"{CONTAINER_WORKDIR}/pkg"
+
     def test_cleanup_removes_container(self, tmp_path):
         """cleanup() 应调用 docker rm -f。"""
         rt = self._make_runtime(tmp_path)

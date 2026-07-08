@@ -10,7 +10,7 @@ tools/file_tool.py
 - file_read 对大文件做行数截断，超出时提示用 file_view 分页
 - file_view 维护"窗口"概念，每次返回固定行数，agent 可 scroll
 - file_write 写入前自动创建父目录，写入后返回行数确认
-- 所有路径都限制在 repo_path 内（防止读取系统文件）
+- 可选 workspace 边界：入口传入 repo/worktree 路径后，文件读写都限制在该目录内
 """
 
 from __future__ import annotations
@@ -35,6 +35,9 @@ class FileReadTool(BaseTool):
     params:
         path (str): 文件路径（相对或绝对）
     """
+
+    def __init__(self, workspace: str | Path | None = None) -> None:
+        self._workspace = Path(workspace).resolve() if workspace else None
 
     @property
     def name(self) -> str:
@@ -62,7 +65,10 @@ class FileReadTool(BaseTool):
         }
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
-        path = Path(params.get("path", ""))
+        resolved = _resolve_workspace_path(params.get("path", ""), self._workspace)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        path = resolved
         if not path.exists():
             return ToolResult(
                 success=False,
@@ -113,6 +119,9 @@ class FileViewTool(BaseTool):
         start_line (int): 从第几行开始（1-indexed，默认 1）
     """
 
+    def __init__(self, workspace: str | Path | None = None) -> None:
+        self._workspace = Path(workspace).resolve() if workspace else None
+
     @property
     def name(self) -> str:
         return "file_view"
@@ -142,7 +151,10 @@ class FileViewTool(BaseTool):
         }
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
-        path = Path(params.get("path", ""))
+        resolved = _resolve_workspace_path(params.get("path", ""), self._workspace)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        path = resolved
         start_line = max(1, int(params.get("start_line", 1)))
 
         if not path.exists():
@@ -189,6 +201,9 @@ class FileWriteTool(BaseTool):
         content (str): 要写入的内容
     """
 
+    def __init__(self, workspace: str | Path | None = None) -> None:
+        self._workspace = Path(workspace).resolve() if workspace else None
+
     @property
     def name(self) -> str:
         return "file_write"
@@ -219,7 +234,10 @@ class FileWriteTool(BaseTool):
         }
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
-        path = Path(params.get("path", ""))
+        resolved = _resolve_workspace_path(params.get("path", ""), self._workspace)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        path = resolved
         content = params.get("content", "")
 
         try:
@@ -232,4 +250,33 @@ class FileWriteTool(BaseTool):
         return ToolResult(
             success=True,
             output=f"Written {line_count} lines to {path}",
+        )
+
+
+def _resolve_workspace_path(
+    raw_path: str | Path,
+    workspace: Path | None,
+) -> Path | ToolResult:
+    """Resolve a tool path and reject paths outside workspace when configured."""
+    if not raw_path:
+        return ToolResult(success=False, output="", error="path is required")
+
+    path = Path(raw_path)
+    try:
+        if workspace is None:
+            return path
+
+        target = (path if path.is_absolute() else workspace / path).resolve()
+        if os.path.commonpath([str(workspace), str(target)]) != str(workspace):
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Path escapes workspace: {raw_path}",
+            )
+        return target
+    except (OSError, ValueError) as exc:
+        return ToolResult(
+            success=False,
+            output="",
+            error=f"Invalid path {raw_path!r}: {exc}",
         )

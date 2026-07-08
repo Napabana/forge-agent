@@ -105,6 +105,12 @@ class TestFileReadTool:
         assert schema.name == "file_read"
         assert "path" in schema.parameters["properties"]
 
+    def test_workspace_rejects_absolute_escape(self, tmp_path):
+        tool = FileReadTool(workspace=tmp_path)
+        result = tool.execute({"path": "/etc/passwd"})
+        assert not result.success
+        assert "escapes workspace" in result.error.lower()
+
 
 # ===========================================================================
 # FileViewTool
@@ -142,6 +148,13 @@ class TestFileViewTool:
         result = self.tool.execute({"path": str(tmp_path / "missing.py")})
         assert not result.success
 
+    def test_workspace_resolves_relative_path(self, tmp_path):
+        (tmp_path / "notes.txt").write_text("hello")
+        tool = FileViewTool(workspace=tmp_path)
+        result = tool.execute({"path": "notes.txt"})
+        assert result.success
+        assert "hello" in result.output
+
 
 # ===========================================================================
 # FileWriteTool
@@ -178,6 +191,20 @@ class TestFileWriteTool:
         result = self.tool.execute({"path": str(path), "content": ""})
         assert result.success
         assert path.read_text() == ""
+
+    def test_workspace_rejects_relative_escape(self, tmp_path):
+        outside = tmp_path.parent / f"{tmp_path.name}_outside.txt"
+        tool = FileWriteTool(workspace=tmp_path)
+        result = tool.execute({"path": f"../{outside.name}", "content": "nope"})
+        assert not result.success
+        assert "escapes workspace" in result.error.lower()
+        assert not outside.exists()
+
+    def test_workspace_writes_relative_inside_root(self, tmp_path):
+        tool = FileWriteTool(workspace=tmp_path)
+        result = tool.execute({"path": "src/app.py", "content": "x = 1"})
+        assert result.success
+        assert (tmp_path / "src" / "app.py").read_text() == "x = 1"
 
 
 # ===========================================================================

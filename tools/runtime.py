@@ -296,6 +296,8 @@ class DockerRuntime(Runtime):
         self._setup_cmds = setup_cmds or []
         self._readonly_root = readonly_root
         self._worktree_mount = worktree_mount
+        self._worktree_host = str(Path(worktree_mount[0]).resolve()) if worktree_mount else None
+        self._worktree_container = worktree_mount[1] if worktree_mount else None
         self._mem_limit = mem_limit
         self._nano_cpus = nano_cpus
         self._network = network
@@ -336,7 +338,13 @@ class DockerRuntime(Runtime):
         if cwd:
             # 如果 cwd 是宿主机路径，转换为容器内路径
             host_cwd = str(Path(cwd).resolve())
-            if host_cwd.startswith(self._repo_path):
+            if self._worktree_host and self._worktree_container and host_cwd.startswith(self._worktree_host):
+                relative = host_cwd[len(self._worktree_host):].lstrip("/")
+                container_cwd = (
+                    f"{self._worktree_container}/{relative}"
+                    if relative else self._worktree_container
+                )
+            elif host_cwd.startswith(self._repo_path):
                 relative = host_cwd[len(self._repo_path):].lstrip("/")
                 container_cwd = f"{CONTAINER_WORKDIR}/{relative}" if relative else CONTAINER_WORKDIR
             else:

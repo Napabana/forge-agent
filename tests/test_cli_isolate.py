@@ -84,3 +84,19 @@ def test_isolate_invokes_orchestrate_run(tmp_path, monkeypatch):
     assert kw["task"].repo_path == str(repo)
     # exit code 反映 is_success
     assert result.exit_code == 0
+
+
+def test_build_registry_injects_workspace_into_file_tools(tmp_path):
+    """普通 run/chat registry 应把 repo workspace 下发给文件工具。"""
+    from config.schema import AppConfig
+    from entry.cli import _build_registry
+
+    registry = _build_registry(AppConfig(), workspace=str(tmp_path))
+
+    denied = registry.execute_tool("file_read", {"path": "/etc/passwd"})
+    assert not denied.success
+    assert "escapes workspace" in denied.error.lower()
+
+    ok = registry.execute_tool("file_write", {"path": "inside.txt", "content": "ok"})
+    assert ok.success
+    assert (tmp_path / "inside.txt").read_text() == "ok"

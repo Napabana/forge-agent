@@ -4,12 +4,12 @@ agent/orchestrate.py
 M4 主循环集成：把 M1（TaskEngine + WorktreeSession）、M2（AgentBus +
 ToolExecutor/Permission）、M3（DockerRuntime 加固）接进 ReAct 主循环。
 
-核心设计——同步/异步阻抗失配的解法（Strategy B）：
+核心设计——同步/异步阻抗失配的解法：
 - Agent.run() 是同步 ReAct 循环（清晰可测，CLAUDE.md 约束保持同步）。
 - WorktreeSession / AgentBus 是 async。
 - 解法：本模块提供一个 async 组合根 orchestrate_run()，用 `async with
-  WorktreeSession(...)` 包住整次运行，内部用 asyncio.to_thread 把同步的
-  Agent.run() 丢到工作线程跑，释放事件循环给 bus 转发。Agent.run() 一行不改。
+  WorktreeSession(...)` 包住整次运行。Agent.run() 同步执行，EventLog 事件
+  先进入队列，运行结束后由 forwarder 转发到 bus。Agent.run() 一行不改。
 
 safe_path 注入：PermissionManager(workspace=str(wt.path)) 在 executor 层
 强制文件路径不逃逸 worktree（读写工具都覆盖）。不依赖 LLM 填的 params。
@@ -66,8 +66,8 @@ async def _bus_forwarder(
     """把 EventLog 的 on_append 事件转发到 AgentBus。
 
     从 asyncio.Queue 取 Event，publish 到 `events.{event_type}` topic。
-    None 是哨兵：收到即退出。事件由 to_thread 工作线程经 on_append put_nowait，
-    CPython 3.10+ 下 put_nowait 跨线程安全（仅取 deque 锁，不调度回调）。
+    None 是哨兵：收到即退出。Agent.run 同步执行，on_append 先把事件放入
+    queue，运行结束后 forwarder drain 并 publish。
     """
     while True:
         ev = await q.get()
@@ -162,12 +162,12 @@ async def orchestrate_run(
     wt_name = worktree_name or f"task-{task_id}"
 
     # bus 逐步事件转发（M4 第二波）：on_append → queue → forwarder 协程。
-    # 工作线程每写一条 event 就 put_nowait，forwarder 异步 publish 到 events.* 。
+    # 同步循环每写一条 event 就 put_nowait，forwarder 异步 publish 到 events.* 。
     bus_q: asyncio.Queue | None = None
     forwarder_task: asyncio.Task | None = None
     if bus is not None:
         bus_q = asyncio.Queue()
-        log.on_append(lambda ev: bus_q.put_nowait(ev))   # type: ignore[arg-type]
+        log.on_append(lambda ev: bus_q.put_nowait(ev))
         forwarder_task = asyncio.create_task(_bus_forwarder(bus_q, bus, task_id))
 
     result: RunResult | None = None
@@ -187,7 +187,7 @@ async def orchestrate_run(
             if sandbox:
                 from tools.runtime import SANDBOX_IMAGE
                 runtime = DockerRuntime(
-                    repo_path=str(wt.path),
+                    repo_path=task.repo_path,
                     image=sandbox_image or SANDBOX_IMAGE,
                     readonly_root=readonly_root,
                     worktree_mount=(str(wt.path), CONTAINER_WORKDIR),
@@ -196,32 +196,36 @@ async def orchestrate_run(
             else:
                 runtime = LocalRuntime()
 
-            # 4. registry（在 worktree 内执行）+ permission（safe_path 边界）
-            registry = registry_builder(
-                agent_cfg, confirm_callback, runtime, worktree_path=wt.path,
-            )
-            permission = PermissionManager(workspace=str(wt.path))
+            try:
+                # 4. registry（在 worktree 内执行）+ permission（safe_path 边界）
+                registry = registry_builder(
+                    agent_cfg, confirm_callback, runtime, worktree_path=wt.path,
+                )
+                permission = PermissionManager(workspace=str(wt.path))
 
-            # 权限决策观察回调 → 写 PERMISSION_DECISION + 转发 bus
-            def _on_decision(
-                name: str, params: dict[str, Any], decision: PermissionDecision,
-            ) -> None:
-                log.log_permission_decision(
-                    task_id, name, decision.decision.value, decision.reason, params,
+                # 权限决策观察回调 → 写 PERMISSION_DECISION + 转发 bus
+                def _on_decision(
+                    name: str, params: dict[str, Any], decision: PermissionDecision,
+                ) -> None:
+                    log.log_permission_decision(
+                        task_id, name, decision.decision.value, decision.reason, params,
+                    )
+
+                executor = ToolExecutor(
+                    registry, permission=permission,
+                    confirm_callback=confirm_callback,
+                    decision_callback=_on_decision,
                 )
 
-            executor = ToolExecutor(
-                registry, permission=permission,
-                confirm_callback=confirm_callback,
-                decision_callback=_on_decision,
-            )
+                # 5. Agent：让它的 repo_path 指向 worktree（core.py 零改动）
+                agent = factory(backend, registry, agent_cfg, executor)
+                task_in_wt = dataclasses.replace(task, repo_path=str(wt.path))
 
-            # 5. Agent：让它的 repo_path 指向 worktree（core.py 零改动）
-            agent = factory(backend, registry, agent_cfg, executor)
-            task_in_wt = dataclasses.replace(task, repo_path=str(wt.path))
-
-            # 6. 同步循环跑工作线程（释放事件循环给潜在 bus 订阅者）
-            result = await asyncio.to_thread(agent.run, task_in_wt, log)
+                # 6. 同步循环。事件通过 EventLog.on_append 先入队，运行结束后
+                # forwarder 转发，避免线程调度导致的收尾不确定性。
+                result = agent.run(task_in_wt, log)
+            finally:
+                runtime.cleanup()
 
     except BaseException as exc:  # noqa: BLE001 — 捕获含 KeyboardInterrupt 的回滚路径
         exc_info = exc

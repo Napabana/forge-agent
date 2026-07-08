@@ -77,12 +77,19 @@ def magenta(t: str) -> str: return _c(t, "35")
 # 构建 agent 各组件
 # ---------------------------------------------------------------------------
 
-def _build_registry(cfg, confirm_callback=None, runtime=None, worktree_path=None):
+def _build_registry(
+    cfg,
+    confirm_callback=None,
+    runtime=None,
+    worktree_path=None,
+    workspace=None,
+):
     """根据配置组装工具注册表。
 
     worktree_path：M4 第二波——非 None 时把它作为 shell/test/git 工具的 default_cwd，
     让 LocalRuntime 路径下工具默认在 worktree 内执行（LLM 仍可用 params cwd 覆盖）。
     Docker 路径由 runtime 内部翻译 cwd，default_cwd 不影响。
+    workspace：文件工具的路径边界。未显式传入时优先使用 worktree_path。
     """
     from tools.base import ToolRegistry
     from tools.file_tool import FileReadTool, FileViewTool, FileWriteTool
@@ -92,13 +99,14 @@ def _build_registry(cfg, confirm_callback=None, runtime=None, worktree_path=None
     from tools.test_tool import PytestTool
 
     wt = str(worktree_path) if worktree_path else None
+    fs_workspace = str(workspace or worktree_path) if (workspace or worktree_path) else None
 
     return (
         ToolRegistry()
         .register(ShellTool(confirm_callback=confirm_callback, runtime=runtime, default_cwd=wt))
-        .register(FileReadTool())
-        .register(FileViewTool())
-        .register(FileWriteTool())
+        .register(FileReadTool(workspace=fs_workspace))
+        .register(FileViewTool(workspace=fs_workspace))
+        .register(FileWriteTool(workspace=fs_workspace))
         .register(SearchTextTool())
         .register(FindFilesTool())
         .register(FindSymbolTool())
@@ -266,7 +274,12 @@ def run(
     runtime = create_runtime(sandbox=sandbox, repo_path=str(repo_path)) if sandbox else None
     if sandbox:
         click.echo(dim(f"  Sandbox: Docker ({runtime.name})"))
-    registry = _build_registry(config, confirm_callback=confirm_cb, runtime=runtime)
+    registry = _build_registry(
+        config,
+        confirm_callback=confirm_cb,
+        runtime=runtime,
+        workspace=str(repo_path),
+    )
 
     from agent.core import Agent, AgentConfig
     from agent.event_log import EventLog, summarize_run
@@ -341,12 +354,16 @@ def run(
 
     # 运行
     t0 = time.time()
-    with EventLog.create(task_obj, log_dir=config.agent.log_dir) as log:
-        click.echo(dim(f"  Log: {log.path}\n"))
-        result = agent.run(task_obj, log)
-        # 打印所有 events
-        for event in log.replay():
-            _print_step(event)
+    try:
+        with EventLog.create(task_obj, log_dir=config.agent.log_dir) as log:
+            click.echo(dim(f"  Log: {log.path}\n"))
+            result = agent.run(task_obj, log)
+            # 打印所有 events
+            for event in log.replay():
+                _print_step(event)
+    finally:
+        if runtime is not None:
+            runtime.cleanup()
 
     elapsed = time.time() - t0
     _print_run_result(result, elapsed)
@@ -419,12 +436,17 @@ def chat(
         click.echo(red(f"Error: {e}"), err=True)
         sys.exit(1)
 
-    registry = _build_registry(config)
     from tools.shell_tool import terminal_confirm
     from tools.runtime import create_runtime
     runtime = create_runtime(sandbox=sandbox, repo_path=str(repo_path)) if sandbox else None
     if sandbox:
         click.echo(dim(f"  Sandbox: Docker ({runtime.name})"))
+    registry = _build_registry(
+        config,
+        confirm_callback=terminal_confirm,
+        runtime=runtime,
+        workspace=str(repo_path),
+    )
     session = ChatSession(
         backend=backend,
         registry=registry,
@@ -467,58 +489,62 @@ def chat(
     except ImportError:
         pass  # Windows 没有 readline，降级为普通 input
 
-    # 主 REPL 循环
-    while True:
-        try:
-            # 清理当前行（流式输出后 readline 不知道屏幕上有残留字符）
-            # \r 回到行首，\033[2K 清除整行，然后显示提示符
-            sys.stdout.write("\r\033[2K")
-            sys.stdout.flush()
-            user_input = input(_rl_magenta("you") + " > ").strip()
-        except EOFError:
-            click.echo()
-            break
-        except KeyboardInterrupt:
-            click.echo()
-            break
-
-        if not user_input:
-            continue
-
-        # 内置命令
-        if user_input.startswith("/"):
-            cmd = user_input.lower()
-            if cmd in ("/exit", "/quit", "/q"):
+    try:
+        # 主 REPL 循环
+        while True:
+            try:
+                # 清理当前行（流式输出后 readline 不知道屏幕上有残留字符）
+                # \r 回到行首，\033[2K 清除整行，然后显示提示符
+                sys.stdout.write("\r\033[2K")
+                sys.stdout.flush()
+                user_input = input(_rl_magenta("you") + " > ").strip()
+            except EOFError:
+                click.echo()
                 break
-            elif cmd == "/stats":
-                session.print_stats()
-            elif cmd == "/clear":
-                session._shared_history.clear_except_first()
-                click.echo(dim("  History cleared (kept initial context)."))
-            elif cmd == "/help":
-                click.echo(dim(
-                    "  Commands:\n"
-                    "    /exit   — quit\n"
-                    "    /stats  — show session statistics\n"
-                    "    /clear  — clear conversation history\n"
-                    "    /help   — show this help\n"
-                    "  Anything else is sent to the agent."
-                ))
-            else:
-                click.echo(dim(f"  Unknown command: {user_input}. Type /help for help."))
-            continue
+            except KeyboardInterrupt:
+                click.echo()
+                break
 
-        # 运行一轮 agent
-        click.echo(dim(f"\n  Agent working..."))
-        try:
-            session.run_round(user_input)
-        except KeyboardInterrupt:
-            click.echo(yellow("\n  Interrupted. Type /exit to quit or continue with a new task."))
-        except Exception as e:
-            click.echo(red(f"\n  Error: {e}"))
-            if verbose:
-                import traceback
-                traceback.print_exc()
+            if not user_input:
+                continue
+
+            # 内置命令
+            if user_input.startswith("/"):
+                cmd = user_input.lower()
+                if cmd in ("/exit", "/quit", "/q"):
+                    break
+                elif cmd == "/stats":
+                    session.print_stats()
+                elif cmd == "/clear":
+                    session._shared_history.clear_except_first()
+                    click.echo(dim("  History cleared (kept initial context)."))
+                elif cmd == "/help":
+                    click.echo(dim(
+                        "  Commands:\n"
+                        "    /exit   — quit\n"
+                        "    /stats  — show session statistics\n"
+                        "    /clear  — clear conversation history\n"
+                        "    /help   — show this help\n"
+                        "  Anything else is sent to the agent."
+                    ))
+                else:
+                    click.echo(dim(f"  Unknown command: {user_input}. Type /help for help."))
+                continue
+
+            # 运行一轮 agent
+            click.echo(dim(f"\n  Agent working..."))
+            try:
+                session.run_round(user_input)
+            except KeyboardInterrupt:
+                click.echo(yellow("\n  Interrupted. Type /exit to quit or continue with a new task."))
+            except Exception as e:
+                click.echo(red(f"\n  Error: {e}"))
+                if verbose:
+                    import traceback
+                    traceback.print_exc()
+    finally:
+        if runtime is not None:
+            runtime.cleanup()
 
     session.print_stats()
     click.echo(dim("  Bye!\n"))

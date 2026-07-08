@@ -311,41 +311,11 @@ class ChatSession:
 
         log._append = live_append
 
-        # 把共享 history 传给 agent
-        # agent.run() 会重建 history，我们需要在它初始化后注入
-        # 通过重写 _build_messages 的 history 参数实现
         return self._run_injecting_history(task, log)
 
     def _run_injecting_history(self, task, log):
-        """
-        运行 agent，并在第一步前把共享 history 注入进去。
-
-        核心 trick：patch agent 的 run() 方法，在它初始化完
-        ConversationHistory 之后、第一次调用 LLM 之前，
-        把我们的共享 history 替换进去。
-        """
-        from context.history import ConversationHistory
-        from agent.prompt import build_task_prompt
-        from llm.base import LLMMessage
-
-        agent = self.agent
-
-        # 直接调用 agent.run()，但在它内部：
-        # 1. agent.run() 会创建新的 ConversationHistory
-        # 2. 我们通过 patch core.py 里的 ConversationHistory 构造器来替换它
-        # 更简洁的方式：给 agent 加一个 _initial_history 属性，run() 里检查它
-
-        # 方案：给 agent 设一个 _pending_history，
-        # 然后在 core.py 里的 run() 读取它（见下面的 patch）
-        agent._pending_history = self._shared_history
-
-        result = agent.run(task, log)
-
-        # 清除，避免影响下轮
-        if hasattr(agent, "_pending_history"):
-            del agent._pending_history
-
-        return result
+        """运行 agent，并通过正式参数传入跨轮共享 history。"""
+        return self.agent.run(task, log, history=self._shared_history)
 
     def print_stats(self) -> None:
         """打印会话总统计。"""
