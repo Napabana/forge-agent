@@ -86,8 +86,8 @@ def _build_registry(cfg, confirm_callback, runtime, worktree_path):
     """registry_builder：给 orchestrator 用的最小 registry（文件工具）。"""
     return (
         ToolRegistry()
-        .register(FileReadTool())
-        .register(FileWriteTool())
+        .register(FileReadTool(workspace=str(worktree_path)))
+        .register(FileWriteTool(workspace=str(worktree_path)))
     )
 
 
@@ -116,9 +116,9 @@ async def main() -> int:
     # MockBackend 脚本：读代码 → 改文件 → 完成
     script = [
         Action(ActionType.TOOL_CALL, "先读 calc.py 确认 bug",
-               ToolCall("file_read", {"path": str(repo / "calc.py")})),
+               ToolCall("file_read", {"path": "calc.py"})),
         Action(ActionType.TOOL_CALL, "把减法改回加法",
-               ToolCall("file_write", {"path": str(repo / "calc.py"),
+               ToolCall("file_write", {"path": "calc.py",
                                         "content": CALC_FIX})),
         Action(ActionType.FINISH, "add() 已修复", message="calc.py fixed"),
     ]
@@ -168,6 +168,10 @@ async def main() -> int:
     check(result.is_success(), "agent 运行成功")
     check(engine.get_task(result.task_id).status == STATUS_COMPLETED,
           "TaskEngine 标记 completed")
+    # Agent 在 worktree 清理前抓取 git diff 写入 RunResult.patch。
+    patch = result.patch or ""
+    check("return a + b" in patch and "return a - b" in patch,
+          "result.patch 记录了 worktree 内 a-b → a+b 的真实修改")
     # worktree 已清理（事务回滚）
     wt_dir = repo / ".worktrees"
     check(not wt_dir.exists() or not any(wt_dir.iterdir()),
