@@ -103,7 +103,7 @@ def create_backend(
         max_tokens=max_tokens,
     )
 
-
+#这里的config就是穿的参数值
 def create_backend_from_config(config: dict) -> LLMBackend:
     """
     从配置字典创建 backend，对应 config/default.yaml 的 llm 节。
@@ -116,6 +116,7 @@ def create_backend_from_config(config: dict) -> LLMBackend:
         max_tokens: 4096       # 可选
     """
     return create_backend(
+        #key不存在的时候用后面的默认值
         provider=config.get("provider", "anthropic"),
         model=config.get("model", "claude-sonnet-4-5"),
         api_key=config.get("api_key") or None,

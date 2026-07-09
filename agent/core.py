@@ -115,17 +115,22 @@ class Agent:
         Returns:
             RunResult，包含最终状态和统计信息
         """
+        
+        #同一个 Agent 实例可能被用来跑不同仓库的任务（比如 chat 模式跨轮、或多次 run），而 repo_map 缓存必须跟着仓库走。
         self._current_repo_path = task.repo_path
         # 按 repo_path 隔离 repo_map 缓存，换 repo 时自动重建
         cache_key = task.repo_path
+        #用getattr和hasattr：
+            #因为 repo_map_cache 和它的 key 都是运行时才挂上的属性，不在 __init__ 里声明。如果写 if self._repo_map_cache_key != cache_key，第一次调用就会 AttributeError
         if getattr(self, "_repo_map_cache_key", None) != cache_key:
             if hasattr(self, "_repo_map_cache"):
-                del self._repo_map_cache
-            self._repo_map_cache_key = cache_key
+                del self._repo_map_cache  #只是先让旧缓存失效，还没有重建
+            self._repo_map_cache_key = cache_key#删掉旧缓存，强迫重建
         log.log_task_start(task)
         logger.info("Agent starting task %s", task.task_id)
 
         # 初始化上下文管理器。chat/session 模式可以传入共享 history；单次 run 新建。
+        #1.初始化 ConversationHistory
         if history is None:
             history = ConversationHistory(max_messages=self._cfg.history_max_messages)
             # 单次模式：把任务描述作为第一条 user 消息
@@ -134,7 +139,11 @@ class Agent:
                 role="user",
                 content=build_task_prompt(task.description, task.repo_path, task.issue_url),
             ))
+            
+        #2.初始化 TokenBudget 和 RepoMap
+        #在上下文窗口装不下时，决定砍掉哪些内容 ；控制当前给LLM的上下文
         token_budget = TokenBudget(total=self._cfg.budget_tokens)
+        #把根路径 resolve() 存下来，扫描仓库生成一段给 LLM 看的目录+符号摘要
         repo_map = RepoMap(task.repo_path)
 
         total_tokens = 0
@@ -145,7 +154,7 @@ class Agent:
 
             # ── 1. 组装 messages，调用 LLM ──────────────────────────────
             messages = self._build_messages(history, token_budget, repo_map)
-            tools = self._registry.get_schemas()
+            tools = self._registry.get_schemas()#得到概述
 
             try:
                 response = self._call_with_retry(messages, tools)
@@ -292,6 +301,7 @@ class Agent:
         schemas = self._registry.get_schemas()
 
         # 生成 repo-map（带缓存：只在第一步生成，之后复用）
+        #repo_map.build() 要 rglob 扫整个仓库、给每个源码文件提取符号，预算是15%
         if not hasattr(self, "_repo_map_cache"):
             self._repo_map_cache = repo_map.build(
                 budget=token_budget.default_plan().repo_map
@@ -303,7 +313,7 @@ class Agent:
             repo_summary=self._repo_map_cache,
         )
 
-        # 裁剪历史
+        # 裁剪历史 #可以用fitall替代？
         trimmed_history_dicts = token_budget.trim_history(
             history.to_dicts(),
             token_budget.default_plan().history,
@@ -370,12 +380,14 @@ class Agent:
         """
         import time as _time
 
+        #记录最后一次异常
         last_exc: Exception | None = None
+        #退避时长，每次翻倍
         delay = self._cfg.llm_retry_delay
 
         for attempt in range(1, self._cfg.llm_max_retries + 1):
             try:
-                if self._cfg.stream:
+                if self._cfg.stream:#流式
                     cb = self._cfg.stream_callback
                     thought_cb = self._cfg.thought_callback
                     if hasattr(self._backend, "stream"):
@@ -388,11 +400,13 @@ class Agent:
             except Exception as exc:
                 last_exc = exc
                 exc_str = str(exc).lower()
+                #对于401/403/认证问题，400/参数错误，直接报错，因为重试没用
                 if any(kw in exc_str for kw in (
                     "401", "403", "invalid api key", "authentication",
                     "400", "bad request",
                 )):
                     raise
+                #其他问题可以尝试重试，每次重试时长翻倍
                 if attempt < self._cfg.llm_max_retries:
                     logger.warning(
                         "LLM call failed (attempt %d/%d): %s — retrying in %.1fs",

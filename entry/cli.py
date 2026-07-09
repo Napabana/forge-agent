@@ -3,6 +3,9 @@ entry/cli.py
 
 命令行入口。
 
+解析命令行参数、加载配置、创建 LLM backend、创建工具注册表、创建 Runtime、创建 Agent、创建 Task，然后调用 Agent 执行。
+定义了 run、chat、log show、log list 这些子命令。
+
 用法：
     # 直接传任务描述
     python -m entry.cli run --repo /path/to/repo --task "Fix the failing test"
@@ -75,6 +78,7 @@ def magenta(t: str) -> str: return _c(t, "35")
 
 # ---------------------------------------------------------------------------
 # 构建 agent 各组件
+# 把 Agent 能调用的工具统一注册进去
 # ---------------------------------------------------------------------------
 
 def _build_registry(
@@ -228,13 +232,14 @@ def run(
         datefmt="%H:%M:%S",
     )
 
-    # 加载配置
+    # 1.加载配置
     config = load_config(ctx.obj.get("config_path"))
+    # 2.加载优先级更高的配置
     config = merge_cli_overrides(
         config, provider=provider, model=model, max_steps=max_steps
     )
 
-    # 解析任务描述
+    # 解析任务描述 
     if task_file:
         description = Path(task_file).read_text(encoding="utf-8").strip()
     elif task:
@@ -255,7 +260,7 @@ def run(
     click.echo(f"  Repo     : {repo_path}")
     click.echo(f"  Max steps: {config.agent.max_steps}\n")
 
-    # 构建各组件
+    # 3.构建各组件
     try:
         backend = create_backend_from_config({
             "provider": config.llm.provider,
@@ -271,9 +276,11 @@ def run(
     from tools.shell_tool import terminal_confirm
     from tools.runtime import create_runtime
     confirm_cb = terminal_confirm if confirm else None
+    #runtime是执行器实例， 有生命周期，后续还需要清理
     runtime = create_runtime(sandbox=sandbox, repo_path=str(repo_path)) if sandbox else None
     if sandbox:
         click.echo(dim(f"  Sandbox: Docker ({runtime.name})"))
+    # 注册工具
     registry = _build_registry(
         config,
         confirm_callback=confirm_cb,
@@ -301,6 +308,7 @@ def run(
         sys.stdout.write(dim(text))
         sys.stdout.flush()
 
+
     agent_config = AgentConfig(
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
@@ -311,6 +319,7 @@ def run(
         confirm_dangerous=confirm,
         confirm_callback=confirm_cb,
     )
+    #llm后端，注册工具，agent配置
     agent = Agent(backend, registry, agent_config)
 
     task_obj = Task(
@@ -321,12 +330,14 @@ def run(
     )
 
     # M4 第二波：--isolate 走 async 组合根（worktree + TaskEngine + permission workspace）
+    #事务隔离，在worktree中跑：异步async 不用之前的agent实例，只有 backend、task_obj、agent_config、confirm_cb 被复用
     if isolate:
         import asyncio
         from agent.orchestrate import orchestrate_run
         from ipc.bus import AgentBus
         from task.engine import TaskEngine
 
+        #持久化状态
         engine = TaskEngine(Path(config.agent.log_dir) / "tasks.db")
         bus = AgentBus() if verbose else None
         click.echo(dim(f"  Isolate: worktree + TaskEngine ({engine.__class__.__name__})\n"))
@@ -352,11 +363,12 @@ def run(
             f"  tiktoken: {'yes' if is_tiktoken_available() else 'no (char estimate)'}\n"
         ))
 
-    # 运行
+    # 直接同步运行
     t0 = time.time()
     try:
         with EventLog.create(task_obj, log_dir=config.agent.log_dir) as log:
             click.echo(dim(f"  Log: {log.path}\n"))
+            #真正的执行核心。它的职责包括维护对话历史、组装 messages 调用 LLM、拿到 Action 后执行工具、写入 Action 和 Observation 到 EventLog、检测终止条件和 reflection 条件，最后返回 RunResult。
             result = agent.run(task_obj, log)
             # 打印所有 events
             for event in log.replay():

@@ -8,6 +8,7 @@ config/
 .claude
 .coverage
 htmlcov/
+docs/
 
 # Secrets — never commit API keys / tokens
 .env
