@@ -239,9 +239,50 @@ class TestTokenBudget:
         for i in range(20):
             msgs.append({"role": "user", "content": "x" * 100})
         result = budget.trim_history(msgs, token_limit=50)
-        # 应该有一条截断提示消息
+        # 应该有一条省略提示消息
         contents = " ".join(m["content"] for m in result)
-        assert "truncated" in contents.lower()
+        assert "omitted" in contents.lower()
+
+    def test_trim_history_trims_oversized_first_message(self):
+        budget = TokenBudget()
+        msgs = [
+            {"role": "user", "content": "task " + ("x" * 10_000)},
+            {"role": "assistant", "content": "recent message"},
+        ]
+        result = budget.trim_history(msgs, token_limit=100)
+
+        assert len(result) == 1
+        assert "truncated" in result[0]["content"]
+        assert sum(estimate_tokens(m["content"]) for m in result) <= 100
+
+    def test_trim_history_marks_omitted_gaps_between_kept_segments(self):
+        budget = TokenBudget()
+        msgs = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "old small 1"},
+            {"role": "user", "content": "old small 2"},
+            {"role": "user", "content": "huge observation " + ("x" * 5_000)},
+            {"role": "assistant", "content": "recent small 1"},
+            {"role": "user", "content": "recent small 2"},
+        ]
+        token_limit = (
+            estimate_tokens("task")
+            + estimate_tokens("old small 1")
+            + estimate_tokens("old small 2")
+            + estimate_tokens("[1 message omitted here to fit context window]")
+            + estimate_tokens("recent small 1")
+            + estimate_tokens("recent small 2")
+        )
+
+        result = budget.trim_history(msgs, token_limit=token_limit)
+        contents = [m["content"] for m in result]
+
+        assert contents[0] == "task"
+        assert contents[1:3] == ["old small 1", "old small 2"]
+        assert "1 message omitted here" in contents[3]
+        assert contents[-2:] == ["recent small 1", "recent small 2"]
+        assert not any("huge observation" in c for c in contents)
+        assert sum(estimate_tokens(m["content"]) for m in result) <= token_limit
 
     def test_trim_history_empty(self):
         budget = TokenBudget()

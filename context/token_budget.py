@@ -131,15 +131,18 @@ class TokenBudget:
 
     def trim_to(self, text: str, token_limit: int) -> str:
         """裁剪文本到 token_limit 以内，超出时保留开头。"""
+        if token_limit <= 0:
+            return ""
         if estimate_tokens(text) <= token_limit:
             return text
-        # 二分逼近：找到合适的字符截断点
-        char_limit = token_limit * 4
-        candidate = text[:char_limit]
-        while estimate_tokens(candidate) > token_limit and len(candidate) > 0:
-            candidate = candidate[:int(len(candidate) * 0.9)]
-        omitted = estimate_tokens(text[len(candidate):])
-        return candidate + f"\n... [{omitted} tokens truncated]"
+
+        suffix = "\n... [tokens truncated]"
+        suffix_tokens = estimate_tokens(suffix)
+        if suffix_tokens >= token_limit:
+            return self._trim_prefix(text, token_limit)
+
+        candidate = self._trim_prefix(text, token_limit - suffix_tokens)
+        return candidate + suffix
 
     def trim_history(
         self,
@@ -148,10 +151,13 @@ class TokenBudget:
     ) -> list[dict]:
         """
         裁剪历史消息列表到 token_limit 以内。
-        保留第一条（任务描述）+ 尽量多的最近消息。
+        保留第一条（任务描述）+ 尽量多的历史片段。
+        如果中间消息被删除，在对应位置插入省略提示，避免伪造连续时间线。
         """
         if not messages:
             return messages
+        if token_limit <= 0:
+            return []
 
         token_counts = [estimate_tokens(m.get("content", "")) for m in messages]
         total = sum(token_counts)
@@ -159,28 +165,78 @@ class TokenBudget:
         if total <= token_limit:
             return messages
 
-        result = [messages[0]]
-        remaining_budget = token_limit - token_counts[0]
-        dropped = 0
-        selected = []
-        budget_left = remaining_budget
+        first = dict(messages[0])
+        first_tokens = token_counts[0]
+        if first_tokens > token_limit:
+            first["content"] = self.trim_to(first.get("content", ""), token_limit)
+            return [first]
 
-        for msg, tokens in zip(reversed(messages[1:]), reversed(token_counts[1:])):
-            if budget_left - tokens >= 0:
-                selected.append(msg)
-                budget_left -= tokens
-            else:
-                dropped += 1
+        selected_indices: set[int] = set()
+        changed = True
+        while changed:
+            changed = False
+            for idx in range(len(messages) - 1, 0, -1):
+                if idx in selected_indices:
+                    continue
+                selected_indices.add(idx)
+                result = self._build_trimmed_history(messages, selected_indices, first)
+                result_tokens = sum(
+                    estimate_tokens(m.get("content", "")) for m in result
+                )
+                if result_tokens <= token_limit:
+                    changed = True
+                else:
+                    selected_indices.remove(idx)
 
-        selected.reverse()
+        result = self._build_trimmed_history(messages, selected_indices, first)
+        result_tokens = sum(estimate_tokens(m.get("content", "")) for m in result)
+        if result_tokens > token_limit:
+            return [first]
+        return result
 
-        if dropped > 0:
-            result.append({
-                "role": "user",
-                "content": f"[{dropped} earlier messages were truncated to fit context window]",
-            })
+    def _trim_prefix(self, text: str, token_limit: int) -> str:
+        """返回 text 的前缀，保证估算 token 不超过 token_limit。"""
+        if token_limit <= 0:
+            return ""
 
-        result.extend(selected)
+        char_limit = token_limit * 4
+        candidate = text[:char_limit]
+        while estimate_tokens(candidate) > token_limit and len(candidate) > 0:
+            next_len = int(len(candidate) * 0.9)
+            if next_len == len(candidate):
+                next_len -= 1
+            candidate = candidate[:max(0, next_len)]
+
+        return candidate
+
+    def _history_notice(self, dropped: int) -> dict:
+        noun = "message" if dropped == 1 else "messages"
+        return {
+            "role": "user",
+            "content": f"[{dropped} {noun} omitted here to fit context window]",
+        }
+
+    def _build_trimmed_history(
+        self,
+        messages: list[dict],
+        selected_indices: set[int],
+        first: dict,
+    ) -> list[dict]:
+        result = [first]
+        sorted_indices = sorted(selected_indices)
+        cursor = 1
+
+        for idx in sorted_indices:
+            dropped = idx - cursor
+            if dropped > 0:
+                result.append(self._history_notice(dropped))
+            result.append(messages[idx])
+            cursor = idx + 1
+
+        dropped_tail = len(messages) - cursor
+        if dropped_tail > 0:
+            result.append(self._history_notice(dropped_tail))
+
         return result
 
     def fit_all(
