@@ -114,9 +114,7 @@ context:
   history_window: 20
 ```
 
-配置加载器还会尝试读取 `~/learn-claude-code/.env`。可用
-`FORGE_ENV_FILE=/path/to/.env` 指定其他文件；shell 中已经存在的环境变量不会
-被 `.env` 覆盖。
+配置加载器可用`FORGE_ENV_FILE=/path/to/.env` 指定；shell 中已经存在的环境变量不会被 `.env` 覆盖。
 
 ## 使用指南
 
