@@ -39,6 +39,7 @@ _tiktoken_available = False
 
 def _init_tiktoken() -> None:
     global _tiktoken_enc, _tiktoken_available
+    #如果初始化即可
     if _tiktoken_available or _tiktoken_enc is not None:
         return
     try:
@@ -58,13 +59,15 @@ def estimate_tokens(text: str) -> int:
     if not _tiktoken_available:
         _init_tiktoken()
 
+    # is not none 只检查是否初始化
+    #必须初始化也存在对象才能返回。初始化也存在对象才能返回。
     if _tiktoken_available and _tiktoken_enc is not None:
         try:
             return max(1, len(_tiktoken_enc.encode(text)))
         except Exception:
             pass
 
-    # 字符估算 fallback
+    # 如果 tiktoken 不可用或失败，降级成字符估算。字符估算 fallback
     return max(1, len(text) // 4)
 
 
@@ -141,6 +144,7 @@ class TokenBudget:
         if suffix_tokens >= token_limit:
             return self._trim_prefix(text, token_limit)
 
+        #添加上suffix一起截断
         candidate = self._trim_prefix(text, token_limit - suffix_tokens)
         return candidate + suffix
 
@@ -153,33 +157,43 @@ class TokenBudget:
         裁剪历史消息列表到 token_limit 以内。
         保留第一条（任务描述）+ 尽量多的历史片段。
         如果中间消息被删除，在对应位置插入省略提示，避免伪造连续时间线。
+        优先级：第一条任务消息>历史消息>省略提示
         """
         if not messages:
             return messages
         if token_limit <= 0:
             return []
 
+        #上下文预算估算
         token_counts = [estimate_tokens(m.get("content", "")) for m in messages]
         total = sum(token_counts)
 
         if total <= token_limit:
             return messages
 
+        #创建第一条消息的浅拷贝。 修改first不会修改message[0]的内容，但是嵌套消息共享
         first = dict(messages[0])
         first_tokens = token_counts[0]
         if first_tokens > token_limit:
             first["content"] = self.trim_to(first.get("content", ""), token_limit)
             return [first]
 
+        #selected_indices 保存最终决定保留的消息下标。
+        #第一条消息下标是 0，已经由 first 单独保存，所以集合只会包含：1 到 len(messages) - 1
         selected_indices: set[int] = set()
+        #每次加入消息都会改变预算，代码会重复尝试此前未选中的消息，直到某一整轮没有任何新消息能够加入。
+        #TODO ：可以用全局最优的背包算法改进
         changed = True
         while changed:
             changed = False
+            #如果压缩次数很多的话，每次都从末尾开始枚举，效率不高吧
             for idx in range(len(messages) - 1, 0, -1):
                 if idx in selected_indices:
                     continue
+                #先加入对话再计算是否超预算
                 selected_indices.add(idx)
                 result = self._build_trimmed_history(messages, selected_indices, first)
+                #加上省略提示一起计算token
                 result_tokens = sum(
                     estimate_tokens(m.get("content", "")) for m in result
                 )
@@ -190,19 +204,23 @@ class TokenBudget:
 
         result = self._build_trimmed_history(messages, selected_indices, first)
         result_tokens = sum(estimate_tokens(m.get("content", "")) for m in result)
+        #第一条没有超预算，但是第一条+后续省略的notice超预算了
         if result_tokens > token_limit:
             return [first]
         return result
 
     def _trim_prefix(self, text: str, token_limit: int) -> str:
-        """返回 text 的前缀，保证估算 token 不超过 token_limit。"""
+        """返回 text 的前缀，保证估算 token 不超过 token_limit。
+        按 token_limit * 4 估算出字符截断点"""
         if token_limit <= 0:
             return ""
 
         char_limit = token_limit * 4
         candidate = text[:char_limit]
         while estimate_tokens(candidate) > token_limit and len(candidate) > 0:
+            #如果长度还是超过token限制，每轮缩减10%
             next_len = int(len(candidate) * 0.9)
+            #防御性措施，防止长度不变
             if next_len == len(candidate):
                 next_len -= 1
             candidate = candidate[:max(0, next_len)]
@@ -222,17 +240,23 @@ class TokenBudget:
         selected_indices: set[int],
         first: dict,
     ) -> list[dict]:
+        """ 这个函数负责根据已选择的下标：
+            保留第一条；
+            恢复选中消息的原始顺序；
+            在被删除的位置插入省略提示。"""
         result = [first]
         sorted_indices = sorted(selected_indices)
         cursor = 1
 
         for idx in sorted_indices:
+            #dropped 表示从 cursor 到当前选中消息之间，有多少条消息没有被选择。
             dropped = idx - cursor
             if dropped > 0:
                 result.append(self._history_notice(dropped))
             result.append(messages[idx])
             cursor = idx + 1
 
+        #处理尾部被删除的消息
         dropped_tail = len(messages) - cursor
         if dropped_tail > 0:
             result.append(self._history_notice(dropped_tail))
