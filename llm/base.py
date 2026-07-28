@@ -121,8 +121,11 @@ class LLMBackend(ABC):
         on_thought: 模型推理过程（thought）的流式回调，仅推理模型有内容
         """
         response = self.complete(messages, tools)
+        #on_text不是一个传入的参数吗？这里又变成了函数吗？
+        #on_text 的本质只是一个回调函数：
         if on_text and response.raw_content:
             on_text(response.raw_content)
+        #on_thought：默认 fallback 不支持推理过程的实时回调。
         return response
 
 

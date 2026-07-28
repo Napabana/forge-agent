@@ -62,6 +62,7 @@ class AgentConfig:
     thought_callback: object = None        # StreamCallback，推理过程流式回调（推理模型专用）
     confirm_dangerous: bool = False        # 是否对危险命令要求用户确认
     confirm_callback: object = None        # ConfirmCallback，None=跳过确认
+    cancel_event: object = None            # threading.Event-like；set 后协作取消
 
 
 
@@ -116,6 +117,10 @@ class Agent:
             RunResult，包含最终状态和统计信息
         """
         
+        #5步初始化
+        
+        #1.根据 task.repo_path 判断 repo map 缓存是否需要失效。
+        ##本质就是一个简单的 per-repository cache invalidation（按仓库粒度的缓存失效机制）。
         #同一个 Agent 实例可能被用来跑不同仓库的任务（比如 chat 模式跨轮、或多次 run），而 repo_map 缓存必须跟着仓库走。
         self._current_repo_path = task.repo_path
         # 按 repo_path 隔离 repo_map 缓存，换 repo 时自动重建
@@ -124,13 +129,16 @@ class Agent:
             #因为 repo_map_cache 和它的 key 都是运行时才挂上的属性，不在 __init__ 里声明。如果写 if self._repo_map_cache_key != cache_key，第一次调用就会 AttributeError
         if getattr(self, "_repo_map_cache_key", None) != cache_key:
             if hasattr(self, "_repo_map_cache"):
-                del self._repo_map_cache  #只是先让旧缓存失效，还没有重建
+                del self._repo_map_cache  #只是先让旧缓存失效，还没有重建repo_map()
             self._repo_map_cache_key = cache_key#删掉旧缓存，强迫重建
+        
+        #2.写入 TASK_START 事件
         log.log_task_start(task)
         logger.info("Agent starting task %s", task.task_id)
 
-        # 初始化上下文管理器。chat/session 模式可以传入共享 history；单次 run 新建。
-        #1.初始化 ConversationHistory
+        # chat/session 模式可以传入共享 history
+        #单次 run 新建。
+        #3.如果没有传入共享 ConversationHistory，则新建历史，并把任务 prompt 作为第一条 user 消息。
         if history is None:
             history = ConversationHistory(max_messages=self._cfg.history_max_messages)
             # 单次模式：把任务描述作为第一条 user 消息
@@ -140,16 +148,31 @@ class Agent:
                 content=build_task_prompt(task.description, task.repo_path, task.issue_url),
             ))
             
-        #2.初始化 TokenBudget 和 RepoMap
+        #4.创建 TokenBudget
         #在上下文窗口装不下时，决定砍掉哪些内容 ；控制当前给LLM的上下文
         token_budget = TokenBudget(total=self._cfg.budget_tokens)
         #把根路径 resolve() 存下来，扫描仓库生成一段给 LLM 看的目录+符号摘要
+        #5.创建 RepoMap。
         repo_map = RepoMap(task.repo_path)
 
         total_tokens = 0
         steps_without_edit = 0
 
+        #核心循环
         for step in range(1, task.max_steps + 1):
+            #检查用户是否取消请求
+            if self._is_cancel_requested():
+                reason = "Canceled by external request"
+                logger.info("Agent task %s canceled before step %d", task.task_id, step)
+                log.log_task_failed(steps=step - 1, reason=reason)
+                return RunResult(
+                    task_id=task.task_id,
+                    status=RunStatus.CANCELED,
+                    summary=reason,
+                    steps_taken=step - 1,
+                    total_tokens=total_tokens,
+                )
+            
             logger.debug("Step %d/%d", step, task.max_steps)
 
             # ── 1. 组装 messages，调用 LLM ──────────────────────────────
@@ -157,8 +180,12 @@ class Agent:
             tools = self._registry.get_schemas()#得到概述
 
             try:
+                #调用、分类、等待、重试、抛异常
                 response = self._call_with_retry(messages, tools)
             except Exception as exc:
+                #写任务失败日志
+                # → 构造 RunResult
+                # → 将任务状态设为 FAILED
                 logger.error("LLM call failed at step %d after retries: %s", step, exc)
                 log.log_task_failed(steps=step, reason=f"LLM error: {exc}")
                 return RunResult(
@@ -178,6 +205,7 @@ class Agent:
             logger.info("Step %d: %r", step, action)
 
             # ── 3. 检测死循环（连续相同 action）────────────────────────
+            #先写入再检测 一次检测到循环 → 立即硬熔断
             if self._is_looping(log):
                 reason = f"Loop detected: same action repeated {self._cfg.loop_detection_window} times"
                 logger.warning(reason)
@@ -217,6 +245,18 @@ class Agent:
 
             # ── 5. 执行工具 ─────────────────────────────────────────────
             if action.action_type == ActionType.TOOL_CALL and action.tool_call:
+                if self._is_cancel_requested():
+                    reason = "Canceled by external request"
+                    logger.info("Agent task %s canceled before tool execution", task.task_id)
+                    log.log_task_failed(steps=step, reason=reason)
+                    return RunResult(
+                        task_id=task.task_id,
+                        status=RunStatus.CANCELED,
+                        summary=reason,
+                        steps_taken=step,
+                        total_tokens=total_tokens,
+                    )
+
                 tc = action.tool_call
                 result = self._executor.execute(tc.name, tc.params)
                 observation = result.to_observation(tc.name)
@@ -285,6 +325,20 @@ class Agent:
             total_tokens=total_tokens,
         )
 
+    def _is_cancel_requested(self) -> bool:
+        """is_set 是取消对象提供的状态查询方法。
+        外部通过 cancel_event.set() 发出取消信号，Agent 使用 getattr() 安全取得 is_set 方法，
+        确认它可调用后执行 is_set()；返回 True 就表示已经收到取消请求。"""
+        event = self._cfg.cancel_event
+        if event is None:
+            return False
+        #event.is_set()    # 查询当前状态
+        is_set = getattr(event, "is_set", None)
+        #callable() 判断对象能不能像函数一样调用。
+        if callable(is_set):
+            return bool(is_set())
+        return bool(event)
+
     # ------------------------------------------------------------------
     # 内部辅助
     # ------------------------------------------------------------------
@@ -302,11 +356,13 @@ class Agent:
 
         # 生成 repo-map（带缓存：只在第一步生成，之后复用）
         #repo_map.build() 要 rglob 扫整个仓库、给每个源码文件提取符号，预算是15%
+        #文件修改后不会实时扫描
         if not hasattr(self, "_repo_map_cache"):
             self._repo_map_cache = repo_map.build(
                 budget=token_budget.default_plan().repo_map
             )
 
+        #生成系统提示词
         system_content = build_system_prompt(
             repo_path=getattr(self, "_current_repo_path", "."),
             tools=schemas,
@@ -345,6 +401,7 @@ class Agent:
             lines.append(f"Error: {observation.error}")
         return "\n".join(lines)
 
+    #TODO：每次检查时都要重新构造actions，完全可以再执行的时候遇到actions就添加进入actionslist，然后进行对比呀
     def _is_looping(self, log: EventLog) -> bool:
         """
         检测是否陷入死循环：最近 N 条 action 完全相同。
@@ -352,14 +409,16 @@ class Agent:
         """
         n = self._cfg.loop_detection_window
         actions = log.get_actions()
+        #如果全部action的次数不足就退出，那再get action的时候也可以倒序只取n条呀，
         if len(actions) < n:
             return False
 
+        #倒序取最近n次的
         recent = actions[-n:]
-        # 只对 TOOL_CALL 类型做检测
+        # 只对 TOOL_CALL 类型做检测 如果这三个不都是 toolcall就退出
         if not all(a.action_type == ActionType.TOOL_CALL for a in recent):
             return False
-        if not all(a.tool_call for a in recent):
+        if not all(a.tool_call is not None for a in recent):
             return False
 
         first = recent[0].tool_call
@@ -368,10 +427,11 @@ class Agent:
             for a in recent[1:]
         )
 
+    #TODO：改进
     def _call_with_retry(
         self,
-        messages: list[LLMMessage],
-        tools: list[LLMToolSchema],
+        messages: list[LLMMessage],#name role id
+        tools: list[LLMToolSchema],#name description para
     ):
         """
         带指数退避重试的 LLM 调用。
@@ -380,24 +440,32 @@ class Agent:
         """
         import time as _time
 
-        #记录最后一次异常
+        #最近一次 LLM 调用产生的异常
         last_exc: Exception | None = None
-        #退避时长，每次翻倍
+        #退避时长，每次翻倍 初始为2s
         delay = self._cfg.llm_retry_delay
 
+        #llm_max_retries=3,最多翻倍3次，最多调用3次,重试2次，所以时2s->4s->不等待
         for attempt in range(1, self._cfg.llm_max_retries + 1):
             try:
                 if self._cfg.stream:#流式
+                    #取得流式回调
                     cb = self._cfg.stream_callback
                     thought_cb = self._cfg.thought_callback
                     if hasattr(self._backend, "stream"):
+                        #一旦 stream 成功返回，整个 _call_with_retry() 立即结束，不会继续循环。
+                        #这里调用的是具体backend的stream，不是基类的stream
+                        #Core 不关心当前使用的是 Anthropic、OpenAI-compatible 还是 MockBackend。
                         return self._backend.stream(
                             messages, tools,
+                            #接收模型最终回答的文本增量
                             on_text=cb,
+                            #接收推理模型的思考内容
                             on_thought=thought_cb,
                         )
                 return self._backend.complete(messages, tools)
             except Exception as exc:
+                #每次捕获异常后更新
                 last_exc = exc
                 exc_str = str(exc).lower()
                 #对于401/403/认证问题，400/参数错误，直接报错，因为重试没用
@@ -405,22 +473,31 @@ class Agent:
                     "401", "403", "invalid api key", "authentication",
                     "400", "bad request",
                 )):
+                    #原样重新抛出当前捕获到的异常，保留原始异常类型和 traceback
                     raise
                 #其他问题可以尝试重试，每次重试时长翻倍
                 if attempt < self._cfg.llm_max_retries:
                     logger.warning(
                         "LLM call failed (attempt %d/%d): %s — retrying in %.1fs",
+                        #第几次尝试/最多尝试次数/异常/等待时间
                         attempt, self._cfg.llm_max_retries, exc, delay,
                     )
+                    #Agent Core 刻意保持同步，同步阻塞等待
                     _time.sleep(delay)
                     delay *= 2
-
-        raise last_exc  # type: ignore[misc]
+        #所有调用都失败 抛出错误
+        #raise last_exc  
+        if last_exc is None:
+            raise RuntimeError("llm_max_retries must be at least 1")
+        raise last_exc # type: ignore[misc]
 
     def _get_git_diff(self, repo_path: str) -> str | None:
         """抓取 git diff HEAD 作为 patch，失败时静默返回 None。"""
         import subprocess
         try:
+            #subprocess.run不经过终端，相当于
+            # 程序：git
+            # 参数：["diff", "HEAD"]
             proc = subprocess.run(
                 ["git", "diff", "HEAD"],
                 capture_output=True, text=True, timeout=10, cwd=repo_path,

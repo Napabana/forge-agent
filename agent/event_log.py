@@ -222,6 +222,7 @@ class EventLog:
 
     def iter_events(self) -> Iterator[Event]:
         """惰性迭代所有 event，适合大文件。文件关闭后仍可调用。"""
+        #读取之前也会再次检查并 flush：
         if not self._file.closed:
             self._file.flush()
         with open(self._path, encoding="utf-8") as f:
@@ -241,7 +242,9 @@ class EventLog:
     def get_actions(self) -> list[Action]:
         """
         从 event log 提取所有 Action，用于循环检测。
+        只保留action的name，params
         （连续相同 action 时触发熔断）
+        但是返回的action并不一定连续啊
         """
         from agent.task import ActionType, ToolCall
 
