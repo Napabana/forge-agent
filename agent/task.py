@@ -29,6 +29,7 @@ class EventType(str, Enum):
     ACTION          = "action"
     OBSERVATION     = "observation"
     REFLECTION      = "reflection"
+    LOOP_DETECTED    = "loop_detected"
     TASK_COMPLETE   = "task_complete"
     TASK_FAILED     = "task_failed"
     # M4 主循环集成：worktree 生命周期 + 权限决策 + 任务认领

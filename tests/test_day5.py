@@ -12,7 +12,9 @@ import pytest
 
 from context.history import ConversationHistory
 from context.repo_map import RepoMap, _extract_python_symbols, _extract_symbols_regex
-from context.token_budget import TokenBudget, estimate_tokens
+from context.token_budget import (
+    TokenBudget, estimate_messages_tokens, estimate_tokens,
+)
 from llm.base import LLMMessage, MockBackend
 from agent.task import Action, ActionType, Task, ToolCall
 from tools.base import NoopTool, ToolRegistry
@@ -227,8 +229,12 @@ class TestTokenBudget:
         msgs = [{"role": "user", "content": "task"}]
         for i in range(10):
             msgs.append({"role": "user", "content": f"message {i}"})
-        # 预算只够放 3 条
-        result = budget.trim_history(msgs, token_limit=15)
+        # 预算覆盖任务、一个省略提示和最新消息（含消息协议开销）
+        expected = [msgs[0], budget._history_notice(9), msgs[-1]]
+        result = budget.trim_history(
+            msgs,
+            token_limit=estimate_messages_tokens(expected),
+        )
         contents = [m["content"] for m in result]
         # 最新的消息（message 9）应该在
         assert any("message 9" in c for c in contents)
@@ -265,14 +271,10 @@ class TestTokenBudget:
             {"role": "assistant", "content": "recent small 1"},
             {"role": "user", "content": "recent small 2"},
         ]
-        token_limit = (
-            estimate_tokens("task")
-            + estimate_tokens("old small 1")
-            + estimate_tokens("old small 2")
-            + estimate_tokens("[1 message omitted here to fit context window]")
-            + estimate_tokens("recent small 1")
-            + estimate_tokens("recent small 2")
-        )
+        intended = [
+            msgs[0], msgs[1], msgs[2], budget._history_notice(1), msgs[4], msgs[5],
+        ]
+        token_limit = estimate_messages_tokens(intended)
 
         result = budget.trim_history(msgs, token_limit=token_limit)
         contents = [m["content"] for m in result]

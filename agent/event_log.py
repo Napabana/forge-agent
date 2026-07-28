@@ -126,6 +126,30 @@ class EventLog:
             },
         ))
 
+    def log_loop_detected(
+        self,
+        step: int,
+        *,
+        severity: str,
+        period: int,
+        repeats: int,
+        occurrence: int,
+        action_pattern: list[str],
+    ) -> None:
+        """Record a structured loop recovery or termination decision."""
+        self._append(Event(
+            event_type=EventType.LOOP_DETECTED,
+            task_id=self._current_task_id,
+            payload={
+                "step": step,
+                "severity": severity,
+                "period": period,
+                "repeats": repeats,
+                "occurrence": occurrence,
+                "action_pattern": action_pattern,
+                "progress": False,
+            },
+        ))
     def log_task_complete(self, steps: int, summary: str) -> None:
         """任务成功完成。"""
         self._append(Event(

@@ -113,15 +113,14 @@ What specific action will move the task forward?\
 """
 
 REFLECTION_LOOP_DETECTED = """\
-[REFLECTION] You have repeated the same action {n} times in a row.
-This suggests you are stuck. Stop and reconsider:
-1. What are you trying to achieve with this action?
-2. Why isn't it working?
-3. What completely different approach could you try?
+[REFLECTION] A no-progress action cycle was detected: period {period}, repeated {repeats} times.
+Before your next action:
+1. State why the previous cycle produced no new observation, repository change, or test result.
+2. Choose a materially different tool, target, or hypothesis.
+3. Do not repeat the detected action pattern.
 
-Do not repeat the same action again.\
+A second no-progress cycle will terminate this run.\
 """
-
 
 def reflection_test_failed() -> str:
     return REFLECTION_TEST_FAILED
@@ -131,8 +130,8 @@ def reflection_no_edit(n: int) -> str:
     return REFLECTION_NO_EDIT.format(n=n)
 
 
-def reflection_loop_detected(n: int) -> str:
-    return REFLECTION_LOOP_DETECTED.format(n=n)
+def reflection_loop_detected(repeats: int, period: int = 1) -> str:
+    return REFLECTION_LOOP_DETECTED.format(repeats=repeats, period=period)
 
 
 # ---------------------------------------------------------------------------

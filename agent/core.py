@@ -21,14 +21,17 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from agent.event_log import EventLog
+from agent.loop_detector import LoopDetector, LoopSeverity, snapshot_repository
 from context.history import ConversationHistory
 from context.repo_map import RepoMap
 from context.token_budget import TokenBudget
 from agent.prompt import (
     build_system_prompt,
     build_task_prompt,
+    reflection_loop_detected,
     reflection_no_edit,
     reflection_test_failed,
 )
@@ -37,6 +40,7 @@ from agent.task import (
     Observation, ObservationStatus, RunResult, RunStatus, Task, ToolCall,
 )
 from llm.base import LLMBackend, LLMMessage, LLMToolSchema
+from llm.errors import LLMCallbackError, classify_llm_error
 from tools.base import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -51,12 +55,15 @@ class AgentConfig:
     """Agent 运行时配置，从 config/default.yaml 加载后传入。"""
     max_steps: int = 40
     reflection_no_edit_steps: int = 6   # 连续 N 步无文件写操作触发 Reflection
-    loop_detection_window: int = 3       # 连续 N 步完全相同 action 判定死循环
+    loop_detection_window: int = 3       # 同一周期至少重复 N 次
+    loop_detection_max_period: int = 3   # 检测 AAA / ABABAB / ABCABCABC
     test_tool_names: tuple[str, ...] = ("test", "pytest")  # 触发 Reflection 的工具名
     budget_tokens: int = 80_000            # 总 token 预算
     history_max_messages: int = 40         # 历史最大条数
     llm_max_retries: int = 3               # LLM 调用失败最大重试次数
     llm_retry_delay: float = 2.0           # 重试间隔（秒，指数退避）
+    llm_retry_max_delay: float = 30.0      # 单次等待上限
+    llm_retry_jitter: float = 0.0          # 随机抖动比例（0=关闭）
     stream: bool = False                   # 是否启用流式输出
     stream_callback: object = None         # StreamCallback，最终回答流式回调
     thought_callback: object = None        # StreamCallback，推理过程流式回调（推理模型专用）
@@ -93,6 +100,21 @@ class Agent:
         # ToolExecutor 包住 registry，行为等价于直接 registry.execute_tool。
         # 需要安全管线的地方（如 --confirm / 多智能体入口）显式注入 executor。
         self._executor = executor or _default_executor(registry)
+        self._repo_map_cache_key: str | None = None
+        self._repo_map_force_refresh = False
+
+    def invalidate_repo_map_cache(self, repo_path: str | Path | None = None) -> bool:
+        """Invalidate the cached repository summary, optionally by repo."""
+        if repo_path is not None and self._repo_map_cache_key is not None:
+            requested = str(Path(repo_path).resolve())
+            current = str(Path(self._repo_map_cache_key).resolve())
+            if requested != current:
+                return False
+        existed = hasattr(self, "_repo_map_cache")
+        if existed:
+            del self._repo_map_cache
+        self._repo_map_force_refresh = True
+        return existed
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -127,9 +149,9 @@ class Agent:
         cache_key = task.repo_path
         #用getattr和hasattr：
             #因为 repo_map_cache 和它的 key 都是运行时才挂上的属性，不在 __init__ 里声明。如果写 if self._repo_map_cache_key != cache_key，第一次调用就会 AttributeError
-        if getattr(self, "_repo_map_cache_key", None) != cache_key:
-            if hasattr(self, "_repo_map_cache"):
-                del self._repo_map_cache  #只是先让旧缓存失效，还没有重建repo_map()
+        if self._repo_map_cache_key != cache_key:
+            self.invalidate_repo_map_cache()
+            self._repo_map_force_refresh = False  # 新 RepoMap 本身会做完整首扫
             self._repo_map_cache_key = cache_key#删掉旧缓存，强迫重建
         
         #2.写入 TASK_START 事件
@@ -157,6 +179,10 @@ class Agent:
 
         total_tokens = 0
         steps_without_edit = 0
+        loop_detector = LoopDetector(
+            repeats=self._cfg.loop_detection_window,
+            max_period=self._cfg.loop_detection_max_period,
+        )
 
         #核心循环
         for step in range(1, task.max_steps + 1):
@@ -203,20 +229,6 @@ class Agent:
             # ── 2. 写入 Action event ────────────────────────────────────
             log.log_action(step=step, action=action, raw_content=response.raw_content)
             logger.info("Step %d: %r", step, action)
-
-            # ── 3. 检测死循环（连续相同 action）────────────────────────
-            #先写入再检测 一次检测到循环 → 立即硬熔断
-            if self._is_looping(log):
-                reason = f"Loop detected: same action repeated {self._cfg.loop_detection_window} times"
-                logger.warning(reason)
-                log.log_task_failed(steps=step, reason=reason)
-                return RunResult(
-                    task_id=task.task_id,
-                    status=RunStatus.GAVE_UP,
-                    summary=reason,
-                    steps_taken=step,
-                    total_tokens=total_tokens,
-                )
 
             # ── 4. 终止 action ──────────────────────────────────────────
             if action.action_type == ActionType.FINISH:
@@ -278,6 +290,59 @@ class Agent:
                     role="user",
                     content=self._format_observation_for_history(observation),
                 ))
+
+                test_state = (
+                    observation.status.value
+                    if tc.name in self._cfg.test_tool_names
+                    else None
+                )
+                loop_signal = loop_detector.observe(
+                    action,
+                    observation,
+                    repo_state=snapshot_repository(task.repo_path),
+                    test_state=test_state,
+                )
+                if loop_signal is not None:
+                    payload = loop_signal.to_payload()
+                    log.log_loop_detected(
+                        step,
+                        severity=payload["severity"],
+                        period=payload["period"],
+                        repeats=payload["repeats"],
+                        occurrence=payload["occurrence"],
+                        action_pattern=payload["action_pattern"],
+                    )
+                    if loop_signal.severity == LoopSeverity.TERMINATE:
+                        reason = (
+                            "Loop detected again after reflection: "
+                            f"period {loop_signal.period} repeated "
+                            f"{loop_signal.repeats} times without progress"
+                        )
+                        logger.warning(reason)
+                        log.log_task_failed(steps=step, reason=reason)
+                        return RunResult(
+                            task_id=task.task_id,
+                            status=RunStatus.GAVE_UP,
+                            summary=reason,
+                            steps_taken=step,
+                            total_tokens=total_tokens,
+                        )
+
+                    reflect_prompt = reflection_loop_detected(
+                        loop_signal.repeats,
+                        loop_signal.period,
+                    )
+                    log.log_reflection(
+                        step=step,
+                        reason="loop_detected",
+                        prompt=reflect_prompt,
+                    )
+                    history.add(LLMMessage(role="user", content=reflect_prompt))
+                    logger.warning(
+                        "Loop detected at step %d; injected recovery reflection",
+                        step,
+                    )
+                    continue
 
                 # ── 6. Reflection 触发判断 ──────────────────────────────
 
@@ -358,9 +423,15 @@ class Agent:
         #repo_map.build() 要 rglob 扫整个仓库、给每个源码文件提取符号，预算是15%
         #文件修改后不会实时扫描
         if not hasattr(self, "_repo_map_cache"):
-            self._repo_map_cache = repo_map.build(
-                budget=token_budget.default_plan().repo_map
-            )
+            map_budget = token_budget.default_plan().repo_map
+            if self._repo_map_force_refresh:
+                self._repo_map_cache = repo_map.build(
+                    budget=map_budget,
+                    force_refresh=True,
+                )
+            else:
+                self._repo_map_cache = repo_map.build(budget=map_budget)
+            self._repo_map_force_refresh = False
 
         #生成系统提示词
         system_content = build_system_prompt(
@@ -401,96 +472,78 @@ class Agent:
             lines.append(f"Error: {observation.error}")
         return "\n".join(lines)
 
-    #TODO：每次检查时都要重新构造actions，完全可以再执行的时候遇到actions就添加进入actionslist，然后进行对比呀
-    def _is_looping(self, log: EventLog) -> bool:
-        """
-        检测是否陷入死循环：最近 N 条 action 完全相同。
-        比较 (tool_name, params) 元组。
-        """
-        n = self._cfg.loop_detection_window
-        actions = log.get_actions()
-        #如果全部action的次数不足就退出，那再get action的时候也可以倒序只取n条呀，
-        if len(actions) < n:
-            return False
-
-        #倒序取最近n次的
-        recent = actions[-n:]
-        # 只对 TOOL_CALL 类型做检测 如果这三个不都是 toolcall就退出
-        if not all(a.action_type == ActionType.TOOL_CALL for a in recent):
-            return False
-        if not all(a.tool_call is not None for a in recent):
-            return False
-
-        first = recent[0].tool_call
-        return all(
-            a.tool_call.name == first.name and a.tool_call.params == first.params
-            for a in recent[1:]
-        )
-
-    #TODO：改进
     def _call_with_retry(
         self,
-        messages: list[LLMMessage],#name role id
-        tools: list[LLMToolSchema],#name description para
+        messages: list[LLMMessage],
+        tools: list[LLMToolSchema],
     ):
-        """
-        带指数退避重试的 LLM 调用。
-        stream=True 时走 backend.stream()，否则走 complete()。
-        不重试：认证失败（401/403）、参数错误（400）。
-        """
-        import time as _time
+        """Call the backend with bounded retry for whitelisted transient errors."""
+        import random
+        import time
 
-        #最近一次 LLM 调用产生的异常
-        last_exc: Exception | None = None
-        #退避时长，每次翻倍 初始为2s
-        delay = self._cfg.llm_retry_delay
-
-        #llm_max_retries=3,最多翻倍3次，最多调用3次,重试2次，所以时2s->4s->不等待
-        for attempt in range(1, self._cfg.llm_max_retries + 1):
-            try:
-                if self._cfg.stream:#流式
-                    #取得流式回调
-                    cb = self._cfg.stream_callback
-                    thought_cb = self._cfg.thought_callback
-                    if hasattr(self._backend, "stream"):
-                        #一旦 stream 成功返回，整个 _call_with_retry() 立即结束，不会继续循环。
-                        #这里调用的是具体backend的stream，不是基类的stream
-                        #Core 不关心当前使用的是 Anthropic、OpenAI-compatible 还是 MockBackend。
-                        return self._backend.stream(
-                            messages, tools,
-                            #接收模型最终回答的文本增量
-                            on_text=cb,
-                            #接收推理模型的思考内容
-                            on_thought=thought_cb,
-                        )
-                return self._backend.complete(messages, tools)
-            except Exception as exc:
-                #每次捕获异常后更新
-                last_exc = exc
-                exc_str = str(exc).lower()
-                #对于401/403/认证问题，400/参数错误，直接报错，因为重试没用
-                if any(kw in exc_str for kw in (
-                    "401", "403", "invalid api key", "authentication",
-                    "400", "bad request",
-                )):
-                    #原样重新抛出当前捕获到的异常，保留原始异常类型和 traceback
-                    raise
-                #其他问题可以尝试重试，每次重试时长翻倍
-                if attempt < self._cfg.llm_max_retries:
-                    logger.warning(
-                        "LLM call failed (attempt %d/%d): %s — retrying in %.1fs",
-                        #第几次尝试/最多尝试次数/异常/等待时间
-                        attempt, self._cfg.llm_max_retries, exc, delay,
-                    )
-                    #Agent Core 刻意保持同步，同步阻塞等待
-                    _time.sleep(delay)
-                    delay *= 2
-        #所有调用都失败 抛出错误
-        #raise last_exc  
-        if last_exc is None:
+        attempts = self._cfg.llm_max_retries
+        if attempts < 1:
             raise RuntimeError("llm_max_retries must be at least 1")
-        raise last_exc # type: ignore[misc]
 
+        for attempt in range(1, attempts + 1):
+            stream_output_started = False
+
+            def tracked_callback(callback):
+                def dispatch(chunk: str) -> None:
+                    nonlocal stream_output_started
+                    if not chunk:
+                        return
+                    stream_output_started = True
+                    if callback is None:
+                        return
+                    try:
+                        callback(chunk)
+                    except Exception as exc:
+                        raise LLMCallbackError(
+                            f"stream callback failed: {exc}"
+                        ) from exc
+                return dispatch
+
+            try:
+                if self._cfg.stream:
+                    return self._backend.stream(
+                        messages,
+                        tools,
+                        on_text=tracked_callback(self._cfg.stream_callback),
+                        on_thought=tracked_callback(self._cfg.thought_callback),
+                    )
+                return self._backend.complete(messages, tools)
+            except LLMCallbackError:
+                raise
+            except Exception as exc:
+                error = classify_llm_error(exc)
+                if stream_output_started or not error.retryable or attempt >= attempts:
+                    raise
+
+                requested_delay = (
+                    error.retry_after
+                    if error.retry_after is not None
+                    else self._cfg.llm_retry_delay * (2 ** (attempt - 1))
+                )
+                max_delay = max(0.0, self._cfg.llm_retry_max_delay)
+                delay = min(max_delay, max(0.0, requested_delay))
+                jitter_ratio = max(0.0, self._cfg.llm_retry_jitter)
+                if delay and jitter_ratio:
+                    delay = min(
+                        max_delay,
+                        delay + random.uniform(0.0, delay * jitter_ratio),
+                    )
+                logger.warning(
+                    "LLM %s error (attempt %d/%d): %s — retrying in %.1fs",
+                    error.kind.value,
+                    attempt,
+                    attempts,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+
+        raise AssertionError("retry loop exited unexpectedly")
     def _get_git_diff(self, repo_path: str) -> str | None:
         """抓取 git diff HEAD 作为 patch，失败时静默返回 None。"""
         import subprocess

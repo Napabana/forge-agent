@@ -1,94 +1,72 @@
-"""
-context/token_budget.py
-
-Token 预算管理：给 prompt 各部分分配 token 配额，超出时按优先级裁剪。
-
-## tiktoken 安装
-
-    pip install tiktoken
-
-首次运行时自动下载词表（需联网，约 2MB），之后缓存到本地离线可用。
-
-如果网络无法访问 OpenAI CDN，手动下载词表：
-    curl -L "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken" \\
-         -o ~/.cache/tiktoken/9b5ad71b2ce5302211f9c61530b329a4922fc6a4021629a1eba1b43bf10a10.tiktoken
-
-然后设置环境变量：
-    export TIKTOKEN_CACHE_DIR=~/.cache/tiktoken
-
-tiktoken 不可用时自动降级为字符估算（1 token ≈ 4 chars），精度足够做预算控制。
-
-各部分优先级（高→低，裁剪时从低优先级开始）：
-  1. system_core   系统指令，永不裁剪
-  2. task          任务描述，永不裁剪
-  3. repo_map      repo 摘要，超出时缩减
-  4. recent_obs    最近 observation，永不裁剪
-  5. history       历史对话，从最旧开始裁剪
-"""
+"""Token budgeting for prompt sections and conversation history."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# ---------------------------------------------------------------------------
-# Token 计数：优先 tiktoken，失败时字符估算 fallback
-# ---------------------------------------------------------------------------
 
 _tiktoken_enc = None
 _tiktoken_available = False
+_MESSAGE_PROTOCOL_TOKENS = 4
+_TRUNCATION_SUFFIX = "\n... [tokens truncated]"
+
 
 def _init_tiktoken() -> None:
     global _tiktoken_enc, _tiktoken_available
-    #如果初始化即可
     if _tiktoken_available or _tiktoken_enc is not None:
         return
     try:
         import tiktoken
+
         _tiktoken_enc = tiktoken.get_encoding("cl100k_base")
         _tiktoken_available = True
     except Exception:
-        # 网络不通 / 未安装，降级为字符估算
         _tiktoken_available = False
 
 
 def estimate_tokens(text: str) -> int:
-    """
-    估算文本的 token 数。
-    优先使用 tiktoken（精确），不可用时用字符数 // 4（误差 <15%）。
-    """
+    """Estimate text tokens with tiktoken and a conservative fallback."""
+
     if not _tiktoken_available:
         _init_tiktoken()
-
-    # is not none 只检查是否初始化
-    #必须初始化也存在对象才能返回。初始化也存在对象才能返回。
     if _tiktoken_available and _tiktoken_enc is not None:
         try:
             return max(1, len(_tiktoken_enc.encode(text)))
         except Exception:
             pass
-
-    # 如果 tiktoken 不可用或失败，降级成字符估算。字符估算 fallback
-    return max(1, len(text) // 4)
+    return max(1, (len(text) + 3) // 4)
 
 
 def estimate_chars(tokens: int) -> int:
-    """把 token 数转换为字符预算（估算）。"""
     return tokens * 4
 
 
 def is_tiktoken_available() -> bool:
-    """返回 tiktoken 是否可用，供诊断脚本使用。"""
     _init_tiktoken()
     return _tiktoken_available
 
 
-# ---------------------------------------------------------------------------
-# BudgetPlan
-# ---------------------------------------------------------------------------
+def estimate_message_tokens(message: dict) -> int:
+    """Estimate content plus role/metadata and chat protocol framing."""
+
+    total = _MESSAGE_PROTOCOL_TOKENS
+    total += estimate_tokens(str(message.get("role", "")))
+    total += estimate_tokens(str(message.get("content", "")))
+    for key in ("name", "tool_call_id"):
+        value = message.get(key)
+        if value:
+            total += estimate_tokens(str(value)) + 1
+    return total
+
+
+def estimate_messages_tokens(messages: list[dict]) -> int:
+    """Estimate a full message list, including per-message framing."""
+
+    return sum(estimate_message_tokens(message) for message in messages)
+
 
 @dataclass
 class BudgetPlan:
-    """各部分的 token 配额计划。"""
     total: int
     system_core: int
     repo_map: int
@@ -101,30 +79,30 @@ class BudgetPlan:
         return self.total - self.reserve
 
 
-# ---------------------------------------------------------------------------
-# TokenBudget
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class _HistoryUnit:
+    """An indivisible assistant/action + user/observation exchange."""
+
+    indices: tuple[int, ...]
+
+    @property
+    def message_count(self) -> int:
+        return len(self.indices)
+
+    @property
+    def recency(self) -> int:
+        return sum(self.indices)
+
 
 class TokenBudget:
-    """
-    Token 预算管理器。
-
-    用法：
-        budget = TokenBudget(total=80_000)
-        plan = budget.default_plan()
-        trimmed = budget.trim_to(text, plan.repo_map)
-        trimmed_history = budget.trim_history(msgs, plan.history)
-    """
-
     def __init__(self, total: int = 80_000) -> None:
         self._total = total
 
     def default_plan(self) -> BudgetPlan:
-        total = self._total
-        reserve = int(total * 0.15)
-        available = total - reserve
+        reserve = int(self._total * 0.15)
+        available = self._total - reserve
         return BudgetPlan(
-            total=total,
+            total=self._total,
             reserve=reserve,
             system_core=int(available * 0.10),
             repo_map=int(available * 0.15),
@@ -133,99 +111,196 @@ class TokenBudget:
         )
 
     def trim_to(self, text: str, token_limit: int) -> str:
-        """裁剪文本到 token_limit 以内，超出时保留开头。"""
+        """Return the longest binary-searched prefix that fits with its notice."""
+
         if token_limit <= 0:
             return ""
         if estimate_tokens(text) <= token_limit:
             return text
-
-        suffix = "\n... [tokens truncated]"
-        suffix_tokens = estimate_tokens(suffix)
-        if suffix_tokens >= token_limit:
+        if estimate_tokens(_TRUNCATION_SUFFIX) > token_limit:
             return self._trim_prefix(text, token_limit)
 
-        #添加上suffix一起截断
-        candidate = self._trim_prefix(text, token_limit - suffix_tokens)
-        return candidate + suffix
-
-    def trim_history(
-        self,
-        messages: list[dict],
-        token_limit: int,
-    ) -> list[dict]:
-        """
-        裁剪历史消息列表到 token_limit 以内。
-        保留第一条（任务描述）+ 尽量多的历史片段。
-        如果中间消息被删除，在对应位置插入省略提示，避免伪造连续时间线。
-        优先级：第一条任务消息>历史消息>省略提示
-        """
-        if not messages:
-            return messages
-        if token_limit <= 0:
-            return []
-
-        #上下文预算估算
-        token_counts = [estimate_tokens(m.get("content", "")) for m in messages]
-        total = sum(token_counts)
-
-        if total <= token_limit:
-            return messages
-
-        #创建第一条消息的浅拷贝。 修改first不会修改message[0]的内容，但是嵌套消息共享
-        first = dict(messages[0])
-        first_tokens = token_counts[0]
-        if first_tokens > token_limit:
-            first["content"] = self.trim_to(first.get("content", ""), token_limit)
-            return [first]
-
-        #selected_indices 保存最终决定保留的消息下标。
-        #第一条消息下标是 0，已经由 first 单独保存，所以集合只会包含：1 到 len(messages) - 1
-        selected_indices: set[int] = set()
-        #每次加入消息都会改变预算，代码会重复尝试此前未选中的消息，直到某一整轮没有任何新消息能够加入。
-        #TODO ：可以用全局最优的背包算法改进
-        changed = True
-        while changed:
-            changed = False
-            #如果压缩次数很多的话，每次都从末尾开始枚举，效率不高吧
-            for idx in range(len(messages) - 1, 0, -1):
-                if idx in selected_indices:
-                    continue
-                #先加入对话再计算是否超预算
-                selected_indices.add(idx)
-                result = self._build_trimmed_history(messages, selected_indices, first)
-                #加上省略提示一起计算token
-                result_tokens = sum(
-                    estimate_tokens(m.get("content", "")) for m in result
-                )
-                if result_tokens <= token_limit:
-                    changed = True
-                else:
-                    selected_indices.remove(idx)
-
-        result = self._build_trimmed_history(messages, selected_indices, first)
-        result_tokens = sum(estimate_tokens(m.get("content", "")) for m in result)
-        #第一条没有超预算，但是第一条+后续省略的notice超预算了
-        if result_tokens > token_limit:
-            return [first]
+        low = 0
+        high = len(text)
+        while low < high:
+            midpoint = (low + high + 1) // 2
+            candidate = text[:midpoint] + _TRUNCATION_SUFFIX
+            if estimate_tokens(candidate) <= token_limit:
+                low = midpoint
+            else:
+                high = midpoint - 1
+        result = text[:low] + _TRUNCATION_SUFFIX
+        # The final aggregate is checked because tokenizer boundaries can differ
+        # from the sum of independently estimated body and suffix tokens.
+        if estimate_tokens(result) > token_limit:
+            return self._trim_prefix(text, token_limit)
         return result
 
+    def trim_history(self, messages: list[dict], token_limit: int) -> list[dict]:
+        """Select whole dialogue units globally with a dynamic program."""
+
+        if not messages or token_limit <= 0:
+            return []
+        if estimate_messages_tokens(messages) <= token_limit:
+            return messages
+
+        first = dict(messages[0])
+        if estimate_message_tokens(first) > token_limit:
+            trimmed = self._trim_first_message(first, token_limit)
+            return [trimmed] if trimmed is not None else []
+
+        units = self._conversation_units(messages)
+        selected_indices = self._select_units_dp(
+            messages,
+            units,
+            token_limit,
+            first,
+        )
+        result = self._build_trimmed_history(messages, selected_indices, first)
+        if estimate_messages_tokens(result) <= token_limit:
+            return result
+        # Defensive fallback: the DP uses the same estimator, so this should only
+        # be reachable if a caller mutates a message while selection is running.
+        return [first]
+
+    def _trim_first_message(self, first: dict, token_limit: int) -> dict | None:
+        empty = dict(first)
+        empty["content"] = ""
+        if estimate_message_tokens(empty) > token_limit:
+            return None
+
+        content = str(first.get("content", ""))
+        low = 0
+        high = len(content)
+        while low < high:
+            midpoint = (low + high + 1) // 2
+            candidate = dict(first)
+            candidate["content"] = content[:midpoint] + _TRUNCATION_SUFFIX
+            if estimate_message_tokens(candidate) <= token_limit:
+                low = midpoint
+            else:
+                high = midpoint - 1
+        trimmed = dict(first)
+        if low > 0:
+            trimmed["content"] = content[:low] + _TRUNCATION_SUFFIX
+        else:
+            trimmed["content"] = self._trim_prefix(content, max(1, token_limit - 5))
+        while (
+            trimmed["content"]
+            and estimate_message_tokens(trimmed) > token_limit
+        ):
+            trimmed["content"] = trimmed["content"][:-1]
+        return trimmed if estimate_message_tokens(trimmed) <= token_limit else None
+
     def _trim_prefix(self, text: str, token_limit: int) -> str:
-        """返回 text 的前缀，保证估算 token 不超过 token_limit。
-        按 token_limit * 4 估算出字符截断点"""
+        """Binary-search the longest prefix accepted by the active estimator."""
+
         if token_limit <= 0:
             return ""
-
-        char_limit = token_limit * 4
-        candidate = text[:char_limit]
-        while estimate_tokens(candidate) > token_limit and len(candidate) > 0:
-            #如果长度还是超过token限制，每轮缩减10%
-            next_len = int(len(candidate) * 0.9)
-            #防御性措施，防止长度不变
-            if next_len == len(candidate):
-                next_len -= 1
-            candidate = candidate[:max(0, next_len)]
-
+        low = 0
+        high = len(text)
+        while low < high:
+            midpoint = (low + high + 1) // 2
+            if estimate_tokens(text[:midpoint]) <= token_limit:
+                low = midpoint
+            else:
+                high = midpoint - 1
+        candidate = text[:low]
+        while candidate and estimate_tokens(candidate) > token_limit:
+            candidate = candidate[:-1]
         return candidate
+
+    def _conversation_units(self, messages: list[dict]) -> list[_HistoryUnit]:
+        """Group action/observation pairs so trimming never leaves half a turn."""
+
+        units: list[_HistoryUnit] = []
+        index = 1
+        while index < len(messages):
+            role = messages[index].get("role")
+            if (
+                role == "assistant"
+                and index + 1 < len(messages)
+                and messages[index + 1].get("role") in {"user", "tool"}
+            ):
+                units.append(_HistoryUnit((index, index + 1)))
+                index += 2
+            else:
+                units.append(_HistoryUnit((index,)))
+                index += 1
+        return units
+
+    def _select_units_dp(
+        self,
+        messages: list[dict],
+        units: list[_HistoryUnit],
+        token_limit: int,
+        first: dict,
+    ) -> set[int]:
+        """Optimize kept message count, then recency, under the exact budget."""
+
+        first_cost = estimate_message_tokens(first)
+        # (used tokens, open-gap message count) -> (utility, selected indices)
+        states: dict[tuple[int, int], tuple[int, tuple[int, ...]]] = {
+            (first_cost, 0): (0, ()),
+        }
+        for unit in units:
+            next_states: dict[tuple[int, int], tuple[int, tuple[int, ...]]] = {}
+            unit_cost = sum(estimate_message_tokens(messages[i]) for i in unit.indices)
+            for (used, gap_count), (utility, selected) in states.items():
+                self._store_state(
+                    next_states,
+                    (used, gap_count + unit.message_count),
+                    utility,
+                    selected,
+                )
+
+                notice_cost = 0
+                if gap_count:
+                    notice_cost = estimate_message_tokens(self._history_notice(gap_count))
+                kept_cost = used + notice_cost + unit_cost
+                if kept_cost <= token_limit:
+                    unit_utility = unit.message_count * 10_000 + unit.recency
+                    self._store_state(
+                        next_states,
+                        (kept_cost, 0),
+                        utility + unit_utility,
+                        selected + unit.indices,
+                    )
+            states = self._prune_states(next_states)
+
+        best: tuple[int, int, tuple[int, ...]] | None = None
+        for (used, gap_count), (utility, selected) in states.items():
+            final_cost = used
+            if gap_count:
+                final_cost += estimate_message_tokens(self._history_notice(gap_count))
+            if final_cost > token_limit:
+                continue
+            candidate = (utility, -final_cost, selected)
+            if best is None or candidate[:2] > best[:2]:
+                best = candidate
+        return set(best[2]) if best else set()
+
+    @staticmethod
+    def _store_state(states, key, utility, selected) -> None:
+        current = states.get(key)
+        if current is None or utility > current[0]:
+            states[key] = (utility, selected)
+
+    @staticmethod
+    def _prune_states(states):
+        """Remove higher-cost states that cannot beat a cheaper equivalent gap."""
+
+        pruned = {}
+        by_gap: dict[int, list[tuple[int, int, tuple[int, ...]]]] = {}
+        for (used, gap), (utility, selected) in states.items():
+            by_gap.setdefault(gap, []).append((used, utility, selected))
+        for gap, candidates in by_gap.items():
+            best_utility = -1
+            for used, utility, selected in sorted(candidates):
+                if utility > best_utility:
+                    pruned[(used, gap)] = (utility, selected)
+                    best_utility = utility
+        return pruned
 
     def _history_notice(self, dropped: int) -> dict:
         noun = "message" if dropped == 1 else "messages"
@@ -240,27 +315,17 @@ class TokenBudget:
         selected_indices: set[int],
         first: dict,
     ) -> list[dict]:
-        """ 这个函数负责根据已选择的下标：
-            保留第一条；
-            恢复选中消息的原始顺序；
-            在被删除的位置插入省略提示。"""
         result = [first]
-        sorted_indices = sorted(selected_indices)
         cursor = 1
-
-        for idx in sorted_indices:
-            #dropped 表示从 cursor 到当前选中消息之间，有多少条消息没有被选择。
-            dropped = idx - cursor
+        for index in sorted(selected_indices):
+            dropped = index - cursor
             if dropped > 0:
                 result.append(self._history_notice(dropped))
-            result.append(messages[idx])
-            cursor = idx + 1
-
-        #处理尾部被删除的消息
+            result.append(messages[index])
+            cursor = index + 1
         dropped_tail = len(messages) - cursor
         if dropped_tail > 0:
             result.append(self._history_notice(dropped_tail))
-
         return result
 
     def fit_all(
@@ -271,11 +336,12 @@ class TokenBudget:
         observation_text: str,
     ) -> tuple[str, str, list[dict], str]:
         plan = self.default_plan()
-        trimmed_system = self.trim_to(system_text, plan.system_core)
-        trimmed_map = self.trim_to(repo_map_text, plan.repo_map)
-        trimmed_history = self.trim_history(history, plan.history)
-        trimmed_obs = self.trim_to(observation_text, plan.observation)
-        return trimmed_system, trimmed_map, trimmed_history, trimmed_obs
+        return (
+            self.trim_to(system_text, plan.system_core),
+            self.trim_to(repo_map_text, plan.repo_map),
+            self.trim_history(history, plan.history),
+            self.trim_to(observation_text, plan.observation),
+        )
 
     def usage_report(
         self,
@@ -284,20 +350,16 @@ class TokenBudget:
         history: list[dict],
         observation_text: str,
     ) -> dict[str, int]:
-        history_tokens = sum(
-            estimate_tokens(m.get("content", "")) for m in history
-        )
+        history_tokens = estimate_messages_tokens(history)
+        system_tokens = estimate_tokens(system_text)
+        repo_tokens = estimate_tokens(repo_map_text)
+        observation_tokens = estimate_tokens(observation_text)
         return {
-            "system":      estimate_tokens(system_text),
-            "repo_map":    estimate_tokens(repo_map_text),
-            "history":     history_tokens,
-            "observation": estimate_tokens(observation_text),
-            "total": (
-                estimate_tokens(system_text)
-                + estimate_tokens(repo_map_text)
-                + history_tokens
-                + estimate_tokens(observation_text)
-            ),
-            "budget":        self._total,
+            "system": system_tokens,
+            "repo_map": repo_tokens,
+            "history": history_tokens,
+            "observation": observation_tokens,
+            "total": system_tokens + repo_tokens + history_tokens + observation_tokens,
+            "budget": self._total,
             "tiktoken_used": is_tiktoken_available(),
         }
