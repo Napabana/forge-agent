@@ -402,12 +402,12 @@ class TestIntegration:
             result = agent.run(task, log)
             stats = summarize_run(log)
 
-        assert result.is_success()
+        assert result.status == RunStatus.FAILED
         assert stats["actions"] == 3
         assert stats["reflections"] == 1      # 测试失败触发一次
         assert stats["tool_calls"]["test"] == 1
         assert stats["tool_calls"]["shell"] == 1
-        assert stats["final_status"] == "task_complete"
+        assert stats["final_status"] == "task_failed"
 
 
 # ===========================================================================

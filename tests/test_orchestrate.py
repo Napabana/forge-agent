@@ -212,6 +212,10 @@ class TestOrchestrateSuccess:
             def cleanup(self):
                 self.cleaned = True
 
+            def preflight(self, cwd=None):
+                from tools.runtime import RunResult as RuntimeRunResult
+                return RuntimeRunResult(0, "ok", "")
+
         monkeypatch.setattr(orch_mod, "DockerRuntime", FakeDockerRuntime)
 
         engine = TaskEngine(tmp_path / "tasks.db")
@@ -274,6 +278,10 @@ class TestOrchestrateRollback:
 
             def cleanup(self):
                 self.cleaned = True
+
+            def preflight(self, cwd=None):
+                from tools.runtime import RunResult as RuntimeRunResult
+                return RuntimeRunResult(0, "ok", "")
 
         monkeypatch.setattr(orch_mod, "DockerRuntime", FakeDockerRuntime)
 

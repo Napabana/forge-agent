@@ -54,6 +54,11 @@ RegistryBuilder = Callable[..., Any]
 # agent_factory 契约：(backend, registry, config, executor) -> Agent
 # 默认造真 Agent；测试可注入 FakeAgent。
 AgentFactory = Callable[..., Agent]
+LogCreatedCallback = Callable[[str, str], None]
+
+
+class SandboxPreflightError(RuntimeError):
+    """Sandbox is running but lacks required tools or worktree visibility."""
 
 
 def _default_agent_factory(backend, registry, config, executor) -> Agent:
@@ -115,6 +120,7 @@ async def orchestrate_run(
     config: AgentConfig | None = None,
     confirm_callback: Callable[[str], bool] | None = None,
     agent_factory: AgentFactory | None = None,
+    on_log_created: LogCreatedCallback | None = None,
 ) -> RunResult:
     """
     在隔离的 git worktree 内跑一次完整的 ReAct 循环，全程 TaskEngine 记账 +
@@ -151,6 +157,11 @@ async def orchestrate_run(
 
     # 2. EventLog + bus 生命周期事件
     log = EventLog.create(task, log_dir=log_dir)
+    if on_log_created is not None:
+        try:
+            on_log_created(task_id, str(log.path))
+        except Exception as exc:  # noqa: BLE001 - observer must not break run
+            logger.warning("[orchestrate] on_log_created error: %s", exc)
     log.log_task_claimed(task_id, owner="agent")
     if bus is not None:
         await bus.publish(
@@ -173,6 +184,7 @@ async def orchestrate_run(
     result: RunResult | None = None
     exc_info: BaseException | None = None
 
+    worktree_exit_reason = "normal"
     try:
         async with WorktreeSession(task.repo_path, wt_name, engine, task_id) as wt:
             log.log_worktree_created(task_id, wt.path.name, str(wt.path))
@@ -186,9 +198,16 @@ async def orchestrate_run(
             runtime: Runtime
             if sandbox:
                 from tools.runtime import SANDBOX_IMAGE
+                git_dir = Path(task.repo_path).resolve() / ".git"
+                git_mounts = (
+                    [(str(git_dir), str(git_dir))]
+                    if git_dir.is_dir()
+                    else []
+                )
                 runtime = DockerRuntime(
                     repo_path=task.repo_path,
                     image=sandbox_image or SANDBOX_IMAGE,
+                    extra_mounts=git_mounts,
                     readonly_root=readonly_root,
                     worktree_mount=(str(wt.path), CONTAINER_WORKDIR),
                     network=False,
@@ -197,6 +216,12 @@ async def orchestrate_run(
                 runtime = LocalRuntime()
 
             try:
+                if sandbox:
+                    preflight = runtime.preflight(cwd=str(wt.path))
+                    if not preflight.success:
+                        detail = preflight.output.strip() or "unknown sandbox error"
+                        raise SandboxPreflightError(detail)
+
                 # 4. registry（在 worktree 内执行）+ permission（safe_path 边界）
                 registry = registry_builder(
                     agent_cfg, confirm_callback, runtime, worktree_path=wt.path,
@@ -227,6 +252,18 @@ async def orchestrate_run(
             finally:
                 runtime.cleanup()
 
+    except SandboxPreflightError as exc:
+        worktree_exit_reason = "preflight_failed"
+        reason = f"Sandbox preflight failed: {exc}"
+        logger.error(reason)
+        log.log_task_failed(steps=0, reason=reason)
+        result = RunResult(
+            task_id=task_id,
+            status=RunStatus.FAILED,
+            summary=reason,
+            steps_taken=0,
+            error=reason,
+        )
     except BaseException as exc:  # noqa: BLE001 — 捕获含 KeyboardInterrupt 的回滚路径
         exc_info = exc
         # WorktreeSession.__aexit__ 已强制清理（事务语义），这里只记账
@@ -246,7 +283,7 @@ async def orchestrate_run(
         raise
 
     # 7. 正常退出：记账 + 清理意图
-    log.log_worktree_removed(task_id, wt_name, "", reason="normal")
+    log.log_worktree_removed(task_id, wt_name, "", reason=worktree_exit_reason)
     if result is not None and result.is_success():
         engine.complete_task(task_id)
         if bus is not None:

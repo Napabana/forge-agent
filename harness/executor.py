@@ -68,6 +68,7 @@ class ToolExecutor:
     # ------------------------------------------------------------------
 
     def execute(self, name: str, params: dict[str, Any]) -> ToolResult:
+        """Run hooks, permission checks, and the underlying tool."""
         block = ToolUseBlock(name, params)
 
         # 1. PreToolUse hooks（短路）
@@ -79,6 +80,7 @@ class ToolExecutor:
         # 2. Permission
         if self._permission is not None:
             decision = self._permission.check(block)
+
             # 观察决策（allow/deny/confirm 都上报），在分支处理之前，
             # 这样被 DENY/CONFIRM-拒绝的调用也能被记录（供审计/bus）。
             if self._decision_callback is not None:
@@ -86,6 +88,7 @@ class ToolExecutor:
                     self._decision_callback(block.name, dict(block.input), decision)
                 except Exception as exc:  # noqa: BLE001 — 观察者不能影响执行
                     logger.warning("[executor] decision_callback error: %s", exc)
+
             if decision.is_deny:
                 return ToolResult(success=False, output="",
                                   error=f"Permission denied: {decision.reason}")

@@ -253,3 +253,30 @@ class TestSafeCleanup:
                 raise RuntimeError("boom")
         # 即使 discard_changes=False，__aexit__ 仍强制清理（事务一致性）
         assert not wt_ref["path"].exists()
+
+    async def test_cleanup_failure_is_visible_and_retryable(
+        self, repo, monkeypatch, caplog,
+    ):
+        """物理目录删除失败时不能误报 removed，恢复权限后可以重试。"""
+        wt = WorktreeSession(repo, "cleanup-fail")
+        await wt.__aenter__()
+        (wt.path / "owned-by-container.txt").write_text("x")
+
+        async def fail_git_remove(args):
+            if args[:3] == ["worktree", "remove", "--force"]:
+                return False, "permission denied"
+            return True, ""
+
+        def fail_rmtree(path):
+            raise PermissionError("permission denied")
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(wt, "_run_git", fail_git_remove)
+            scoped.setattr("runtime.worktree.shutil.rmtree", fail_rmtree)
+            with pytest.raises(WorktreeError, match="Failed to remove"):
+                await wt.close(discard_changes=True)
+
+        assert wt.path.exists()
+        assert "[worktree] removed" not in caplog.text
+        await wt.close(discard_changes=True)
+        assert not wt.path.exists()

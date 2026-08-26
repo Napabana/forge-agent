@@ -60,6 +60,7 @@ class RunStatus(str, Enum):
     FAILED      = "failed"
     MAX_STEPS   = "max_steps"    # 达到步数上限
     GAVE_UP     = "gave_up"      # agent 主动放弃
+    CANCELED    = "canceled"     # 外部请求取消
 
 
 # ---------------------------------------------------------------------------

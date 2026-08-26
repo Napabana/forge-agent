@@ -8,6 +8,7 @@ LocalRuntime 的测试不依赖 Docker，始终运行。
 """
 
 from __future__ import annotations
+import os
 
 import shutil
 import subprocess
@@ -260,6 +261,8 @@ class TestDockerRuntimeUnit:
             m = MagicMock()
             if "info" in args:
                 m.returncode = 0   # docker info 成功
+            elif "image" in args and "inspect" in args:
+                m.returncode = 0   # bundled image already exists
             else:
                 m.returncode = 1   # docker run 失败
                 m.stdout = ""
@@ -356,6 +359,8 @@ class TestDockerRuntimeUnit:
             m = MagicMock()
             if "info" in args:
                 m.returncode = 0; m.stdout = ""; m.stderr = ""
+            elif "image" in args and "inspect" in args:
+                m.returncode = 0; m.stdout = "[]"; m.stderr = ""
             elif "run" in args:
                 m.returncode = 0; m.stdout = "fakecid\n"; m.stderr = ""
             elif "exec" in args:
@@ -375,6 +380,9 @@ class TestDockerRuntimeUnit:
         assert args[args.index("--cpus") + 1] == "2.0"
         assert "--network" in args and args[args.index("--network") + 1] == "none"
         assert "--tmpfs" in args and args[args.index("--tmpfs") + 1] == "/tmp"
+        assert args[args.index("--user") + 1] == f"{rt._user_uid}:{rt._user_gid}"
+        assert "HOME=/tmp" in args
+        assert "PYTHONDONTWRITEBYTECODE=1" in args
         # 旧行为保持：repo rw 挂载，无只读根
         assert args[args.index("-v") + 1] == f"{tmp_path}:{CONTAINER_WORKDIR}:rw"
         assert "--read-only" not in args
@@ -462,25 +470,36 @@ class TestBuildDockerRunArgs:
         a = self._build(network=True)
         assert "--network" not in a
 
-    def test_worktree_mount_is_rw_after_repo(self):
+    def test_worktree_mount_replaces_repo_at_same_target(self):
         a = self._build(worktree_mount=("/host/wt", "/workspace"))
         vs = [a[i + 1] for i, t in enumerate(a) if t == "-v"]
-        assert "/repo:/workspace:rw" in vs
-        assert "/host/wt:/workspace:rw" in vs
-        # worktree 挂载在 repo 之后（rw 盖住 ro）
-        assert vs.index("/host/wt:/workspace:rw") > vs.index("/repo:/workspace:rw")
+        assert vs == ["/host/wt:/workspace:rw"]
 
     def test_worktree_rw_even_when_readonly_root(self):
         a = self._build(readonly_root=True, worktree_mount=("/host/wt", "/workspace"))
         vs = [a[i + 1] for i, t in enumerate(a) if t == "-v"]
-        assert "/repo:/workspace:ro" in vs
-        assert "/host/wt:/workspace:rw" in vs   # worktree 始终可写
+        assert vs == ["/host/wt:/workspace:rw"]
+        assert "--read-only" in a
+
+    def test_duplicate_extra_target_does_not_override_workspace(self):
+        a = self._build(extra_mounts=[("/other", "/workspace/")])
+        vs = [a[i + 1] for i, t in enumerate(a) if t == "-v"]
+        assert vs == ["/repo:/workspace:rw"]
 
     def test_extra_mounts_appended_in_order(self):
         a = self._build(extra_mounts=[("/a", "/ca"), ("/b", "/cb")])
         vs = [a[i + 1] for i, t in enumerate(a) if t == "-v"]
         assert "/a:/ca" in vs and "/b:/cb" in vs
         assert vs.index("/a:/ca") < vs.index("/b:/cb")
+
+    def test_all_mount_targets_are_unique(self):
+        a = self._build(
+            extra_mounts=[("/a", "/data"), ("/b", "/data/")],
+            worktree_mount=("/host/wt", "/workspace"),
+        )
+        vs = [a[i + 1] for i, t in enumerate(a) if t == "-v"]
+        targets = [v.split(":")[1].rstrip("/") or "/" for v in vs]
+        assert len(targets) == len(set(targets))
 
     def test_no_worktree_no_extra_exactly_one_mount(self):
         a = self._build()
@@ -590,6 +609,77 @@ class TestDockerRuntimeIntegration:
             result = rt.exec("echo ok > /tmp/y && cat /tmp/y", timeout=15)
         assert result.success
         assert "ok" in result.output
+
+    def test_worktree_mount_same_target_starts_and_is_writable(self, tmp_path):
+        """Regression: isolate+sandbox must not duplicate /workspace mounts."""
+        repo = tmp_path / "repo"
+        worktree = tmp_path / "worktree"
+        repo.mkdir()
+        worktree.mkdir()
+        (worktree / "marker.txt").write_text("worktree")
+        with DockerRuntime(
+            repo_path=str(repo),
+            readonly_root=True,
+            worktree_mount=(str(worktree), CONTAINER_WORKDIR),
+        ) as rt:
+            result = rt.exec("cat marker.txt && echo changed > written.txt")
+        assert result.success
+        assert "worktree" in result.output
+        assert (worktree / "written.txt").read_text().strip() == "changed"
+
+    def test_isolated_worktree_preflight_and_host_ownership(self, tmp_path):
+        """Real isolate+sandbox: git metadata, pytest, writes, and cleanup are usable."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "calculator.py").write_text(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+        tests_dir = repo / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_calculator.py").write_text(
+            "from calculator import add\n\n"
+            "def test_add():\n    assert add(2, 3) == 5\n"
+        )
+        for command in (
+            ["git", "-C", str(repo), "init", "-b", "main"],
+            ["git", "-C", str(repo), "config", "user.email", "forge@example.test"],
+            ["git", "-C", str(repo), "config", "user.name", "Forge Test"],
+            ["git", "-C", str(repo), "add", "."],
+            ["git", "-C", str(repo), "commit", "-m", "initial"],
+        ):
+            subprocess.run(command, check=True, capture_output=True, text=True)
+
+        worktree = repo / ".worktrees" / "sandbox-e2e"
+        subprocess.run(
+            ["git", "-C", str(repo), "worktree", "add", "-b", "wt/sandbox-e2e",
+             str(worktree)],
+            check=True, capture_output=True, text=True,
+        )
+        try:
+            with DockerRuntime(
+                repo_path=str(repo),
+                extra_mounts=[(str(repo / ".git"), str(repo / ".git"))],
+                readonly_root=True,
+                worktree_mount=(str(worktree), CONTAINER_WORKDIR),
+            ) as rt:
+                assert rt.preflight(cwd=str(worktree)).success
+                result = rt.exec(
+                    "printf 'owned\\n' > owned.txt && python3 -m pytest -q "
+                    "&& git status --short",
+                    cwd=str(worktree), timeout=30,
+                )
+            assert result.success, result.output
+
+            assert "1 passed" in result.output
+            assert "owned.txt" in result.output
+            assert (worktree / "owned.txt").stat().st_uid == os.getuid()
+            assert (worktree / "owned.txt").stat().st_gid == os.getgid()
+        finally:
+            subprocess.run(
+                ["git", "-C", str(repo), "worktree", "remove", "--force",
+                 str(worktree)],
+                check=False, capture_output=True, text=True,
+            )
 
     def test_memory_limit_reflected_in_inspect(self, tmp_path):
         """--memory 1g 应在 docker inspect 里体现。"""

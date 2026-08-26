@@ -8,6 +8,8 @@ trigger_hooks，code.py:860-873）迁移成实例化的 Hooks 类。语义不变
 trigger 遇到首个非 None 返回即短路（拦截）。
 
 事件类型对齐 s20：UserPromptSubmit / PreToolUse / PostToolUse / Stop。
+
+Hook 的意义是把可扩展规则与 ToolExecutor 主流程分离。新增检查规则时，不需要不断修改 execute()。
 """
 
 from __future__ import annotations
@@ -71,6 +73,13 @@ class Hooks:
         触发某事件的所有钩子，按注册顺序执行。
         遇到首个返回非 None 的钩子即短路，返回该值（对齐 s20 trigger_hooks:868-873）。
         全部返回 None 则返回 None（放行）。
+
+        主要负责：
+        根据 HookEvent.PRE_TOOL_USE 找到对应 Hook；
+        按注册顺序调用这些 Hook；
+        将 block 传给 Hook；
+        如果某个 Hook 返回非 None，把该结果返回给调用方；
+        如果所有 Hook 都允许执行，返回 None。
         """
         for callback in self._hooks.get(event, []):
             result = callback(*args)

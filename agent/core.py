@@ -58,6 +58,7 @@ class AgentConfig:
     loop_detection_window: int = 3       # 同一周期至少重复 N 次
     loop_detection_max_period: int = 3   # 检测 AAA / ABABAB / ABCABCABC
     test_tool_names: tuple[str, ...] = ("test", "pytest")  # 触发 Reflection 的工具名
+    fatal_tool_error_repeats: int = 2     # repeated fatal infrastructure errors before abort
     budget_tokens: int = 80_000            # 总 token 预算
     history_max_messages: int = 40         # 历史最大条数
     llm_max_retries: int = 3               # LLM 调用失败最大重试次数
@@ -183,6 +184,12 @@ class Agent:
             repeats=self._cfg.loop_detection_window,
             max_period=self._cfg.loop_detection_max_period,
         )
+        test_attempted = False
+        last_test_passed: bool | None = None
+        last_successful_test_step: int | None = None
+        last_write_step: int | None = None
+        fatal_error_key: str | None = None
+        fatal_error_count = 0
 
         #核心循环
         for step in range(1, task.max_steps + 1):
@@ -234,6 +241,40 @@ class Agent:
             if action.action_type == ActionType.FINISH:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
+                verification_error: str | None = None
+                if fatal_error_key is not None:
+                    verification_error = (
+                        f"Unresolved fatal infrastructure error: {fatal_error_key}"
+                    )
+                elif test_attempted and last_test_passed is not True:
+                    verification_error = (
+                        "Agent attempted verification, but the latest test did not pass."
+                    )
+                elif (
+                    test_attempted
+                    and last_write_step is not None
+                    and (
+                        last_successful_test_step is None
+                        or last_successful_test_step < last_write_step
+                    )
+                ):
+                    verification_error = (
+                        "Files changed after the latest successful test; "
+                        "the final state is unverified."
+                    )
+
+                if verification_error is not None:
+                    log.log_task_failed(steps=step, reason=verification_error)
+                    return RunResult(
+                        task_id=task.task_id,
+                        status=RunStatus.FAILED,
+                        summary=verification_error,
+                        steps_taken=step,
+                        total_tokens=total_tokens,
+                        patch=patch,
+                        error=verification_error,
+                    )
+
                 log.log_task_complete(steps=step, summary=summary)
                 return RunResult(
                     task_id=task.task_id,
@@ -276,11 +317,44 @@ class Agent:
                 # 追踪是否有文件写操作
                 if tc.name in ("file_write", "file_edit", "edit"):
                     steps_without_edit = 0
+                    last_write_step = step
                 else:
                     steps_without_edit += 1
 
+                if tc.name in self._cfg.test_tool_names:
+                    test_attempted = True
+                    last_test_passed = observation.is_success()
+                    if last_test_passed:
+                        last_successful_test_step = step
+
                 log.log_observation(step=step, observation=observation)
 
+                infrastructure_error = self._fatal_infrastructure_error(observation)
+                if infrastructure_error is not None:
+                    if infrastructure_error == fatal_error_key:
+                        fatal_error_count += 1
+                    else:
+                        fatal_error_key = infrastructure_error
+                        fatal_error_count = 1
+                    if fatal_error_count >= max(1, self._cfg.fatal_tool_error_repeats):
+                        reason = (
+                            "Repeated fatal infrastructure error: "
+                            f"{infrastructure_error}"
+                        )
+                        logger.error(reason)
+                        log.log_task_failed(steps=step, reason=reason)
+                        return RunResult(
+                            task_id=task.task_id,
+                            status=RunStatus.FAILED,
+                            summary=reason,
+                            steps_taken=step,
+                            total_tokens=total_tokens,
+                            patch=self._get_git_diff(task.repo_path),
+                            error=reason,
+                        )
+                else:
+                    fatal_error_key = None
+                    fatal_error_count = 0
                 # 把 action 和 observation 加入对话历史
                 history.add(LLMMessage(
                     role="assistant",
@@ -389,6 +463,26 @@ class Agent:
             steps_taken=task.max_steps,
             total_tokens=total_tokens,
         )
+
+    @staticmethod
+    def _fatal_infrastructure_error(observation: Observation) -> str | None:
+        """Return a stable category for unrecoverable runtime startup errors."""
+        if observation.is_success():
+            return None
+        text = "\n".join(
+            part for part in (observation.output, observation.error) if part
+        ).lower()
+        markers = (
+            "duplicate mount point",
+            "invalid mount config",
+            "cannot connect to the docker daemon",
+            "docker is not available",
+            "failed to start container",
+        )
+        for marker in markers:
+            if marker in text:
+                return marker
+        return None
 
     def _is_cancel_requested(self) -> bool:
         """is_set 是取消对象提供的状态查询方法。

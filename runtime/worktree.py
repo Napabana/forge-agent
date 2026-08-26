@@ -155,13 +155,20 @@ class WorktreeSession:
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """
         无论是否异常，强制清理：git worktree remove --force → 删分支 → 兜底 rmtree。
-        清理本身的错误只记日志，不抛出（避免掩盖原始异常）。
+        正常退出时清理失败必须抛出；已有业务异常时保留原异常并记录清理失败。
 
         注意：__aexit__ 无视 discard_changes / keep —— 事务回滚语义必须可靠。
         要保留 worktree，请在 with 块外用 keep()（但 with 退出时仍会清，因为
         __aexit__ 是事务边界）。
         """
-        await self._cleanup(force=True)
+        try:
+            await self._cleanup(force=True)
+        except WorktreeError:
+            if exc_val is None:
+                raise
+            logger.exception(
+                "[worktree] cleanup also failed while propagating original error"
+            )
         # exc_val 不处理 → 原异常正常传播
 
     # ------------------------------------------------------------------
@@ -181,7 +188,13 @@ class WorktreeSession:
         if not self._created:
             # __aenter__ 没成功创建，无需 git 清理（但兜底删可能残留的目录）
             if self.path.exists():
-                shutil.rmtree(self.path, ignore_errors=True)
+                try:
+                    shutil.rmtree(self.path)
+                except OSError as exc:
+                    raise WorktreeError(
+                        f"Failed to remove residual worktree directory "
+                        f"{self.path}: {exc}"
+                    ) from exc
             return
 
         # 安全门：非强制模式下，有改动则 refuse 清理（参考 s20 code.py:253-266）
@@ -213,7 +226,18 @@ class WorktreeSession:
 
         # 3. 兜底：物理删除残留目录
         if self.path.exists():
-            shutil.rmtree(self.path, ignore_errors=True)
+            try:
+                shutil.rmtree(self.path)
+            except OSError as exc:
+                logger.error(
+                    "[worktree] cleanup failed for %s: %s", self._name, exc
+                )
+                raise WorktreeError(
+                    f"Failed to remove worktree directory {self.path}: {exc}"
+                ) from exc
+
+        if self.path.exists():
+            raise WorktreeError(f"Worktree directory still exists: {self.path}")
 
         self._created = False
         logger.info("[worktree] removed: %s", self._name)

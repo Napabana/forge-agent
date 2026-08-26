@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import subprocess
 import logging
+import os
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -158,7 +159,8 @@ class LocalRuntime(Runtime):
 
 # 沙箱容器使用的 Docker 镜像
 # 包含 Python、git、常用工具，体积合理
-SANDBOX_IMAGE = "python:3.11-slim"
+SANDBOX_IMAGE = "forge-agent-sandbox:py311"
+SANDBOX_DOCKERFILE = Path(__file__).with_name("sandbox.Dockerfile")
 
 # 容器内 repo 的挂载路径
 CONTAINER_WORKDIR = "/workspace"
@@ -181,6 +183,8 @@ def build_docker_run_args(
     mem_limit: str = DEFAULT_MEM_LIMIT,
     nano_cpus: int = DEFAULT_NANO_CPUS,
     network: bool = False,
+    user_uid: int | None = None,
+    user_gid: int | None = None,
 ) -> list[str]:
     """构造 `docker run` 的完整 argv（纯函数，零副作用，便于单测）。
 
@@ -191,7 +195,7 @@ def build_docker_run_args(
     - `--read-only`：只读根文件系统（readonly_root=True 时）。
     - `--tmpfs /tmp`：始终挂载，让只读根下仍有可写临时区（apt/pip scratch）。
     - 挂载白名单：主 repo 默认 :rw；readonly_root=True 时变 :ro；worktree_mount
-      始终 :rw。M4 让 worktree 挂到 workdir 即可用 rw worktree 盖住 ro 主库。
+      始终 :rw。同目标时以 worktree 替换主 repo 挂载，避免重复 mount。
 
     Args:
         container_name: 容器名（--name）。
@@ -223,20 +227,54 @@ def build_docker_run_args(
         args += ["--network", "none"]
     if readonly_root:
         args += ["--read-only"]
+    if user_uid is not None:
+        effective_gid = user_uid if user_gid is None else user_gid
+        args += ["--user", f"{user_uid}:{effective_gid}"]
+    args += [
+        "--env", "HOME=/tmp",
+        "--env", "PYTHONDONTWRITEBYTECODE=1",
+    ]
     args += ["--tmpfs", "/tmp"]
 
-    # 主 repo 挂载：readonly_root 决定 ro/rw
+    # Docker 不允许两个 bind mount 使用同一个容器目标。M4 过去先把主 repo
+    # 挂到 /workspace，再试图用 rw worktree "盖住"它，真实 docker run 会报
+    # Duplicate mount point。先收集挂载并按 target 去重：
+    # - 普通额外挂载保留先到者，不能覆盖 workspace 安全边界；
+    # - 显式 worktree_mount 优先级最高，替换相同 target 的已有挂载。
+    mounts: list[tuple[str, str, str | None]] = []
+    target_indexes: dict[str, int] = {}
+
+    def add_mount(
+        host_path: str,
+        container_path: str,
+        mode: str | None,
+        *,
+        replace: bool = False,
+    ) -> None:
+        target = container_path.rstrip("/") or "/"
+        existing = target_indexes.get(target)
+        mount = (host_path, container_path, mode)
+        if existing is None:
+            target_indexes[target] = len(mounts)
+            mounts.append(mount)
+        elif replace:
+            mounts[existing] = mount
+
     repo_mode = "ro" if readonly_root else "rw"
-    args += ["-v", f"{repo_path}:{workdir}:{repo_mode}"]
+    add_mount(repo_path, workdir, repo_mode)
 
-    # 额外挂载，保留调用方顺序，无模式后缀（沿用旧行为）
+    # 额外挂载保留调用方顺序，无模式后缀（沿用旧行为）。
     for host_path, container_path in extra_mounts or []:
-        args += ["-v", f"{host_path}:{container_path}"]
+        add_mount(host_path, container_path, None)
 
-    # worktree 挂载：始终 :rw（M4 用它盖住 ro 主库，实现"仅 worktree 可写"白名单）
+    # worktree 是完整 checkout；挂到 workdir 时无需再暴露主 repo。
     if worktree_mount is not None:
         host_path, container_path = worktree_mount
-        args += ["-v", f"{host_path}:{container_path}:rw"]
+        add_mount(host_path, container_path, "rw", replace=True)
+
+    for host_path, container_path, mode in mounts:
+        suffix = f":{mode}" if mode else ""
+        args += ["-v", f"{host_path}:{container_path}{suffix}"]
 
     args += ["--workdir", workdir, image, "tail", "-f", "/dev/null"]
     return args
@@ -259,8 +297,8 @@ class DockerRuntime(Runtime):
     - 网络：network=False（默认）→ --network none，断网。
     - 只读根 + tmpfs：readonly_root=True → 根 FS 只读，/tmp 走 tmpfs 仍可写。
     - 挂载白名单（Task 3.2）：readonly_root=True 时主 repo :ro，worktree_mount
-      始终 :rw。M4 用 worktree_mount=(wt.path, /workspace) 让 rw worktree 盖住
-      ro 主库，实现"仅当前任务工作区可写"。
+      始终 :rw。M4 用 worktree_mount=(wt.path, /workspace) 替换同目标的主 repo
+      挂载，实现"仅当前任务工作区可写"。
 
     Args:
         repo_path:    宿主机上 repo 的绝对路径，会被 mount 进容器
@@ -289,6 +327,8 @@ class DockerRuntime(Runtime):
         mem_limit: str = DEFAULT_MEM_LIMIT,
         nano_cpus: int = DEFAULT_NANO_CPUS,
         network: bool = False,
+        user_uid: int | None = None,
+        user_gid: int | None = None,
     ) -> None:
         self._repo_path = str(Path(repo_path).resolve())
         self._image = image
@@ -304,6 +344,12 @@ class DockerRuntime(Runtime):
         self._container_id: str | None = None
         # 容器名加随机后缀，避免冲突
         self._container_name = f"coding-agent-sandbox-{uuid.uuid4().hex[:8]}"
+        self._user_uid = (
+            os.getuid() if user_uid is None and hasattr(os, "getuid") else user_uid
+        )
+        self._user_gid = (
+            os.getgid() if user_gid is None and hasattr(os, "getgid") else user_gid
+        )
 
     @property
     def name(self) -> str:
@@ -380,6 +426,17 @@ class DockerRuntime(Runtime):
         except Exception as e:
             return RunResult(returncode=-1, stdout="", stderr=str(e))
 
+    def preflight(self, cwd: str | None = None) -> RunResult:
+        """Verify baseline tools and git-worktree visibility before calling the LLM."""
+        return self.exec(
+            "git --version"
+            " && python3 -m pytest --version"
+            " && git rev-parse --is-inside-work-tree"
+            " && test -w .",
+            cwd=cwd,
+            timeout=30,
+        )
+
     def cleanup(self) -> None:
         """停止并删除容器。"""
         if not self._container_id:
@@ -409,10 +466,10 @@ class DockerRuntime(Runtime):
             self._container_name, self._image, self._repo_path,
         )
 
-        # 检查 Docker 是否可用
         check = subprocess.run(
             ["docker", "info"],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         if check.returncode != 0:
             return RunResult(
@@ -424,8 +481,10 @@ class DockerRuntime(Runtime):
                 ),
             )
 
-        # 构建 docker run 命令（资源/网络/只读根/tmpfs/挂载白名单等加固参数
-        # 全部集中在 build_docker_run_args 纯函数里，便于单测）
+        image_result = self._ensure_default_image()
+        if image_result is not None:
+            return image_result
+
         run_args = build_docker_run_args(
             container_name=self._container_name,
             repo_path=self._repo_path,
@@ -437,6 +496,8 @@ class DockerRuntime(Runtime):
             mem_limit=self._mem_limit,
             nano_cpus=self._nano_cpus,
             network=self._network,
+            user_uid=self._user_uid,
+            user_gid=self._user_gid,
         )
 
         try:
@@ -444,11 +505,12 @@ class DockerRuntime(Runtime):
                 run_args,
                 capture_output=True,
                 text=True,
-                timeout=60,  # 拉镜像可能需要时间
+                timeout=60,
             )
         except subprocess.TimeoutExpired:
             return RunResult(
-                returncode=-1, stdout="",
+                returncode=-1,
+                stdout="",
                 stderr="Timed out starting Docker container (60s). Is Docker running?",
             )
 
@@ -462,7 +524,6 @@ class DockerRuntime(Runtime):
         self._container_id = proc.stdout.strip()
         logger.info("Container started: %s", self._container_id[:12])
 
-        # 执行初始化命令
         for setup_cmd in self._setup_cmds:
             result = self.exec(setup_cmd, timeout=120)
             if not result.success:
@@ -470,7 +531,51 @@ class DockerRuntime(Runtime):
                     "Setup command failed: %r\n%s", setup_cmd, result.stderr
                 )
 
-        return None   # 成功
+        return None
+
+    def _ensure_default_image(self) -> RunResult | None:
+        """Build the bundled sandbox image once when it is not present locally."""
+        inspect = subprocess.run(
+            ["docker", "image", "inspect", self._image],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if inspect.returncode == 0 or self._image != SANDBOX_IMAGE:
+            return None
+        if not SANDBOX_DOCKERFILE.is_file():
+            return RunResult(
+                returncode=-1,
+                stdout="",
+                stderr=f"Bundled sandbox Dockerfile not found: {SANDBOX_DOCKERFILE}",
+            )
+        logger.info("Building bundled sandbox image %s", self._image)
+        try:
+            build = subprocess.run(
+                [
+                    "docker", "build",
+                    "--network", "host",
+                    "--tag", self._image,
+                    "--file", str(SANDBOX_DOCKERFILE),
+                    str(SANDBOX_DOCKERFILE.parent),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            return RunResult(
+                returncode=-1,
+                stdout="",
+                stderr="Timed out building bundled sandbox image (300s).",
+            )
+        if build.returncode != 0:
+            return RunResult(
+                returncode=build.returncode,
+                stdout=build.stdout,
+                stderr=f"Failed to build sandbox image:\n{build.stderr}",
+            )
+        return None
 
     def install_requirements(self, requirements_file: str = "requirements.txt") -> RunResult:
         """
