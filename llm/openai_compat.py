@@ -220,6 +220,9 @@ def _parse_openai_response(choice: Any, thought: str) -> Action:
 
     if finish_reason == "stop":
         if thought and thought != "(no thought)":
+            pseudo_call = _parse_pseudo_tool_call(thought)
+            if pseudo_call is not None:
+                return pseudo_call
             return Action(
                 action_type=ActionType.FINISH,
                 thought="",      # 普通 chat 模型没有独立推理链，thought 置空
@@ -245,9 +248,37 @@ def _parse_openai_response(choice: Any, thought: str) -> Action:
 
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _INLINE_JSON_RE = re.compile(r"\{[^{}]+\}", re.DOTALL)
-
+_PSEUDO_TOOL_CALL_RE = re.compile(
+    r"(?im)^\s*Action\s*:\s*([A-Za-z_][\w.-]*)\s*(?:\r?\n|\s+)"
+    r"Params\s*:\s*",
+    re.IGNORECASE | re.DOTALL,
+)
 _FINISH_KEYWORDS = ("task complete", "task is complete", "i have finished", "all done")
 _GIVE_UP_KEYWORDS = ("cannot solve", "give up", "unable to", "i cannot")
+
+
+def _parse_pseudo_tool_call(text: str) -> Action | None:
+    """Recover a tool call emitted as ``Action: ...``/``Params: ...`` text.
+
+    Some OpenAI-compatible models return a normal ``stop`` response while
+    describing the intended function call in content. Treating that content as
+    FINISH creates a false success, so recover it as a real tool action instead.
+    """
+    text = text.strip()
+    match = _PSEUDO_TOOL_CALL_RE.search(text)
+    if match is None:
+        return None
+    try:
+        raw_params = text[match.end():].lstrip()
+        params, _ = json.JSONDecoder().raw_decode(raw_params)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Malformed pseudo tool call from model: %s", text[:200])
+        return None
+    return Action(
+        action_type=ActionType.TOOL_CALL,
+        thought=text.strip(),
+        tool_call=ToolCall(name=match.group(1), params=params),
+    )
 
 
 def _build_tool_description_for_text(tools: list[LLMToolSchema]) -> str:

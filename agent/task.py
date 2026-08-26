@@ -12,6 +12,7 @@ Task / ToolCall / Action / Observation / Event / RunResult
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -63,6 +64,29 @@ class RunStatus(str, Enum):
     CANCELED    = "canceled"     # 外部请求取消
 
 
+def infer_completion_requirements(description: str) -> tuple[bool, bool]:
+    """Infer whether a CLI/API coding task must change files and run tests."""
+    text = description.strip().lower()
+    read_only = any(marker in text for marker in (
+        "只读取", "只读", "不修改", "不要修改",
+        "read-only", "read only", "do not modify", "without modifying",
+    ))
+    skip_tests = any(marker in text for marker in (
+        "不运行测试", "无需测试", "不要测试",
+        "do not run tests", "without tests", "no tests required",
+    ))
+    change_intent = bool(
+        re.search(r"\b(fix|change|modify|implement|add|remove|refactor|update)\b", text)
+        or any(marker in text for marker in (
+            "修复", "修改", "实现", "新增", "添加", "删除", "重构", "更新",
+        ))
+    )
+    test_intent = bool(
+        re.search(r"\b(pytest|tests?|verify|verification)\b", text)
+        or "测试" in text
+        or "验证" in text
+    )
+    return (change_intent and not read_only, test_intent and not skip_tests)
 # ---------------------------------------------------------------------------
 # Task — 输入
 # ---------------------------------------------------------------------------
@@ -81,6 +105,8 @@ class Task:
     task_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     issue_url: str | None = None        # GitHub issue URL，自动修复模式时填入
     test_cmd: str | None = None         # 运行测试的命令，如 "pytest tests/"
+    require_changes: bool = False       # completion requires a real repository change
+    require_tests: bool = False         # completion requires a successful test run
     max_steps: int = 40                 # 最大循环步数，超出则熔断
     budget_tokens: int = 80_000         # 整次运行的 token 预算
 

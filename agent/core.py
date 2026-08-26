@@ -187,7 +187,11 @@ class Agent:
         test_attempted = False
         last_test_passed: bool | None = None
         last_successful_test_step: int | None = None
+        successful_write = False
         last_write_step: int | None = None
+        initial_repo_state = (
+            self._get_repo_state(task.repo_path) if task.require_changes else None
+        )
         fatal_error_key: str | None = None
         fatal_error_count = 0
 
@@ -241,10 +245,33 @@ class Agent:
             if action.action_type == ActionType.FINISH:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
+                final_repo_state = (
+                    self._get_repo_state(task.repo_path)
+                    if task.require_changes
+                    else None
+                )
                 verification_error: str | None = None
                 if fatal_error_key is not None:
                     verification_error = (
                         f"Unresolved fatal infrastructure error: {fatal_error_key}"
+                    )
+                elif task.require_changes and not successful_write:
+                    verification_error = (
+                        "Task requires repository changes, but no write tool completed "
+                        "successfully."
+                    )
+                elif (
+                    task.require_changes
+                    and initial_repo_state is not None
+                    and final_repo_state == initial_repo_state
+                ):
+                    verification_error = (
+                        "Task requires repository changes, but the repository state "
+                        "did not change."
+                    )
+                elif task.require_tests and not test_attempted:
+                    verification_error = (
+                        "Task requires test verification, but no test tool was run."
                     )
                 elif test_attempted and last_test_passed is not True:
                     verification_error = (
@@ -317,7 +344,9 @@ class Agent:
                 # 追踪是否有文件写操作
                 if tc.name in ("file_write", "file_edit", "edit"):
                     steps_without_edit = 0
-                    last_write_step = step
+                    if observation.is_success():
+                        successful_write = True
+                        last_write_step = step
                 else:
                     steps_without_edit += 1
 
@@ -654,6 +683,23 @@ class Agent:
         except Exception:
             return None
 
+    def _get_repo_state(self, repo_path: str) -> str | None:
+        """Return a baseline-comparable snapshot of repository changes."""
+        import subprocess
+        try:
+            status = subprocess.run(
+                ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                capture_output=True, text=True, timeout=10, cwd=repo_path,
+            )
+            diff = subprocess.run(
+                ["git", "diff", "--binary", "HEAD"],
+                capture_output=True, text=True, timeout=10, cwd=repo_path,
+            )
+            if status.returncode != 0 or diff.returncode != 0:
+                return None
+            return status.stdout + "\0--diff--\0" + diff.stdout
+        except Exception:
+            return None
 
 def _default_executor(registry: ToolRegistry) -> "ToolExecutor":
     """

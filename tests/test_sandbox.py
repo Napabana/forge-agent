@@ -31,9 +31,18 @@ from tools.git_tool import GitStatusTool
 # 辅助
 # ---------------------------------------------------------------------------
 
-DOCKER_AVAILABLE = shutil.which("docker") is not None and (
-    subprocess.run(["docker", "info"], capture_output=True, timeout=5).returncode == 0
-)
+def _docker_available() -> bool:
+    if shutil.which("docker") is None:
+        return False
+    try:
+        return subprocess.run(
+            ["docker", "info"], capture_output=True, timeout=5
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+DOCKER_AVAILABLE = _docker_available()
+
+
 
 
 # ===========================================================================

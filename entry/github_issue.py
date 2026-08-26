@@ -183,7 +183,7 @@ def run_on_issue(
     from config.schema import load_config
     from agent.core import Agent, AgentConfig
     from agent.event_log import EventLog
-    from agent.task import Task
+    from agent.task import Task, infer_completion_requirements
     from llm.router import create_backend_from_config
 
     config = load_config(config_path)
@@ -233,12 +233,15 @@ def run_on_issue(
     )
     agent = Agent(backend, registry, agent_config)
 
+    require_changes, require_tests = infer_completion_requirements(description)
     task = Task(
         description=description,
         repo_path=local_path,
         issue_url=issue_url,
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
+        require_changes=require_changes,
+        require_tests=require_tests,
     )
 
     # 5. 运行 agent

@@ -179,7 +179,7 @@ class TestCliHelp:
 class TestCliRun:
     """使用 MockBackend 测试 run 命令，不消耗真实 API。"""
 
-    def _invoke_run(self, tmp_path, task="fix it", extra_args=None):
+    def _invoke_run(self, tmp_path, task="只读取仓库并总结，不修改任何文件", extra_args=None):
         """辅助：用 MockBackend 跑 CLI run 命令。"""
         from agent.task import Action, ActionType
         from llm.base import MockBackend
@@ -236,7 +236,7 @@ class TestCliRun:
 
     def test_run_from_task_file(self, tmp_path):
         task_file = tmp_path / "task.txt"
-        task_file.write_text("Fix the parser bug")
+        task_file.write_text("只读取仓库并总结，不修改任何文件")
         result = self._invoke_run(tmp_path, extra_args=["--task-file", str(task_file)])
         # task-file 和 --task 不能同时用，这里只传 task-file
         # 重新 invoke，不带 --task

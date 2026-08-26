@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from agent.core import AgentConfig
 from agent.orchestrate import orchestrate_run
-from agent.task import RunStatus, Task
+from agent.task import RunStatus, Task, infer_completion_requirements
 from config.schema import load_config, merge_cli_overrides
 from entry.api_store import (
     STATUS_CANCELED,
@@ -256,11 +256,14 @@ def run_agent_task(
             stream=False,
             cancel_event=cancel_event,
         )
+        require_changes, require_tests = infer_completion_requirements(request["prompt"])
         task = Task(
             description=request["prompt"],
             repo_path=request["repo_path"],
             max_steps=cfg.agent.max_steps,
             budget_tokens=cfg.agent.budget_tokens,
+            require_changes=require_changes,
+            require_tests=require_tests,
         )
         engine = TaskEngine(Path(cfg.agent.log_dir) / "api_tasks.db")
         result = asyncio.run(orchestrate_run(

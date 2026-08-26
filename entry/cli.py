@@ -290,7 +290,7 @@ def run(
 
     from agent.core import Agent, AgentConfig
     from agent.event_log import EventLog, summarize_run
-    from agent.task import Task
+    from agent.task import Task, infer_completion_requirements
     try:
         from context.token_budget import is_tiktoken_available
     except ImportError:
@@ -322,11 +322,14 @@ def run(
     #llm后端，注册工具，agent配置
     agent = Agent(backend, registry, agent_config)
 
+    require_changes, require_tests = infer_completion_requirements(description)
     task_obj = Task(
         description=description,
         repo_path=str(repo_path),
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
+        require_changes=require_changes,
+        require_tests=require_tests,
     )
 
     # M4 第二波：--isolate 走 async 组合根（worktree + TaskEngine + permission workspace）
