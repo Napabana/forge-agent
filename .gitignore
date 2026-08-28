@@ -9,7 +9,7 @@ config/
 .coverage
 htmlcov/
 docs/
-
+.yaml
 # Secrets — never commit API keys / tokens
 .env
 .env.*

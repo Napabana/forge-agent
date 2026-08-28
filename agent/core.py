@@ -180,18 +180,13 @@ class Agent:
 
         total_tokens = 0
         steps_without_edit = 0
-        loop_detector = LoopDetector(
-            repeats=self._cfg.loop_detection_window,
-            max_period=self._cfg.loop_detection_max_period,
-        )
+        loop_detector = LoopDetector(repeats=self._cfg.loop_detection_window, max_period=self._cfg.loop_detection_max_period,)
         test_attempted = False
         last_test_passed: bool | None = None
         last_successful_test_step: int | None = None
         successful_write = False
         last_write_step: int | None = None
-        initial_repo_state = (
-            self._get_repo_state(task.repo_path) if task.require_changes else None
-        )
+        initial_repo_state = ( self._get_repo_state(task.repo_path) if task.require_changes else None)
         fatal_error_key: str | None = None
         fatal_error_count = 0
 
@@ -242,53 +237,53 @@ class Agent:
             logger.info("Step %d: %r", step, action)
 
             # ── 4. 终止 action ──────────────────────────────────────────
+            # LLM: 我做完了，FINISH
+            # Agent Core:
+            #     1. 有没有没解决的严重环境错误？
+            #     2. 如果要求改代码，真的写文件了吗？
+            #     3. 如果要求改代码，仓库最终真的发生变化了吗？
+            #     4. 如果要求测试，真的运行测试了吗？
+            #     5. 如果运行过测试，最后一次测试通过了吗？
+            #     6. 测试通过之后，有没有又修改代码？
+
+            # 全部通过：
+            #     SUCCESS
+
+            # 任何一个不通过：
+            #     FAILED
             if action.action_type == ActionType.FINISH:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
+                #如果修改的话，比较仓库是否有变化
                 final_repo_state = (
                     self._get_repo_state(task.repo_path)
                     if task.require_changes
                     else None
                 )
                 verification_error: str | None = None
-                if fatal_error_key is not None:
+                if fatal_error_key is not None:#当前是否还有没有解决的严重基础设施错误。 docker git
                     verification_error = (
                         f"Unresolved fatal infrastructure error: {fatal_error_key}"
                     )
-                elif task.require_changes and not successful_write:
-                    verification_error = (
-                        "Task requires repository changes, but no write tool completed "
-                        "successfully."
-                    )
-                elif (
-                    task.require_changes
-                    and initial_repo_state is not None
-                    and final_repo_state == initial_repo_state
-                ):
-                    verification_error = (
-                        "Task requires repository changes, but the repository state "
-                        "did not change."
-                    )
-                elif task.require_tests and not test_attempted:
-                    verification_error = (
-                        "Task requires test verification, but no test tool was run."
-                    )
-                elif test_attempted and last_test_passed is not True:
-                    verification_error = (
-                        "Agent attempted verification, but the latest test did not pass."
-                    )
-                elif (
-                    test_attempted
-                    and last_write_step is not None
+                elif task.require_changes and not successful_write:#要求改代码，但没有成功写文件
+                    verification_error = ( "Task requires repository changes, but no write tool completed successfully.")
+                    
+                elif task.require_changes and initial_repo_state is not None and final_repo_state == initial_repo_state:#要虽然执行过写工具，但仓库实际上有没有发生变化。
+                    verification_error = ("Task requires repository changes, but the repository state did not change.")
+                    
+                elif task.require_tests and not test_attempted:#要求测试，但没有执行过测试工具
+                    verification_error = ("Task requires test verification, but no test tool was run.")
+                    
+                elif test_attempted and last_test_passed is not True:#要求测试，但最后一次测试没有通过
+                    verification_error = ("Agent attempted verification, but the latest test did not pass.")
+                    
+                elif (test_attempted and last_write_step is not None
                     and (
                         last_successful_test_step is None
                         or last_successful_test_step < last_write_step
-                    )
-                ):
-                    verification_error = (
-                        "Files changed after the latest successful test; "
-                        "the final state is unverified."
-                    )
+                        )
+                    ):#要求测试，但最后一次测试通过之后，仓库又发生了修改
+                    verification_error = ("Files changed after the latest successful test; the final state is unverified.")
 
                 if verification_error is not None:
                     log.log_task_failed(steps=step, reason=verification_error)
@@ -301,7 +296,7 @@ class Agent:
                         patch=patch,
                         error=verification_error,
                     )
-
+                #只有这些检测都通过后，才会返回SUCCESS，FINISH只是LLM的判断
                 log.log_task_complete(steps=step, summary=summary)
                 return RunResult(
                     task_id=task.task_id,
@@ -338,6 +333,7 @@ class Agent:
                     )
 
                 tc = action.tool_call
+                #TOOL_CALL 进入 ToolExecutor；ToolResult 转 Observation。
                 result = self._executor.execute(tc.name, tc.params)
                 observation = result.to_observation(tc.name)
 
@@ -349,7 +345,8 @@ class Agent:
                         last_write_step = step
                 else:
                     steps_without_edit += 1
-
+                
+                #追踪测试
                 if tc.name in self._cfg.test_tool_names:
                     test_attempted = True
                     last_test_passed = observation.is_success()
@@ -358,18 +355,18 @@ class Agent:
 
                 log.log_observation(step=step, observation=observation)
 
-                infrastructure_error = self._fatal_infrastructure_error(observation)
+                #追踪基础设施错误
+                infrastructure_error = self._detect_known_fatal_infrastructure_error(observation)
+
                 if infrastructure_error is not None:
                     if infrastructure_error == fatal_error_key:
                         fatal_error_count += 1
                     else:
                         fatal_error_key = infrastructure_error
                         fatal_error_count = 1
+
                     if fatal_error_count >= max(1, self._cfg.fatal_tool_error_repeats):
-                        reason = (
-                            "Repeated fatal infrastructure error: "
-                            f"{infrastructure_error}"
-                        )
+                        reason = ("Repeated fatal infrastructure error: "f"{infrastructure_error}")
                         logger.error(reason)
                         log.log_task_failed(steps=step, reason=reason)
                         return RunResult(
@@ -382,8 +379,11 @@ class Agent:
                             error=reason,
                         )
                 else:
-                    fatal_error_key = None
-                    fatal_error_count = 0
+                    # 只有 Runtime 相关工具成功，才认为基础设施恢复
+                    runtime_tools = {"shell", "test", "pytest", "git"}
+                    if (observation.is_success() and tc.name in runtime_tools):
+                        fatal_error_key = None
+                        fatal_error_count = 0
                 # 把 action 和 observation 加入对话历史
                 history.add(LLMMessage(
                     role="assistant",
@@ -399,6 +399,7 @@ class Agent:
                     if tc.name in self._cfg.test_tool_names
                     else None
                 )
+                #每次工具执行完成后，LoopDetector 收到四类信息
                 loop_signal = loop_detector.observe(
                     action,
                     observation,
@@ -450,10 +451,7 @@ class Agent:
                 # ── 6. Reflection 触发判断 ──────────────────────────────
 
                 # 触发条件 A：测试工具失败
-                if (
-                    tc.name in self._cfg.test_tool_names
-                    and not observation.is_success()
-                ):
+                if tc.name in self._cfg.test_tool_names  and  not observation.is_success():
                     reflect_prompt = reflection_test_failed()
                     log.log_reflection(
                         step=step,
@@ -492,25 +490,35 @@ class Agent:
             steps_taken=task.max_steps,
             total_tokens=total_tokens,
         )
-
+        
     @staticmethod
-    def _fatal_infrastructure_error(observation: Observation) -> str | None:
-        """Return a stable category for unrecoverable runtime startup errors."""
+    def _detect_known_fatal_infrastructure_error(
+        observation: Observation,
+    ) -> str | None:
+        """只检查可能经过 Runtime 的工具，不要所有失败 Observation 都检查。"""
         if observation.is_success():
             return None
-        text = "\n".join(
-            part for part in (observation.output, observation.error) if part
-        ).lower()
+
+        runtime_tools = {"shell", "test", "pytest", "git"}
+
+        if observation.tool_name not in runtime_tools:
+            return None
+
+        text = "\n".join( part for part in (observation.output, observation.error) if part).lower()
+
         markers = (
             "duplicate mount point",
             "invalid mount config",
             "cannot connect to the docker daemon",
             "docker is not available",
             "failed to start container",
+            "permission denied while trying to connect to the docker daemon",
         )
+
         for marker in markers:
             if marker in text:
                 return marker
+
         return None
 
     def _is_cancel_requested(self) -> bool:
@@ -684,7 +692,9 @@ class Agent:
             return None
 
     def _get_repo_state(self, repo_path: str) -> str | None:
-        """Return a baseline-comparable snapshot of repository changes."""
+        """Return a baseline-comparable snapshot of repository changes.
+        生成“当前 Git 仓库相对于 HEAD 的修改状态快照”，然后用这个字符串和之前保存的快照做比较，判断仓库到底有没有发生变化。
+        """
         import subprocess
         try:
             status = subprocess.run(

@@ -1,10 +1,68 @@
+#deepseek还用硅基流动的
+# llm:
+#   provider: openai
+#   #anthropic
+#   model: ${MODEL_ID}
+#   api_key: ${ANTHROPIC_API_KEY}
+#   base_url: ${ANTHROPIC_BASE_URL}
+#   max_tokens: 8192
+
+### Failed: LLM error: Error code: 403 - {'type': 'error', 'error': {'type': 'forbidden_error', 'message': 'your token is not authorized for any channel serving this model'}}
 llm:
   provider: openai
-  #anthropic
-  model: ${MODEL_ID}
-  api_key: ${ANTHROPIC_API_KEY}
-  base_url: ${ANTHROPIC_BASE_URL}
-  max_tokens: 8192
+  model: gpt-5.5
+  api_key: ${KRILL_openai_API_KEY}
+  base_url: https://api.krill-ai.net/codex/v1
+  max_tokens: 1024
+
+#现在可以了，需要--no-stream运行
+# llm:
+#   provider: openai
+#   model: grok-4.5
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api-slb.krill-ai.net/v1
+#   max_tokens: 8192
+
+#这个能跑 krill说kimi支持两种provider: anthropic和openai
+# llm: 
+#   provider: anthropic
+#   model: kimi-k3
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api.krill-ai.net/coding
+#   max_tokens: 1024
+
+#这个也能跑，注意baseurl不同
+# llm: 
+#   provider: openai
+#   model: kimi-k3
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api-slb.krill-ai.net/coding/v1
+#   max_tokens: 1024
+
+#不行呀
+# llm:
+#   provider: anthropic
+#   model: claude-sonnet-4-6
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api.krill-ai.net/coding
+#   max_tokens: 1024
+
+
+# #"HTTP/1.1 500 Internal Server Error" 换一个UA再试试，先不管了
+# llm:
+#   provider: openai
+#   model: gemini-3.5-flash
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api.cdn-krill-ai.com
+#   max_tokens: 1024
+
+llm:
+  provider: openai
+  protocol: responses
+  model: gpt-5.4
+  api_key: ${KRILL_API_KEY}
+  base_url: https://api-slb.krill-ai.net/coding/v1
+  max_tokens: 1024
 
 agent:
   max_steps: 40

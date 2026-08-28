@@ -203,16 +203,10 @@ def cli(ctx: click.Context, config: str | None) -> None:
 @click.option("--provider", "-p", default=None, help="Override LLM provider")
 @click.option("--protocol", default=None, help="Override LLM protocol: chat_completions or responses")
 @click.option("--max-steps", default=None, type=int, help="Override max steps")
-@click.option(
-    "--stream/--no-stream", "-s",
-    default=True,
-    help="Enable or disable streaming output (default: on)",
-)
+@click.option("--stream/--no-stream", "-s", default=True, help="Enable or disable streaming output (default: on)",)
 @click.option("--confirm", is_flag=True, default=False, help="Ask confirmation before running dangerous shell commands")
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
-@click.option("--isolate", is_flag=True, default=False,
-              help="Run in an isolated git worktree + TaskEngine tracking (M4). "
-                   "Combines with --sandbox for Docker hardening.")
+@click.option("--isolate", is_flag=True, default=False,help="Run in an isolated git worktree + TaskEngine tracking (M4). Combines with --sandbox for Docker hardening.")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logs")
 @click.pass_context
 def run(
@@ -370,9 +364,7 @@ def run(
         ctx.exit(0 if result.is_success() else 1)
 
     if verbose:
-        click.echo(dim(
-            f"  tiktoken: {'yes' if is_tiktoken_available() else 'no (char estimate)'}\n"
-        ))
+        click.echo(dim( f"  tiktoken: {'yes' if is_tiktoken_available() else 'no (char estimate)'}\n"))
 
     # 直接同步运行
     t0 = time.time()
