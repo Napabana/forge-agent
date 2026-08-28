@@ -1,5 +1,6 @@
 llm:
-  provider: anthropic
+  provider: openai
+  #anthropic
   model: ${MODEL_ID}
   api_key: ${ANTHROPIC_API_KEY}
   base_url: ${ANTHROPIC_BASE_URL}

@@ -226,6 +226,84 @@ python -m entry.github_issue \
 `GITHUB_TOKEN` 需要具备读取 Issue、推送分支和创建 Pull Request 所需的仓库
 权限。
 
+### HTTP API 服务
+
+Forge Agent 也可以作为轻量级 HTTP 后端运行，方便接入 Web 前端、CI 或其它
+服务。API 层不会替代 CLI；它复用现有 agent、TaskEngine、Git worktree 隔离和
+JSONL 事件日志。
+
+安装 API 依赖：
+
+```bash
+pip install -e ".[api,dev]"
+```
+
+启动服务：
+
+```bash
+uvicorn entry.api:app --reload
+```
+
+浏览器访问 `http://127.0.0.1:8000/` 会返回 API 索引；访问
+`http://127.0.0.1:8000/docs` 可以打开 FastAPI 自动生成的交互式文档。
+也可以访问 `http://127.0.0.1:8000/dashboard` 使用内置的轻量任务面板。
+
+提交任务：
+
+```bash
+curl -X POST http://127.0.0.1:8000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_path": "/path/to/repo",
+    "prompt": "修复失败的 pytest",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "max_steps": 40,
+    "sandbox": false
+  }'
+```
+
+查询状态和事件：
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/tasks
+curl http://127.0.0.1:8000/tasks/<task_id>
+curl http://127.0.0.1:8000/tasks/<task_id>/events
+curl -N http://127.0.0.1:8000/tasks/<task_id>/events/stream
+curl -X POST http://127.0.0.1:8000/tasks/<task_id>/cancel
+```
+
+第一版 API 默认在后台线程池执行任务，并使用 `orchestrate_run` 走隔离
+worktree、权限检查和事件审计链路。API 模式下不会交互确认危险命令；
+需要确认的命令会被权限管线拒绝。
+
+可用环境变量：
+
+```bash
+# 后台 worker 数，默认 2
+export FORGE_API_WORKERS=2
+
+# queued/running/cancel_requested 任务总数上限，默认 50
+export FORGE_API_QUEUE_LIMIT=50
+
+# 限制 API 只能运行这些目录下的仓库；多个路径用系统 path separator 分隔
+export FORGE_API_ALLOWED_ROOTS="/home/jfm/projects:/tmp/demo-repos"
+```
+
+当前 API 已支持：
+
+- SSE 事件流：`GET /tasks/{task_id}/events/stream`
+- 协作式取消：`POST /tasks/{task_id}/cancel`
+- worker 数、队列长度和仓库 allowlist 配置
+- 简单 Web dashboard：`GET /dashboard`
+
+剩余限制：
+
+- 取消是协作式的，会在 agent 下一轮 LLM/工具调用前停止；已经进入单个长
+  shell 命令时不会强杀该命令。
+- dashboard 是调试面板，不包含鉴权、多用户隔离或持久化前端状态。
+
 ## 命令参考
 
 ```text
