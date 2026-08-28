@@ -215,6 +215,7 @@ def run_on_issue(
     try:
         backend = create_backend_from_config({
             "provider": config.llm.provider,
+            "protocol": config.llm.protocol,
             "model":    config.llm.model,
             "api_key":  config.llm.api_key or None,
             "base_url": config.llm.base_url or None,

@@ -365,6 +365,43 @@ class TestOpenAICompatBackend:
         assert result.input_tokens == 80
         assert result.output_tokens == 40
 
+    def test_empty_choices_returns_give_up(self):
+        backend = self._make_backend()
+        backend._client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[],
+            usage=None,
+        )
+
+        result = backend.complete(make_messages("user", "fix it"), [])
+
+        assert result.action.action_type == ActionType.GIVE_UP
+        assert result.action.message == "Model returned no choices"
+
+    def test_missing_message_returns_give_up(self):
+        backend = self._make_backend()
+        choice = SimpleNamespace(finish_reason="stop", message=None)
+        backend._client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[choice],
+            usage=None,
+        )
+
+        result = backend.complete(make_messages("user", "fix it"), [])
+
+        assert result.action.action_type == ActionType.GIVE_UP
+        assert result.action.message == "Model stopped with no content"
+
+    def test_missing_usage_is_estimated(self):
+        backend = self._make_backend()
+        response = self._make_response("stop", content="Task is done.")
+        response.usage = None
+        backend._client.chat.completions.create.return_value = response
+
+        result = backend.complete(make_messages("user", "fix it"), [])
+
+        assert result.action.action_type == ActionType.FINISH
+        assert result.input_tokens > 0
+        assert result.output_tokens > 0
+
 
 # ===========================================================================
 # OpenAICompatBackend — 文本解析 fallback（R1 模型）

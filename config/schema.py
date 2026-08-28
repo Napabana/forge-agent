@@ -27,6 +27,7 @@ import yaml
 @dataclass
 class LLMConfig:
     provider: str = "anthropic"
+    protocol: str = "auto"
     model: str = "claude-sonnet-4-5"
     api_key: str = ""
     base_url: str = ""
@@ -156,6 +157,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
 
     llm = LLMConfig(
         provider=llm_raw.get("provider", "anthropic"),
+        protocol=llm_raw.get("protocol", "auto"),
         model=llm_raw.get("model", "claude-sonnet-4-5"),
         api_key=llm_raw.get("api_key", ""),
         base_url=llm_raw.get("base_url", "") or "",
@@ -191,6 +193,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
 def merge_cli_overrides(
     config: AppConfig,
     provider: str | None = None,
+    protocol: str | None = None,
     model: str | None = None,
     api_key: str | None = None,
     max_steps: int | None = None,
@@ -201,6 +204,8 @@ def merge_cli_overrides(
     """
     if provider:
         config.llm.provider = provider
+    if protocol:
+        config.llm.protocol = protocol
     if model:
         config.llm.model = model
     if api_key:

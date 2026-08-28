@@ -167,7 +167,16 @@ class ChatSession:
     - repo_map 缓存（换 repo 时自动失效）
     """
 
-    def __init__(self, backend, registry, config, repo_path: str, log_dir: str, confirm_callback=None) -> None:
+    def __init__(
+        self,
+        backend,
+        registry,
+        config,
+        repo_path: str,
+        log_dir: str,
+        confirm_callback=None,
+        stream: bool = True,
+    ) -> None:
         from agent.core import Agent, AgentConfig
         from context.history import ConversationHistory
 
@@ -216,9 +225,9 @@ class ChatSession:
             history_max_messages=config.context.history_window * 2,
             llm_max_retries=3,
             llm_retry_delay=1.0,
-            stream=True,
-            stream_callback=_stream_cb,
-            thought_callback=_thought_cb,
+            stream=stream,
+            stream_callback=_stream_cb if stream else None,
+            thought_callback=_thought_cb if stream else None,
             confirm_dangerous=confirm_callback is not None,
             confirm_callback=confirm_callback,
         )

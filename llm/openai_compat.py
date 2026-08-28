@@ -108,15 +108,33 @@ class OpenAICompatBackend(LLMBackend):
             tool_choice="auto",
         )
 
-        choice = response.choices[0]
-        message = choice.message
-        thought = message.content or "(no thought)"
+        choices = getattr(response, "choices", None) or []
+        input_tokens, output_tokens = _response_usage_tokens(
+            response, api_messages, ""
+        )
+        if not choices:
+            logger.warning("OpenAI-compatible response contained no choices")
+            return _empty_model_response(
+                "Model returned no choices",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None) if message is not None else None
+        thought = content or "(no thought)"
+        if not isinstance(thought, str):
+            thought = str(thought)
+        input_tokens, output_tokens = _response_usage_tokens(
+            response, api_messages, "" if thought == "(no thought)" else thought
+        )
 
         logger.debug(
             "OpenAI-compat response: finish_reason=%s input=%d output=%d",
-            choice.finish_reason,
-            response.usage.prompt_tokens,
-            response.usage.completion_tokens,
+            getattr(choice, "finish_reason", None),
+            input_tokens,
+            output_tokens,
         )
 
         action = _parse_openai_response(choice, thought)
@@ -124,8 +142,8 @@ class OpenAICompatBackend(LLMBackend):
         return LLMResponse(
             action=action,
             raw_content=thought,
-            input_tokens=response.usage.prompt_tokens,
-            output_tokens=response.usage.completion_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
     # ------------------------------------------------------------------
@@ -153,16 +171,35 @@ class OpenAICompatBackend(LLMBackend):
             messages=augmented,
         )
 
-        choice = response.choices[0]
-        raw_text = choice.message.content or ""
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            input_tokens, output_tokens = _response_usage_tokens(
+                response, augmented, ""
+            )
+            logger.warning("OpenAI-compatible response contained no choices")
+            return _empty_model_response(
+                "Model returned no choices",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        raw_text = getattr(message, "content", None) if message is not None else None
+        raw_text = raw_text or ""
+        if not isinstance(raw_text, str):
+            raw_text = str(raw_text)
 
         action = _parse_text_response(raw_text)
+        input_tokens, output_tokens = _response_usage_tokens(
+            response, augmented, raw_text
+        )
 
         return LLMResponse(
             action=action,
             raw_content=raw_text,
-            input_tokens=response.usage.prompt_tokens,
-            output_tokens=response.usage.completion_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
 
@@ -197,25 +234,82 @@ def _to_openai_tool(schema: LLMToolSchema) -> dict:
     }
 
 
+def _response_usage_tokens(
+    response: Any,
+    messages: list[dict],
+    output_text: str,
+) -> tuple[int, int]:
+    """Return provider usage when present, otherwise estimate it safely."""
+    usage = getattr(response, "usage", None)
+    input_tokens = getattr(usage, "prompt_tokens", None) if usage is not None else None
+    output_tokens = (
+        getattr(usage, "completion_tokens", None) if usage is not None else None
+    )
+
+    if input_tokens is None or output_tokens is None:
+        from context.token_budget import estimate_tokens
+
+        if input_tokens is None:
+            input_tokens = sum(
+                estimate_tokens(str(message.get("content") or ""))
+                for message in messages
+            )
+        if output_tokens is None:
+            output_tokens = estimate_tokens(output_text)
+
+    return int(input_tokens), int(output_tokens)
+
+
+def _empty_model_response(
+    reason: str,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> LLMResponse:
+    """Convert malformed-but-successful upstream responses into a safe GIVE_UP."""
+    return LLMResponse(
+        action=Action(
+            action_type=ActionType.GIVE_UP,
+            thought="",
+            message=reason,
+        ),
+        raw_content="",
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
 def _parse_openai_response(choice: Any, thought: str) -> Action:
     """
     解析 OpenAI API 的 choice，返回 Action。
     """
-    finish_reason = choice.finish_reason
-    message = choice.message
+    finish_reason = getattr(choice, "finish_reason", None)
+    message = getattr(choice, "message", None)
+    tool_calls = getattr(message, "tool_calls", None) if message is not None else None
 
-    if finish_reason == "tool_calls" and message.tool_calls:
+    if finish_reason == "tool_calls" and tool_calls:
         # 取第一个 tool call（agent 每轮只调一个工具）
-        tc = message.tool_calls[0]
+        tc = tool_calls[0]
+        function = getattr(tc, "function", None)
+        if function is None:
+            return Action(
+                action_type=ActionType.GIVE_UP,
+                thought=thought,
+                message="Model returned a malformed tool call",
+            )
         try:
-            params = json.loads(tc.function.arguments)
-        except json.JSONDecodeError:
-            params = {"raw": tc.function.arguments}
+            arguments = getattr(function, "arguments", "") or "{}"
+            params = json.loads(arguments)
+        except (json.JSONDecodeError, TypeError):
+            params = {"raw": getattr(function, "arguments", "")}
 
         return Action(
             action_type=ActionType.TOOL_CALL,
             thought=thought,
-            tool_call=ToolCall(name=tc.function.name, params=params),
+            tool_call=ToolCall(
+                name=getattr(function, "name", "") or "unknown_tool",
+                params=params,
+            ),
         )
 
     if finish_reason == "stop":
@@ -434,42 +528,66 @@ def _stream_with_tools(self, api_messages, tools, on_text, on_thought=None):
 
     stream = self._client.chat.completions.create(**kwargs)
     for chunk in stream:
-        choice = chunk.choices[0] if chunk.choices else None
+        choices = getattr(chunk, "choices", None) or []
+        choice = choices[0] if choices else None
         if not choice:
             continue
 
-        delta = choice.delta
-        finish_reason = choice.finish_reason or finish_reason
+        finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+        # Some gateways emit a final choice with ``delta: null`` or put the
+        # payload in ``message`` even though stream=true. Both shapes are
+        # accepted at this compatibility boundary.
+        delta = getattr(choice, "delta", None) or getattr(choice, "message", None)
+        if delta is None:
+            continue
 
         # reasoning_content delta（DeepSeek R1 / Claude thinking）
-        reasoning_delta = getattr(delta, "reasoning_content", None)
+        reasoning_delta = (
+            getattr(delta, "reasoning_content", None)
+            or getattr(delta, "reasoning", None)
+        )
         if reasoning_delta:
+            if not isinstance(reasoning_delta, str):
+                reasoning_delta = str(reasoning_delta)
             full_reasoning += reasoning_delta
             if on_thought:
                 on_thought(reasoning_delta)
 
         # text delta（最终回答）
-        if delta.content:
-            full_text += delta.content
+        content_delta = getattr(delta, "content", None)
+        if content_delta:
+            if not isinstance(content_delta, str):
+                content_delta = str(content_delta)
+            full_text += content_delta
             if on_text:
-                on_text(delta.content)
+                on_text(content_delta)
 
         # tool call delta 拼接
-        if delta.tool_calls:
-            for tc_delta in delta.tool_calls:
-                idx = tc_delta.index
+        tool_call_deltas = getattr(delta, "tool_calls", None) or []
+        if tool_call_deltas:
+            for fallback_idx, tc_delta in enumerate(tool_call_deltas):
+                if tc_delta is None:
+                    continue
+                idx = getattr(tc_delta, "index", None)
+                if not isinstance(idx, int) or idx < 0:
+                    idx = fallback_idx
                 while len(tool_calls_raw) <= idx:
                     tool_calls_raw.append({"name": "", "arguments": ""})
-                if tc_delta.function.name:
-                    tool_calls_raw[idx]["name"] += tc_delta.function.name
-                if tc_delta.function.arguments:
-                    tool_calls_raw[idx]["arguments"] += tc_delta.function.arguments
+                function = getattr(tc_delta, "function", None)
+                if function is None:
+                    continue
+                name = getattr(function, "name", None)
+                arguments = getattr(function, "arguments", None)
+                if name:
+                    tool_calls_raw[idx]["name"] += name
+                if arguments:
+                    tool_calls_raw[idx]["arguments"] += arguments
 
     # 构造 mock choice 供 _parse_openai_response 复用
     import json as _json
     from types import SimpleNamespace
 
-    if tool_calls_raw and finish_reason == "tool_calls":
+    if tool_calls_raw:
         tcs = []
         for tc in tool_calls_raw:
             try:
@@ -482,7 +600,11 @@ def _stream_with_tools(self, api_messages, tools, on_text, on_thought=None):
     else:
         mock_message = SimpleNamespace(content=full_text or None, tool_calls=None)
 
-    mock_choice = SimpleNamespace(finish_reason=finish_reason or "stop", message=mock_message)
+    normalized_finish_reason = "tool_calls" if tool_calls_raw else (finish_reason or "stop")
+    mock_choice = SimpleNamespace(
+        finish_reason=normalized_finish_reason,
+        message=mock_message,
+    )
     # 有 reasoning_content 时，thought = 推理过程，message = 最终回答
     # 没有时（普通 chat 模型），thought 置空，message = 模型输出
     thought_for_parse = full_text or "(no thought)"
@@ -527,14 +649,20 @@ def _stream_text_only(self, api_messages, tools, on_text):
         stream=True,
     )
     for chunk in stream:
-        choice = chunk.choices[0] if chunk.choices else None
+        choices = getattr(chunk, "choices", None) or []
+        choice = choices[0] if choices else None
         if not choice:
             continue
-        delta = choice.delta
-        if delta.content:
-            full_text += delta.content
+        delta = getattr(choice, "delta", None) or getattr(choice, "message", None)
+        if delta is None:
+            continue
+        content_delta = getattr(delta, "content", None)
+        if content_delta:
+            if not isinstance(content_delta, str):
+                content_delta = str(content_delta)
+            full_text += content_delta
             if on_text:
-                on_text(delta.content)
+                on_text(content_delta)
 
     action = _parse_text_response(full_text)
 

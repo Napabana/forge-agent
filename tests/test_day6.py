@@ -46,14 +46,20 @@ class TestParseConfig:
     def test_defaults_when_empty(self):
         config = _parse({})
         assert config.llm.provider == "anthropic"
+        assert config.llm.protocol == "auto"
         assert config.agent.max_steps == 40
         assert config.tools.shell.timeout == 30
         assert config.context.history_window == 20
 
     def test_llm_section(self):
-        config = _parse({"llm": {"provider": "deepseek", "model": "deepseek-chat"}})
-        assert config.llm.provider == "deepseek"
-        assert config.llm.model == "deepseek-chat"
+        config = _parse({"llm": {
+            "provider": "openai",
+            "protocol": "responses",
+            "model": "gpt-5.4",
+        }})
+        assert config.llm.provider == "openai"
+        assert config.llm.protocol == "responses"
+        assert config.llm.model == "gpt-5.4"
 
     def test_agent_section(self):
         config = _parse({"agent": {"max_steps": 20, "budget_tokens": 40000}})
@@ -125,6 +131,11 @@ class TestMergeCliOverrides:
         config = merge_cli_overrides(config, provider="openai")
         assert config.llm.provider == "openai"
 
+    def test_override_protocol(self):
+        config = _parse({})
+        config = merge_cli_overrides(config, protocol="responses")
+        assert config.llm.protocol == "responses"
+
     def test_override_max_steps(self):
         config = _parse({})
         config = merge_cli_overrides(config, max_steps=10)
@@ -159,6 +170,7 @@ class TestCliHelp:
         assert "--repo" in result.output
         assert "--task" in result.output
         assert "--model" in result.output
+        assert "--protocol" in result.output
 
     def test_log_help(self):
         runner = CliRunner()

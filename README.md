@@ -4,9 +4,10 @@ Forge Agent 是一个面向软件工程任务、在本地运行的自主编程�
 同步 ReAct 循环为控制内核，通过任务状态机、Git worktree 事务、权限 Harness
 和可选 Docker 沙箱完成代码分析、文件修改、命令执行、测试与结果审计。
 
-项目支持 Anthropic、OpenAI、DeepSeek、Groq 和 Ollama，并提供 CLI 一次性任务、
-连续对话、HTTP API 与 GitHub Issue 自动处理入口。每次运行都可写入 JSONL 事件
-日志；隔离模式还会记录任务状态、worktree 生命周期和权限决策。
+项目支持 Anthropic、OpenAI、DeepSeek、Groq 和 Ollama，并同时适配 Anthropic
+Messages、OpenAI Chat Completions 与 OpenAI Responses 协议。它提供 CLI 一次性
+任务、连续对话、HTTP API 与 GitHub Issue 自动处理入口。每次运行都可写入 JSONL
+事件日志；隔离模式还会记录任务状态、worktree 生命周期和权限决策。
 
 ## 核心能力
 
@@ -15,6 +16,10 @@ Forge Agent 是一个面向软件工程任务、在本地运行的自主编程�
 - **集中式权限控制**：工具调用统一经过 Hooks、PermissionManager 和 ToolExecutor。
 - **双运行时**：支持宿主机执行，也支持带资源限制和路径白名单的 Docker 沙箱。
 - **可审计与可回放**：EventLog 持久化执行过程，AgentBus 实时转发事件。
+- **多协议模型后端**：Anthropic 原生工具调用、OpenAI-compatible Chat Completions
+  和 Responses API 共享统一的 `LLMBackend`/`Action` 边界。
+- **中转站兼容**：容忍空 choices/delta/message/usage 和非标准流式结束帧，并可用
+  `--no-stream` 快速区分上游故障与流式协议差异。
 
 ## 架构设计
 
@@ -28,9 +33,9 @@ Forge Agent 将同步决策循环与异步 I/O 边界分开。`Agent.run()` 保�
 ```text
 CLI / Chat / HTTP API / GitHub Issue
                  │
-                 ├── 普通模式 ───────────────────────────────┐
-                 │                                            │
-                 └── 隔离模式 → orchestrate_run               │
+                 ├── 普通模式 ──────────────────────────────────┐
+                 │                                             │
+                 └── 隔离模式 → orchestrate_run                 │
                                   ├── TaskEngine (SQLite WAL)  │
                                   ├── WorktreeSession          │
                                   └── AgentBus                 │
@@ -54,61 +59,102 @@ CLI / Chat / HTTP API / GitHub Issue
 
 ## 项目结构
 
+下面的结构来自当前仓库的 `tree -a` 输出。省略 `.git/` 和 `tests/` 内部文件，
+其余目录与文件均按实际用途标注：
+
 ```text
 forge-agent/
-├── agent/                      # 控制内核、领域模型、事件日志和异步组合根
-│   ├── core.py                 # 同步 ReAct 主循环、步骤控制和 AgentConfig
-│   ├── orchestrate.py          # TaskEngine/worktree/bus/权限/沙箱组合根
-│   ├── task.py                 # Task、Action、Observation、Event、RunResult
+├── .agents/                    # 本地 Agent 扩展预留目录；当前为空，运行时未引用
+├── .codex/
+│   └── config.toml             # Codex 项目级沙箱配置
+├── .forge/                     # API 运行状态，不属于源码
+│   └── api_tasks.db            # HTTP 请求生命周期与 Agent 日志映射数据库
+├── .worktrees/                 # isolate 模式创建临时 Git worktree 的默认父目录
+├── agent/                      # Agent 控制内核、领域模型和组合根
+│   ├── __init__.py             # Python 包标识
+│   ├── core.py                 # 同步 ReAct 主循环、完成保护和步骤控制
+│   ├── event_log.py            # JSONL 事件追加、查询、回放与统计
+│   ├── loop_detector.py        # 重复动作、无进展和工具调用循环检测
+│   ├── orchestrate.py          # TaskEngine/worktree/bus/权限/沙箱异步组合根
 │   ├── prompt.py               # System prompt 与任务上下文组装
-│   ├── loop_detector.py        # 重复动作、无进展和循环调用检测
-│   └── event_log.py            # JSONL 事件追加、回放与统计
-├── task/engine.py              # SQLite WAL DAG 任务机与原子状态转换
-├── runtime/worktree.py         # Git worktree 事务生命周期和异常清理
-├── ipc/bus.py                  # asyncio.Queue 发布/订阅事件总线
-├── harness/                    # Hooks、权限决策和统一工具执行管线
-│   ├── executor.py
-│   ├── permission.py
-│   └── hooks.py
-├── tools/                      # Agent 可调用的工具与命令运行时
-│   ├── base.py                 # BaseTool、ToolResult、ToolRegistry
-│   ├── file_tool.py            # 文件查看和修改
-│   ├── shell_tool.py           # Shell 执行和危险命令识别
-│   ├── search_tool.py          # 文件、文本和符号搜索
-│   ├── test_tool.py            # pytest 执行与结果解析
-│   ├── git_tool.py             # Git 状态、差异、暂存和提交
-│   ├── runtime.py              # LocalRuntime 与 DockerRuntime
-│   └── sandbox.Dockerfile      # 默认 Python 沙箱镜像
-├── llm/                        # LLM 抽象、Provider 实现、路由和错误类型
-│   ├── base.py
-│   ├── anthropic_backend.py
-│   ├── openai_compat.py
-│   ├── router.py
-│   └── errors.py
-├── context/                    # 历史窗口、仓库地图和 token 预算
-├── entry/                      # CLI、Chat、HTTP API 和 GitHub Issue 入口
-│   ├── cli.py
-│   ├── chat.py
-│   ├── api.py                  # FastAPI、worker、SSE 和 dashboard
+│   └── task.py                 # Task、Action、Observation、Event、RunResult
+├── coding_agent.egg-info/      # editable install 生成的包元数据；可重新生成
+│   ├── PKG-INFO                # 项目名称、版本、依赖等元数据快照
+│   ├── SOURCES.txt             # 构建系统收录的源文件清单
+│   ├── dependency_links.txt    # setuptools 兼容依赖链接元数据
+│   ├── entry_points.txt        # agent CLI 入口映射
+│   ├── requires.txt            # 安装依赖与可选依赖清单
+│   └── top_level.txt           # 安装后暴露的顶层 Python 包
+├── config/                     # 应用配置定义与加载
+│   ├── default.yaml            # Provider、模型、预算、工具和上下文默认值
+│   └── schema.py               # YAML/.env 解析、dataclass 配置和 CLI 覆盖
+├── context/                    # 注入 ReAct 循环的上下文管理
+│   ├── __init__.py             # Python 包标识
+│   ├── history.py              # 对话历史窗口、追加与裁剪
+│   ├── repo_map.py             # tree-sitter 仓库符号摘要
+│   └── token_budget.py         # token 估算、预算分配与截断
+├── entry/                      # 用户和外部系统入口
+│   ├── api.py                  # FastAPI 路由、worker、SSE 与 dashboard
 │   ├── api_store.py            # HTTP 任务生命周期 SQLite 存储
-│   └── github_issue.py
-├── config/                     # 默认 YAML、.env 加载和类型化配置
-├── tests/                      # 单元、并发、集成和 Docker 沙箱测试
-├── scripts/                    # M1/M4 演示及本地启动脚本
-├── .codex/config.toml          # Codex 项目级沙箱配置
-├── pyproject.toml              # 包、依赖、pytest 和 agent CLI 配置
-├── smoke_test.py               # 配置、模型和工具链联通检查
-├── linked_list.py              # Agent 生成能力示例
-├── quicksort.py                # Agent 生成能力示例
-├── README.md                   # 当前架构、安装和使用说明
-└── USAGE.md                    # 补充使用教程
+│   ├── chat.py                 # 多轮 ChatSession
+│   ├── cli.py                  # agent run/chat/log 命令及工具注册
+│   └── github_issue.py         # GitHub Issue → Agent → Pull Request 流程
+├── harness/                    # 工具调用的安全拦截管线
+│   ├── __init__.py             # Python 包标识与公共接口出口
+│   ├── executor.py             # Hooks → Permission → Tool 的统一执行器
+│   ├── hooks.py                # 工具执行前后扩展点
+│   └── permission.py           # ALLOW/CONFIRM/DENY 与 workspace 路径边界
+├── ipc/                        # 进程内异步通信
+│   ├── __init__.py             # Python 包标识与 AgentBus 导出
+│   └── bus.py                  # asyncio.Queue topic 发布/订阅总线
+├── llm/                        # 模型后端抽象与 Provider 适配
+│   ├── __init__.py             # Python 包标识
+│   ├── anthropic_backend.py    # Anthropic 原生 tool_use 后端
+│   ├── base.py                 # LLMBackend 接口、响应类型和 MockBackend
+│   ├── errors.py               # 可重试、过载和协议错误类型
+│   ├── openai_compat.py        # OpenAI-compatible、流式响应和文本动作解析
+│   ├── openai_responses.py     # OpenAI Responses 文本、工具调用与事件流适配
+│   └── router.py               # Provider、base URL 与 API key 路由
+├── runtime/                    # 代码工作区事务
+│   ├── __init__.py             # Python 包标识与 worktree 接口导出
+│   └── worktree.py             # Git worktree 创建、绑定、统计和异常清理
+├── scripts/                    # 开发与里程碑演示脚本
+│   ├── m1_demo.py              # TaskEngine 与 WorktreeSession 事务演示
+│   ├── m4_demo.py              # 编排、权限、事件和清理闭环演示
+│   └── start.sh                # 当前机器的 venv/.env/CLI 启动辅助脚本
+├── task/                       # 持久化任务状态层
+│   ├── __init__.py             # Python 包标识与 TaskEngine 类型导出
+│   └── engine.py               # SQLite WAL DAG、状态转换和并发原子认领
+├── tests/                      # 自动化测试；内部文件按要求不在此展开
+├── tools/                      # Agent 可调用工具与命令运行时
+│   ├── __init__.py             # Python 包标识
+│   ├── base.py                 # BaseTool、ToolResult 与 ToolRegistry
+│   ├── file_tool.py            # 文件读取、创建、替换和路径校验
+│   ├── git_tool.py             # Git status/diff/add/commit 工具
+│   ├── runtime.py              # Runtime、LocalRuntime 与 DockerRuntime
+│   ├── sandbox.Dockerfile      # 默认 Python Docker 沙箱镜像
+│   ├── search_tool.py          # 文件、文本与代码符号搜索
+│   ├── shell_tool.py           # Shell 执行、超时、截断与危险命令识别
+│   └── test_tool.py            # pytest 执行与结果解析
+├── .gitignore                  # Git 忽略规则：缓存、日志、密钥和运行产物
+├── README.md                   # 当前架构、安装、使用和开发说明
+├── USAGE.md                    # 补充使用教程
+├── linked_list.py              # Agent 生成能力示例：单链表实现
+├── pyproject.toml              # 包元数据、依赖、CLI、pytest 与 coverage 配置
+├── quicksort.py                # Agent 生成能力示例：多种快速排序实现
+└── smoke_test.py               # 配置、模型后端和工具链联通检查
 ```
 
-运行时还可能生成以下非源码目录：
+从职责上看，`agent/` 是同步控制核心；`task/`、`runtime/` 和 `ipc/` 提供事务与
+异步基础设施；`harness/` 和 `tools/` 构成受控执行边界；`llm/` 与 `context/`
+提供决策输入；`entry/` 负责把这些能力暴露给 CLI、HTTP 和 GitHub。
 
-- `logs/`：JSONL 事件日志和隔离模式 TaskEngine 数据库。
-- `.forge/`：HTTP API 任务元数据，例如 `api_tasks.db`。
-- `__pycache__/`、`.pytest_cache/`、`*.egg-info/`：可重新生成的 Python 缓存。
+以下内容是本地状态或可再生成产物：
+
+- `.forge/` 保存 API 任务状态，删除会丢失已有 API 任务记录。
+- `.worktrees/` 由隔离运行创建并在结束时清理；异常残留可在确认无任务运行后处理。
+- `coding_agent.egg-info/` 由 `pip install -e .` 生成，可以删除并重新安装恢复。
+- `logs/`、`__pycache__/`、`.pytest_cache/` 等运行缓存不属于项目源码，应保持忽略。
 
 ## 环境要求
 
@@ -157,10 +203,21 @@ agent chat --provider anthropic
 
 ### OpenAI
 
+Chat Completions（默认兼容模式）：
+
 ```bash
 export OPENAI_API_KEY="sk-..."
 agent chat --provider openai --model gpt-4o
 ```
+
+Responses API（OpenAI 官方新接口或仅开放 `/responses` 的中转渠道）：
+
+```bash
+agent chat --provider openai --protocol responses --model gpt-5.4
+```
+
+`base_url` 应填写到 API 版本根路径，例如 `https://api.example.com/v1`；不要把
+`/responses` 写进 `base_url`，SDK 会自动追加资源路径。
 
 ### DeepSeek
 
@@ -196,6 +253,7 @@ agent --config /path/to/agent.yaml chat --repo /path/to/project
 ```yaml
 llm:
   provider: anthropic
+  protocol: auto               # auto | chat_completions | responses
   model: ${MODEL_ID}
   api_key: ${ANTHROPIC_API_KEY}
   base_url: ${ANTHROPIC_BASE_URL}
@@ -218,6 +276,14 @@ context:
   history_window: 20
 ```
 
+协议选择规则：
+
+| `protocol` | 后端 | 典型场景 |
+| --- | --- | --- |
+| `auto` | Anthropic 走 Messages，其余走 Chat Completions | 默认，兼容旧配置 |
+| `chat_completions` | `OpenAICompatBackend` | OpenAI、DeepSeek、Groq、Ollama及多数中转站 |
+| `responses` | `OpenAIResponsesBackend` | OpenAI Responses 或仅开放 `/responses` 的渠道 |
+
 配置加载器可用`FORGE_ENV_FILE=/path/to/.env` 指定；shell 中已经存在的环境变量不会
 被 `.env` 覆盖。
 
@@ -231,6 +297,8 @@ context:
 agent chat
 agent chat --repo /path/to/project
 agent chat --provider deepseek --model deepseek-chat
+agent chat --provider openai --protocol responses --model gpt-5.4
+agent chat --no-stream                    # 排查中转站流式响应兼容问题
 agent chat --repo /path/to/project --max-steps 60 --verbose
 ```
 
@@ -250,6 +318,7 @@ agent run --repo /path/to/project --task "修复失败的单元测试"
 agent run --repo /path/to/project --task-file task.txt
 agent run --repo . --task "重构解析器" --max-steps 60
 agent run --repo . --task "更新依赖" --confirm
+agent run --repo . --protocol responses --no-stream --task "读取配置并总结"
 ```
 
 `--confirm` 会在危险 shell 命令执行前请求确认。未启用时仍会经过内置权限和
@@ -416,8 +485,10 @@ agent [--config PATH] COMMAND
 agent chat
   [--repo PATH]
   [--provider PROVIDER]
+  [--protocol auto|chat_completions|responses]
   [--model MODEL]
   [--max-steps N]
+  [--stream | --no-stream]
   [--sandbox]
   [--verbose]
 
@@ -425,8 +496,10 @@ agent run
   (--task TEXT | --task-file FILE)
   [--repo PATH]
   [--provider PROVIDER]
+  [--protocol auto|chat_completions|responses]
   [--model MODEL]
   [--max-steps N]
+  [--stream | --no-stream]
   [--confirm]
   [--sandbox]
   [--isolate]
@@ -477,6 +550,18 @@ pip install -e ".[full]"
 **提示 API key 缺失**
 
 确认 provider 对应的环境变量已经导出，或确认 `FORGE_ENV_FILE` 指向的文件可读。
+
+**中转站提示 GPT 只支持 Responses API**
+
+在 YAML 中设置 `protocol: responses`，或在命令行加入 `--protocol responses`。
+如果只是把 `--stream` 改成 `--no-stream`，请求仍会发送到原来的协议端点。
+
+**中转站返回 `500/502` 或流式响应结构不完整**
+
+先用 `--no-stream` 复测。非流式成功通常表示流式事件格式不兼容；非流式仍返回
+`500/502` 通常是模型名称、渠道权限或上游服务问题。后端会安全跳过空
+`choices`、空 `delta/message`，并在缺少 `usage` 时估算 token，不再因这些响应
+形态直接触发 `NoneType.content`。
 
 **Docker 沙箱无法启动**
 

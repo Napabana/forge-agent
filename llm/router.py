@@ -5,7 +5,7 @@ llm/router.py
 
 支持的 provider：
     anthropic  → AnthropicBackend
-    openai     → OpenAICompatBackend (base_url=None)
+    openai     → OpenAICompatBackend or OpenAIResponsesBackend
     deepseek   → OpenAICompatBackend (base_url=https://api.deepseek.com)
     groq       → OpenAICompatBackend (base_url=https://api.groq.com/openai/v1)
     ollama     → OpenAICompatBackend (base_url=http://localhost:11434/v1)
@@ -44,6 +44,7 @@ def create_backend(
     api_key: str | None = None,
     base_url: str | None = None,
     max_tokens: int = 4096,
+    protocol: str = "auto",
 ) -> LLMBackend:
     """
     工厂函数，根据 provider 创建对应的 LLMBackend。
@@ -54,6 +55,7 @@ def create_backend(
         api_key:    API key，None 时从环境变量读取
         base_url:   覆盖默认 base_url（通常不需要手动传）
         max_tokens: 最大输出 token 数
+        protocol:   "auto" | "chat_completions" | "responses"
 
     Returns:
         对应的 LLMBackend 实例
@@ -62,6 +64,7 @@ def create_backend(
         ValueError: provider 不支持，或 api_key 缺失
     """
     provider = provider.lower().strip()
+    protocol = protocol.lower().strip().replace("-", "_")
 
     if provider not in _PROVIDER_BASE_URLS:
         supported = ", ".join(sorted(_PROVIDER_BASE_URLS))
@@ -82,6 +85,10 @@ def create_backend(
         resolved_key = "ollama"
 
     if provider == "anthropic":
+        if protocol not in {"auto", "anthropic", "messages"}:
+            raise ValueError(
+                f"Protocol '{protocol}' is incompatible with provider 'anthropic'"
+            )
         from llm.anthropic_backend import AnthropicBackend
         return AnthropicBackend(
             model=model,
@@ -90,11 +97,26 @@ def create_backend(
             base_url=base_url or None,
         )
 
-    # 所有 OpenAI-compatible providers
-    from llm.openai_compat import OpenAICompatBackend
-
     # base_url 优先级：调用方显式传入 > provider 默认值
     resolved_base_url = base_url or _PROVIDER_BASE_URLS[provider]
+
+    if protocol in {"responses", "response"}:
+        from llm.openai_responses import OpenAIResponsesBackend
+        return OpenAIResponsesBackend(
+            model=model,
+            api_key=resolved_key,
+            base_url=resolved_base_url,
+            max_tokens=max_tokens,
+        )
+
+    if protocol not in {"auto", "chat", "chat_completion", "chat_completions"}:
+        raise ValueError(
+            "Unsupported LLM protocol "
+            f"'{protocol}'. Supported: auto, chat_completions, responses"
+        )
+
+    # 所有 OpenAI-compatible Chat Completions providers
+    from llm.openai_compat import OpenAICompatBackend
 
     return OpenAICompatBackend(
         model=model,
@@ -110,6 +132,7 @@ def create_backend_from_config(config: dict) -> LLMBackend:
 
     config 格式：
         provider: anthropic
+        protocol: auto             # auto | chat_completions | responses
         model: claude-sonnet-4-5
         api_key: sk-...        # 可选，缺省读环境变量
         base_url:              # 可选
@@ -122,4 +145,5 @@ def create_backend_from_config(config: dict) -> LLMBackend:
         api_key=config.get("api_key") or None,
         base_url=config.get("base_url") or None,
         max_tokens=int(config.get("max_tokens", 4096)),
+        protocol=config.get("protocol", "auto"),
     )

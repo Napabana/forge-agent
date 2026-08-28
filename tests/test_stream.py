@@ -9,6 +9,7 @@ tests/test_stream.py
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -205,6 +206,93 @@ class TestCoreStreamPath:
 
 
 # ---------------------------------------------------------------------------
+# OpenAI-compatible gateway edge cases
+# ---------------------------------------------------------------------------
+
+class TestOpenAICompatStreamShapes:
+    def _make_backend(self, model="gpt-4o"):
+        with patch("openai.OpenAI"):
+            from llm.openai_compat import OpenAICompatBackend
+            return OpenAICompatBackend(model=model, api_key="sk-test")
+
+    @staticmethod
+    def _choice(*, delta=None, message=None, finish_reason=None):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=delta,
+                message=message,
+                finish_reason=finish_reason,
+            )]
+        )
+
+    def test_null_delta_and_empty_choices_are_ignored(self):
+        backend = self._make_backend()
+        chunks = [
+            SimpleNamespace(choices=[]),
+            self._choice(delta=None),
+            self._choice(
+                delta=SimpleNamespace(
+                    content="done",
+                    tool_calls=None,
+                    reasoning_content=None,
+                )
+            ),
+            self._choice(delta=None, finish_reason="stop"),
+        ]
+        backend._client.chat.completions.create.return_value = iter(chunks)
+
+        collected = []
+        result = backend.stream(
+            [LLMMessage(role="user", content="go")],
+            [],
+            on_text=collected.append,
+        )
+
+        assert result.action.action_type == ActionType.FINISH
+        assert result.action.message == "done"
+        assert collected == ["done"]
+
+    def test_stream_accepts_message_instead_of_delta(self):
+        backend = self._make_backend()
+        message = SimpleNamespace(
+            content="gateway fallback",
+            tool_calls=None,
+            reasoning="gateway thought",
+        )
+        backend._client.chat.completions.create.return_value = iter([
+            self._choice(delta=None, message=message, finish_reason="stop"),
+        ])
+
+        thoughts = []
+        result = backend.stream(
+            [LLMMessage(role="user", content="go")],
+            [],
+            on_thought=thoughts.append,
+        )
+
+        assert result.action.action_type == ActionType.FINISH
+        assert result.action.thought == "gateway thought"
+        assert thoughts == ["gateway thought"]
+
+    def test_text_fallback_ignores_null_delta(self):
+        backend = self._make_backend(model="deepseek-reasoner")
+        content = SimpleNamespace(content="TASK_COMPLETE: done")
+        backend._client.chat.completions.create.return_value = iter([
+            self._choice(delta=None),
+            self._choice(delta=content),
+            self._choice(delta=None, finish_reason="stop"),
+        ])
+
+        result = backend.stream(
+            [LLMMessage(role="user", content="go")],
+            [],
+        )
+
+        assert result.action.action_type == ActionType.FINISH
+        assert result.action.message == "done"
+
+
+# ---------------------------------------------------------------------------
 # CLI --stream 参数
 # ---------------------------------------------------------------------------
 
@@ -224,6 +312,16 @@ class TestCliStreamOption:
         result = runner.invoke(cli, ["run", "--help"])
         # 默认 on 所以帮助文字里有 default
         assert "stream" in result.output.lower()
+
+    @pytest.mark.parametrize("command", ["run", "chat"])
+    def test_no_stream_option_registered(self, command):
+        from click.testing import CliRunner
+        from entry.cli import cli
+
+        result = CliRunner().invoke(cli, [command, "--help"])
+
+        assert result.exit_code == 0
+        assert "--no-stream" in result.output
 
 
 # ---------------------------------------------------------------------------

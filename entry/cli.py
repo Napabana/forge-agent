@@ -201,8 +201,13 @@ def cli(ctx: click.Context, config: str | None) -> None:
 @click.option("--task-file", "-f", default=None, help="Read task description from file")
 @click.option("--model", "-m", default=None, help="Override LLM model name")
 @click.option("--provider", "-p", default=None, help="Override LLM provider")
+@click.option("--protocol", default=None, help="Override LLM protocol: chat_completions or responses")
 @click.option("--max-steps", default=None, type=int, help="Override max steps")
-@click.option("--stream", "-s", is_flag=True, default=True, help="Enable streaming output (default: on)")
+@click.option(
+    "--stream/--no-stream", "-s",
+    default=True,
+    help="Enable or disable streaming output (default: on)",
+)
 @click.option("--confirm", is_flag=True, default=False, help="Ask confirmation before running dangerous shell commands")
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
 @click.option("--isolate", is_flag=True, default=False,
@@ -217,6 +222,7 @@ def run(
     task_file: str | None,
     model: str | None,
     provider: str | None,
+    protocol: str | None,
     max_steps: int | None,
     stream: bool,
     confirm: bool,
@@ -236,7 +242,7 @@ def run(
     config = load_config(ctx.obj.get("config_path"))
     # 2.加载优先级更高的配置
     config = merge_cli_overrides(
-        config, provider=provider, model=model, max_steps=max_steps
+        config, provider=provider, protocol=protocol, model=model, max_steps=max_steps
     )
 
     # 解析任务描述 
@@ -256,6 +262,7 @@ def run(
     # 打印运行信息
     click.echo(bold(f"\n🤖 Coding Agent"))
     click.echo(f"  Provider : {config.llm.provider}")
+    click.echo(f"  Protocol : {config.llm.protocol}")
     click.echo(f"  Model    : {config.llm.model}")
     click.echo(f"  Repo     : {repo_path}")
     click.echo(f"  Max steps: {config.agent.max_steps}\n")
@@ -264,6 +271,7 @@ def run(
     try:
         backend = create_backend_from_config({
             "provider": config.llm.provider,
+            "protocol": config.llm.protocol,
             "model":    config.llm.model,
             "api_key":  config.llm.api_key or None,
             "base_url": config.llm.base_url or None,
@@ -408,7 +416,13 @@ def _print_run_result(result, elapsed: float) -> None:
 @click.option("--repo", "-r", default=".", show_default=True, help="Path to the target repository (default: current directory)")
 @click.option("--model", "-m", default=None, help="Override LLM model name")
 @click.option("--provider", "-p", default=None, help="Override LLM provider")
+@click.option("--protocol", default=None, help="Override LLM protocol: chat_completions or responses")
 @click.option("--max-steps", default=None, type=int, help="Max steps per round")
+@click.option(
+    "--stream/--no-stream",
+    default=True,
+    help="Enable or disable streaming output (default: on)",
+)
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logs")
 @click.pass_context
@@ -417,7 +431,9 @@ def chat(
     repo: str,
     model: str | None,
     provider: str | None,
+    protocol: str | None,
     max_steps: int | None,
+    stream: bool,
     sandbox: bool,
     verbose: bool,
 ) -> None:
@@ -432,7 +448,13 @@ def chat(
     )
 
     config = load_config(ctx.obj.get("config_path"))
-    config = merge_cli_overrides(config, provider=provider, model=model, max_steps=max_steps)
+    config = merge_cli_overrides(
+        config,
+        provider=provider,
+        protocol=protocol,
+        model=model,
+        max_steps=max_steps,
+    )
 
     repo_path = Path(repo).resolve()
     if not repo_path.exists():
@@ -442,6 +464,7 @@ def chat(
     try:
         backend = create_backend_from_config({
             "provider":   config.llm.provider,
+            "protocol":   config.llm.protocol,
             "model":      config.llm.model,
             "api_key":    config.llm.api_key or None,
             "base_url":   config.llm.base_url or None,
@@ -469,11 +492,13 @@ def chat(
         repo_path=str(repo_path),
         log_dir=config.agent.log_dir,
         confirm_callback=terminal_confirm,   # chat 模式默认开启确认
+        stream=stream,
     )
 
     # 欢迎信息
     click.echo(bold(f"\n🤖 Coding Agent — Chat Mode"))
     click.echo(f"  Provider : {config.llm.provider}")
+    click.echo(f"  Protocol : {config.llm.protocol}")
     click.echo(f"  Model    : {config.llm.model}")
     click.echo(f"  Repo     : {repo_path}")
     click.echo(dim(f"  Type your task. Commands: /exit /stats /clear /help\n"))

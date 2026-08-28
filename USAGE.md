@@ -76,6 +76,7 @@ pip install tiktoken
 ```yaml
 llm:
   provider: deepseek
+  protocol: auto                    # 默认走 Chat Completions
   model: deepseek-v4-flash        # 快速版，适合日常任务
   # model: deepseek-v4-pro        # 旗舰版，适合复杂任务
   api_key: ${DEEPSEEK_API_KEY}
@@ -87,26 +88,44 @@ llm:
 ```yaml
 llm:
   provider: anthropic
+  protocol: auto                    # 自动使用 Anthropic Messages
   model: claude-sonnet-4-5
   api_key: ${ANTHROPIC_API_KEY}
   base_url:                        # 留空
 ```
 
-**OpenAI**
+**OpenAI：Chat Completions**
 
 ```yaml
 llm:
   provider: openai
+  protocol: chat_completions
   model: gpt-4o
   api_key: ${OPENAI_API_KEY}
   base_url:                        # 留空
 ```
+
+**OpenAI：Responses API**
+
+OpenAI 官方新接口或中转站明确要求“Responses 协议”时使用：
+
+```yaml
+llm:
+  provider: openai
+  protocol: responses
+  model: gpt-5.4
+  api_key: ${OPENAI_API_KEY}        # 中转站可换成自己的 Key 变量
+  base_url:                         # 官方留空；中转站填写到 /v1
+```
+
+`base_url` 不要包含末尾的 `/responses`，OpenAI SDK 会自动追加该路径。
 
 **Groq（速度极快，适合调试）**
 
 ```yaml
 llm:
   provider: groq
+  protocol: auto
   model: llama3-70b-8192
   api_key: ${GROQ_API_KEY}
   base_url: https://api.groq.com/openai/v1
@@ -117,6 +136,7 @@ llm:
 ```yaml
 llm:
   provider: ollama
+  protocol: auto
   model: llama3               # 本地已拉取的模型名
   api_key:                    # 留空
   base_url: http://localhost:11434/v1
@@ -171,6 +191,10 @@ agent chat --repo /path/to/project
 # 切换模型（不改配置文件）
 agent chat --model deepseek-v4-pro
 agent chat --model gpt-4o --provider openai
+agent chat --model gpt-5.4 --provider openai --protocol responses
+
+# 中转站流式响应异常时，先关闭流式进行对照测试
+agent chat --no-stream
 ```
 
 ### 交互界面
@@ -180,6 +204,7 @@ agent chat --model gpt-4o --provider openai
 ```
 🤖 Coding Agent — Chat Mode
   Provider : deepseek
+  Protocol : auto
   Model    : deepseek-v4-flash
   Repo     : /your/project
   Type your task. Commands: /exit /stats /clear /help
@@ -283,8 +308,10 @@ agent run --task-file task.txt
 -f, --task-file TEXT  从文件读取任务描述
 -m, --model TEXT      覆盖模型名
 -p, --provider TEXT   覆盖 provider
+    --protocol TEXT   覆盖协议：auto、chat_completions 或 responses
     --max-steps INT   最大步数（默认 40）
--s, --stream          流式输出（默认开启）
+-s, --stream          开启流式输出（默认）
+    --no-stream       关闭流式输出，用于兼容性排查
     --confirm         危险命令需要用户确认
     --sandbox         在 Docker 沙箱里执行命令
 -v, --verbose         显示 debug 日志
@@ -585,6 +612,37 @@ agent run --task-file task.txt
 agent chat --verbose
 ```
 
+**Q：中转站说 GPT 只支持 Responses 协议**
+
+这表示渠道只接受 `/v1/responses`，而不是 `/v1/chat/completions`。配置：
+
+```yaml
+llm:
+  provider: openai
+  protocol: responses
+  model: gpt-5.4
+  api_key: ${KRILL_API_KEY}
+  base_url: https://api.example.com/v1
+```
+
+也可以临时覆盖：
+
+```bash
+agent run --provider openai --protocol responses --model gpt-5.4 \
+  --no-stream --task "读取 pyproject.toml 并总结"
+```
+
+**Q：中转站返回 500/502 或 `NoneType.content`**
+
+先运行同一任务并加入 `--no-stream`：
+
+- 非流式成功：通常是中转站的流式事件格式与标准不完全一致。
+- 非流式仍是 500/502：通常是上游不可用、模型名称错误或渠道权限问题。
+- 403 且提示没有模型渠道：Key 已被识别，但没有该模型的可用路由。
+
+当前 OpenAI-compatible 后端会忽略空 `choices`、空 `delta/message` 和只有
+`finish_reason` 的结束帧；缺少 `usage` 时会估算 token。
+
 **Q：agent 陷入循环，一直重复同样的操作**
 
 内置循环检测会自动处理（连续 3 步完全相同的操作会触发 GIVE_UP）。
@@ -645,6 +703,7 @@ python -m entry.github_issue --repo owner/repo --issue 42 \
 ```yaml
 llm:
   provider: deepseek          # 模型提供商
+  protocol: auto              # auto | chat_completions | responses
   model: deepseek-v4-flash    # 模型名
   api_key: ${DEEPSEEK_API_KEY}  # 环境变量引用
   base_url: https://api.deepseek.com  # OpenAI-compatible 时填写
@@ -673,10 +732,10 @@ context:
 
 ```bash
 # 日常开发用 flash（快且省钱）
-agent chat -c config/dev.yaml
+agent -c config/dev.yaml chat
 
 # 复杂任务用 pro
-agent run --task "..." -c config/pro.yaml
+agent -c config/pro.yaml run --task "..."
 ```
 
 `config/dev.yaml` 示例：
@@ -684,6 +743,7 @@ agent run --task "..." -c config/pro.yaml
 ```yaml
 llm:
   provider: deepseek
+  protocol: auto
   model: deepseek-v4-flash
   api_key: ${DEEPSEEK_API_KEY}
   base_url: https://api.deepseek.com
@@ -715,6 +775,8 @@ python smoke_test.py
 cd your-project
 agent chat                          # 开启对话
 agent chat --model deepseek-v4-pro  # 切换模型
+agent chat --protocol responses --model gpt-5.4
+agent chat --no-stream              # 关闭流式，排查中转站兼容性
 
 # 一次性任务
 agent run --task "fix the failing tests"

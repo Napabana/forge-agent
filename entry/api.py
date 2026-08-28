@@ -50,6 +50,7 @@ class TaskCreateRequest(BaseModel):
     repo_path: str = Field(..., min_length=1)
     prompt: str = Field(..., min_length=1)
     provider: str | None = None
+    protocol: str | None = None
     model: str | None = None
     max_steps: int | None = Field(default=None, ge=1, le=200)
     sandbox: bool = False
@@ -239,11 +240,13 @@ def run_agent_task(
         cfg = merge_cli_overrides(
             cfg,
             provider=request.get("provider"),
+            protocol=request.get("protocol"),
             model=request.get("model"),
             max_steps=request.get("max_steps"),
         )
         backend = create_backend_from_config({
             "provider": cfg.llm.provider,
+            "protocol": cfg.llm.protocol,
             "model": cfg.llm.model,
             "api_key": cfg.llm.api_key or None,
             "base_url": cfg.llm.base_url or None,
