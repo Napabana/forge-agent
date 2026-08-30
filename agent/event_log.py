@@ -196,11 +196,32 @@ class EventLog:
     def log_worktree_removed(
         self, task_id: str, name: str, path: str, reason: str
     ) -> None:
-        """隔离工作区已移除。reason ∈ {"normal","exception","kept"}。"""
+        """隔离工作区已移除。"""
         self._append(Event(
             event_type=EventType.WORKTREE_REMOVED,
             task_id=task_id,
             payload={"name": name, "path": path, "reason": reason},
+        ))
+
+    def log_worktree_retained(
+        self,
+        task_id: str,
+        branch: str,
+        path: str,
+        *,
+        reason: str,
+        changed_files: list[str],
+    ) -> None:
+        """隔离工作区包含成果，已保留供 review。"""
+        self._append(Event(
+            event_type=EventType.WORKTREE_RETAINED,
+            task_id=task_id,
+            payload={
+                "branch": branch,
+                "path": path,
+                "reason": reason,
+                "changed_files": changed_files,
+            },
         ))
 
     def log_permission_decision(

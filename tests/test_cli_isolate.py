@@ -21,6 +21,7 @@ def test_isolate_in_run_help():
     runner = CliRunner()
     result = runner.invoke(cli, ["run", "--help"])
     assert "--isolate" in result.output
+    assert "--result-policy" in result.output
 
 
 def test_isolate_invokes_orchestrate_run(tmp_path, monkeypatch):
@@ -79,11 +80,55 @@ def test_isolate_invokes_orchestrate_run(tmp_path, monkeypatch):
     assert "kwargs" in called, "--isolate 应触发 orchestrate_run"
     kw = called["kwargs"]
     assert kw.get("sandbox") is False
+    assert kw.get("result_policy") == "keep-if-changed"
     assert kw.get("backend") is not None
     # task 的 repo_path 指向传入的 repo
     assert kw["task"].repo_path == str(repo)
     # exit code 反映 is_success
     assert result.exit_code == 0
+
+
+def test_isolate_accepts_discard_result_policy(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    called = {}
+
+    class _FakeResult:
+        def is_success(self): return True
+        @property
+        def status(self):
+            class S:
+                value = "success"
+            return S()
+        steps_taken = 0
+        total_tokens = 0
+        error = None
+        worktree = None
+
+    async def _fake_orchestrate(**kwargs):
+        called.update(kwargs)
+        return _FakeResult()
+
+    import agent.orchestrate as orch_mod
+    import entry.cli as cli_mod
+    import llm.router as router_mod
+    monkeypatch.setattr(orch_mod, "orchestrate_run", _fake_orchestrate)
+    monkeypatch.setattr(cli_mod, "create_backend_from_config", lambda cfg: object())
+    monkeypatch.setattr(router_mod, "create_backend_from_config", lambda cfg: object())
+
+    from entry.cli import cli
+    result = CliRunner().invoke(
+        cli,
+        [
+            "run", "--task", "verify only", "--repo", str(repo),
+            "--isolate", "--result-policy", "discard",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert called["result_policy"] == "discard"
 
 
 def test_build_registry_injects_workspace_into_file_tools(tmp_path):

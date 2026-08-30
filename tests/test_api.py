@@ -8,6 +8,7 @@ installed, so the default CLI/dev test suite remains lightweight.
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 import time
 
@@ -20,10 +21,49 @@ import httpx  # noqa: E402
 
 from entry.api import create_app  # noqa: E402
 from entry.api_store import (  # noqa: E402
+    ApiTaskStore,
     STATUS_CANCELED,
     STATUS_RUNNING,
     STATUS_SUCCEEDED,
 )
+
+
+def test_api_store_migrates_existing_database_for_artifacts(tmp_path):
+    db_path = tmp_path / "legacy-api.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE api_tasks (
+            id             TEXT PRIMARY KEY,
+            repo_path      TEXT NOT NULL,
+            prompt         TEXT NOT NULL,
+            status         TEXT NOT NULL,
+            created_at     REAL NOT NULL,
+            started_at     REAL,
+            finished_at    REAL,
+            result_summary TEXT,
+            error          TEXT,
+            log_path       TEXT,
+            forge_task_id  TEXT,
+            options_json   TEXT NOT NULL DEFAULT '{}'
+        );
+        """
+    )
+    conn.close()
+
+    store = ApiTaskStore(db_path)
+    task_id = store.create_task(repo_path="/repo", prompt="fix")
+    assert store.mark_running(task_id)
+    store.mark_finished(
+        task_id,
+        status=STATUS_SUCCEEDED,
+        artifact={"disposition": "retained", "branch": "wt/task-1"},
+    )
+    assert store.get_task(task_id).artifact == {
+        "disposition": "retained",
+        "branch": "wt/task-1",
+    }
+    store.close()
 
 
 def _wait_for(predicate, timeout=2.0):
@@ -137,6 +177,20 @@ async def test_create_and_read_queued_task(tmp_path):
         assert body["id"] == task_id
         assert body["repo_path"] == str(repo.resolve())
         assert body["prompt"] == "fix tests"
+        assert body["options"]["result_policy"] == "keep-if-changed"
+
+
+async def test_create_task_rejects_invalid_result_policy(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    app = create_app(store_path=tmp_path / "api.db", runner=lambda *args: None)
+    async with await _client(app) as client:
+        response = await client.post("/tasks", json={
+            "repo_path": str(repo),
+            "prompt": "fix tests",
+            "result_policy": "delete-maybe",
+        })
+        assert response.status_code == 422
 
 
 async def test_list_tasks(tmp_path):
@@ -182,6 +236,11 @@ async def test_events_endpoint_reads_jsonl(tmp_path):
             result_summary="done",
             log_path=str(log_path),
             forge_task_id="forge_1",
+            artifact={
+                "disposition": "retained",
+                "branch": "wt/task-1",
+                "path": "/repo/.worktrees/task-1",
+            },
         )
 
     app = create_app(store_path=tmp_path / "api.db", runner=runner)
@@ -198,6 +257,8 @@ async def test_events_endpoint_reads_jsonl(tmp_path):
             else None
         )
         assert task["result_summary"] == "done"
+        assert task["artifact"]["disposition"] == "retained"
+        assert task["artifact"]["branch"] == "wt/task-1"
 
         events = await client.get(f"/tasks/{task_id}/events")
         assert events.status_code == 200

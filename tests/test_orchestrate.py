@@ -28,6 +28,13 @@ from agent.orchestrate import orchestrate_run
 from agent.task import RunResult, RunStatus, Task
 from agent.core import AgentConfig
 from ipc.bus import AgentBus
+from runtime.worktree import (
+    WorktreeArtifact,
+    WorktreeChanges,
+    WorktreeDisposition,
+    WorktreeFinalizeAction,
+    WorktreeResultPolicy,
+)
 from task.engine import STATUS_COMPLETED, STATUS_FAILED, TaskEngine
 from tools.base import ToolRegistry
 from tools.file_tool import FileWriteTool
@@ -67,15 +74,50 @@ def fake_worktree_session(monkeypatch):
             self.task_engine = task_engine
             self.task_id = task_id
             self.path = self.repo_path / ".worktrees" / name
+            self.branch = f"wt/{name}"
+            self.base_commit = "base123"
+            self.created = False
 
-        async def __aenter__(self):
+        async def create(self):
             self.path.mkdir(parents=True, exist_ok=True)
+            self.created = True
             if self.task_engine is not None and self.task_id is not None:
                 self.task_engine.bind_worktree(self.task_id, self.name)
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
-            shutil.rmtree(self.path, ignore_errors=True)
+        async def inspect_changes(self):
+            files = tuple(sorted(
+                str(path.relative_to(self.path))
+                for path in self.path.rglob("*")
+                if path.is_file()
+            ))
+            return WorktreeChanges(
+                changed_files=files,
+                uncommitted_count=len(files),
+            )
+
+        async def finalize(self, action, *, changes=None, partial=False):
+            changes = changes or await self.inspect_changes()
+            if action == WorktreeFinalizeAction.RETAIN:
+                disposition = WorktreeDisposition.RETAINED
+                path = str(self.path)
+            else:
+                disposition = WorktreeDisposition.REMOVED
+                path = None
+                shutil.rmtree(self.path, ignore_errors=True)
+            return WorktreeArtifact(
+                disposition=disposition,
+                branch=self.branch,
+                path=path,
+                base_commit=self.base_commit,
+                head_commit=self.base_commit,
+                changed_files=changes.changed_files,
+                uncommitted_count=changes.uncommitted_count,
+                commit_count=changes.commit_count,
+                partial=partial,
+                cleanup_required=path is not None,
+                warning=changes.inspection_error,
+            )
 
     monkeypatch.setattr(orch_mod, "WorktreeSession", FakeWorktreeSession)
 
@@ -158,6 +200,35 @@ class WritingAgent:
 # ---------------------------------------------------------------------------
 
 class TestOrchestrateSuccess:
+    async def test_real_worktree_retains_generated_changes(
+        self, repo, tmp_path, monkeypatch,
+    ):
+        """真实 Git worktree 与显式 orchestrator finalize 必须能端到端保留成果。"""
+        import agent.orchestrate as orch_mod
+        from runtime.worktree import WorktreeSession as RealWorktreeSession
+
+        monkeypatch.setattr(orch_mod, "WorktreeSession", RealWorktreeSession)
+        engine = TaskEngine(tmp_path / "tasks.db")
+        result = await orchestrate_run(
+            backend=None,
+            task=Task(description="write", repo_path=str(repo)),
+            engine=engine,
+            registry_builder=_build_registry,
+            log_dir=str(tmp_path / "logs"),
+            agent_factory=WritingAgent,
+        )
+
+        assert result.is_success()
+        assert result.worktree is not None
+        assert result.worktree.disposition == WorktreeDisposition.RETAINED
+        retained_path = Path(result.worktree.path or "")
+        assert (retained_path / "ok.txt").read_text() == "hi"
+        assert "ok.txt" in result.worktree.changed_files
+
+        # 测试 fixture 内显式清理保留成果，避免给真实 git worktree 注册表留垃圾。
+        _git(["worktree", "remove", "--force", str(retained_path)], repo)
+        _git(["branch", "-D", result.worktree.branch], repo)
+
     async def test_success_completes_and_cleans(self, repo, tmp_path):
         engine = TaskEngine(tmp_path / "tasks.db")
         result = await orchestrate_run(
@@ -402,6 +473,10 @@ class TestOrchestratePermission:
             agent_factory=WritingAgent,
         )
         assert result.is_success()   # DENY 不应让 run 崩
+        assert result.worktree is not None
+        assert result.worktree.disposition == WorktreeDisposition.RETAINED
+        assert result.worktree.path
+        assert "ok.txt" in result.worktree.changed_files
         log_file = next((tmp_path / "logs").glob("*.jsonl"))
         decisions = [
             e for e in EventLog.open_existing(log_file).replay()
@@ -410,6 +485,24 @@ class TestOrchestratePermission:
         denied = [d for d in decisions if d.payload["decision"] == "deny"]
         assert denied, "越界写应有 deny 决策事件"
         assert denied[0].payload["tool"] == "file_write"
+
+    async def test_discard_policy_removes_generated_changes(self, repo, tmp_path):
+        engine = TaskEngine(tmp_path / "tasks.db")
+        result = await orchestrate_run(
+            backend=None,
+            task=Task(description="write then discard", repo_path=str(repo)),
+            engine=engine,
+            registry_builder=_build_registry,
+            log_dir=str(tmp_path / "logs"),
+            agent_factory=WritingAgent,
+            result_policy=WorktreeResultPolicy.DISCARD,
+        )
+        assert result.is_success()
+        assert result.worktree is not None
+        assert result.worktree.disposition == WorktreeDisposition.REMOVED
+        assert result.worktree.path is None
+        wt_dir = repo / ".worktrees"
+        assert not wt_dir.exists() or not any(wt_dir.iterdir())
 
 
 # ---------------------------------------------------------------------------

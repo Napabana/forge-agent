@@ -4,7 +4,7 @@ runtime/worktree.py
 Git Worktree 异步事务上下文（M1 Task 1.2）。
 
 把 s20_comprehensive/code.py 的同步函数式 worktree 系统（171-283 行）迁移成
-async 上下文管理器 WorktreeSession。完整保留 s20 的命令与约定：
+异步 WorktreeSession。完整保留 s20 的命令与约定：
 - git worktree add <path> -b wt/<name> <base>
 - git worktree remove <path> --force  +  git branch -D wt/<name>
 - 名字校验规则（validate_worktree_name，code.py:181）
@@ -15,8 +15,8 @@ async 上下文管理器 WorktreeSession。完整保留 s20 的命令与约定�
 - __aexit__ 无论是否抛异常，强制 git worktree remove --force + 清理残余
   → 智能体崩溃 / 测试失败时文件系统能安全、干净地回滚
 
-并发模型：每个会话用 asyncio.create_subprocess_shell 自己跑 git，
-不依赖同步的 Runtime 抽象（那是给同步工具链用的）。
+并发模型：Git 命令使用 argv 形式的 subprocess 执行，并通过
+asyncio.to_thread 移出事件循环；不依赖同步的 Runtime 抽象。
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ import re
 import shutil
 import signal
 import subprocess
+from dataclasses import asdict, dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -67,6 +69,66 @@ class WorktreeError(Exception):
     """WorktreeSession 操作失败。"""
 
 
+class WorktreeResultPolicy(str, Enum):
+    """一次隔离运行结束后如何处置 worktree 成果。"""
+
+    DISCARD = "discard"
+    KEEP_IF_CHANGED = "keep-if-changed"
+
+
+class WorktreeFinalizeAction(str, Enum):
+    """orchestrator 计算策略后交给 WorktreeSession 的具体动作。"""
+
+    DISCARD = "discard"
+    RETAIN = "retain"
+
+
+class WorktreeDisposition(str, Enum):
+    """worktree 最终处置结果。"""
+
+    REMOVED = "removed"
+    RETAINED = "retained"
+
+
+@dataclass(frozen=True)
+class WorktreeChanges:
+    """相对于 worktree 创建基点的修改快照。"""
+
+    changed_files: tuple[str, ...] = ()
+    uncommitted_count: int = 0
+    commit_count: int = 0
+    inspection_error: str | None = None
+
+    @property
+    def has_changes(self) -> bool:
+        # 无法确认时按“可能有成果”处理，避免误删。
+        return bool(
+            self.inspection_error
+            or self.uncommitted_count > 0
+            or self.commit_count > 0
+        )
+
+
+@dataclass(frozen=True)
+class WorktreeArtifact:
+    """返回给 CLI/API 的隔离工作区成果信息。"""
+
+    disposition: WorktreeDisposition
+    branch: str
+    path: str | None
+    base_commit: str
+    head_commit: str | None
+    changed_files: tuple[str, ...] = ()
+    uncommitted_count: int = 0
+    commit_count: int = 0
+    partial: bool = False
+    cleanup_required: bool = False
+    warning: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
 # ---------------------------------------------------------------------------
 # WorktreeSession
 # ---------------------------------------------------------------------------
@@ -81,10 +143,11 @@ class WorktreeSession:
             ...
         # 退出时（含异常）自动 git worktree remove --force + 删分支
 
-    安全清理（M3，参考 s20 code.py:240-281）：
-    - __aexit__ 始终强制回滚（事务一致性，不可妥协），无视 discard_changes。
-    - 显式 close(discard_changes=False) 可保护有改动的 worktree 不被误删。
-    - keep() 标记保留，跳过清理供 review。
+    生命周期：
+    - 兼容的 async with 用法在 __aexit__ 始终强制回滚。
+    - orchestrator 使用 create() / inspect_changes() / finalize()，可以显式保留
+      有成果的 worktree。
+    - close()/keep()/discard_changes 保留给旧调用，新的编排代码不再使用。
 
     Args:
         repo_path:    宿主 git 仓库根目录（必须有至少一次提交）
@@ -125,20 +188,46 @@ class WorktreeSession:
         self._created = False   # __aenter__ 是否成功创建了 worktree
         self._discard_changes = discard_changes
         self._keep = False      # keep() 标记：跳过清理
+        self._base_commit: str | None = None
+
+    @property
+    def branch(self) -> str:
+        return f"wt/{self._name}"
+
+    @property
+    def base_commit(self) -> str | None:
+        return self._base_commit
+
+    @property
+    def created(self) -> bool:
+        return self._created
 
     # ------------------------------------------------------------------
     # 上下文协议
     # ------------------------------------------------------------------
 
     async def __aenter__(self) -> "WorktreeSession":
+        return await self.create()
+
+    async def create(self) -> "WorktreeSession":
+        """创建 worktree，并记录稳定的基点 commit。"""
         self._worktrees_dir.mkdir(parents=True, exist_ok=True)
 
         if self.path.exists():
             raise WorktreeError(f"Worktree '{self._name}' already exists at {self.path}")
 
-        # git worktree add -b wt/<name> <path> <base>
+        ok, base_out = await self._run_git(
+            ["rev-parse", "--verify", f"{self._base}^{{commit}}"]
+        )
+        if not ok:
+            raise WorktreeError(
+                f"Cannot resolve worktree base '{self._base}': {base_out}"
+            )
+        self._base_commit = base_out.splitlines()[0].strip()
+
+        # git worktree add -b wt/<name> <path> <base commit>
         ok, out = await self._run_git(
-            ["worktree", "add", "-b", f"wt/{self._name}", str(self.path), self._base]
+            ["worktree", "add", "-b", self.branch, str(self.path), self._base_commit]
         )
         if not ok:
             raise WorktreeError(f"git worktree add failed: {out}")
@@ -157,12 +246,11 @@ class WorktreeSession:
         无论是否异常，强制清理：git worktree remove --force → 删分支 → 兜底 rmtree。
         正常退出时清理失败必须抛出；已有业务异常时保留原异常并记录清理失败。
 
-        注意：__aexit__ 无视 discard_changes / keep —— 事务回滚语义必须可靠。
-        要保留 worktree，请在 with 块外用 keep()（但 with 退出时仍会清，因为
-        __aexit__ 是事务边界）。
+        注意：__aexit__ 无视 discard_changes / keep。需要按运行结果保留成果时，
+        orchestrator 应使用显式 create()/finalize() 生命周期。
         """
         try:
-            await self._cleanup(force=True)
+            await self._cleanup(force=True, honor_keep=False)
         except WorktreeError:
             if exc_val is None:
                 raise
@@ -175,12 +263,12 @@ class WorktreeSession:
     # 显式清理（也可手动调用）
     # ------------------------------------------------------------------
 
-    async def _cleanup(self, force: bool = True) -> None:
+    async def _cleanup(self, force: bool = True, *, honor_keep: bool = False) -> None:
         """
         实际清理逻辑。force=True（__aexit__ 路径）始终强删；force=False
         （显式 close(discard_changes=False)）会先检查改动，有改动则 refuse。
         """
-        if self._keep:
+        if honor_keep and self._keep:
             logger.info("[worktree] kept for review: %s (branch wt/%s)",
                         self._name, self._name)
             return
@@ -199,16 +287,16 @@ class WorktreeSession:
 
         # 安全门：非强制模式下，有改动则 refuse 清理（参考 s20 code.py:253-266）
         if not force:
-            files, commits = await self.count_changes()
-            if files < 0:
+            changes = await self.inspect_changes()
+            if changes.inspection_error:
                 logger.warning("[worktree] cannot verify status of %s; force=True "
                                "to clean anyway", self._name)
                 return
-            if files > 0 or commits > 0:
+            if changes.has_changes:
                 logger.info(
                     "[worktree] refuse to remove '%s': %d file(s), %d commit(s) "
                     "uncommitted. Use discard_changes=True or keep().",
-                    self._name, files, commits,
+                    self._name, changes.uncommitted_count, changes.commit_count,
                 )
                 return
 
@@ -220,7 +308,7 @@ class WorktreeSession:
             logger.warning("[worktree] remove failed for %s: %s", self._name, out)
 
         # 2. 删除分支（即使上一步失败也尝试）
-        ok2, out2 = await self._run_git(["branch", "-D", f"wt/{self._name}"])
+        ok2, out2 = await self._run_git(["branch", "-D", self.branch])
         if not ok2:
             logger.debug("[worktree] branch delete %s: %s", self._name, out2)
 
@@ -242,28 +330,105 @@ class WorktreeSession:
         self._created = False
         logger.info("[worktree] removed: %s", self._name)
 
+    async def inspect_changes(self) -> WorktreeChanges:
+        """检查相对创建基点的未提交文件和新增提交。失败时返回保守快照。"""
+        if not self._created or not self.path.exists():
+            return WorktreeChanges()
+        if not self._base_commit:
+            return WorktreeChanges(inspection_error="worktree base commit is unknown")
+
+        try:
+            ok_status, status_out = await self._run_git_result_in(
+                str(self.path),
+                ["status", "--porcelain=v1", "--untracked-files=all"],
+            )
+            if not ok_status:
+                raise WorktreeError(f"git status failed: {status_out}")
+            status_lines = _git_output_lines(status_out)
+
+            ok_count, count_out = await self._run_git_result_in(
+                str(self.path),
+                ["rev-list", "--count", f"{self._base_commit}..HEAD"],
+            )
+            if not ok_count:
+                raise WorktreeError(f"git rev-list failed: {count_out}")
+            commit_count = int(count_out.strip())
+
+            ok_diff, diff_out = await self._run_git_result_in(
+                str(self.path),
+                ["diff", "--name-only", self._base_commit],
+            )
+            if not ok_diff:
+                raise WorktreeError(f"git diff failed: {diff_out}")
+
+            status_files = [_porcelain_path(line) for line in status_lines]
+            changed_files = tuple(sorted({
+                path for path in status_files + _git_output_lines(diff_out) if path
+            }))
+            return WorktreeChanges(
+                changed_files=changed_files,
+                uncommitted_count=len(status_lines),
+                commit_count=commit_count,
+            )
+        except (OSError, ValueError, WorktreeError) as exc:
+            return WorktreeChanges(inspection_error=str(exc))
+
     async def count_changes(self) -> tuple[int, int]:
         """
-        统计 worktree 内未提交的改动（参考 s20 code.py:240-250）。
-        返回 (未暂存/已暂存文件数, 未推送提交数)。无法判定时返回 (-1, -1)。
+        兼容旧调用：返回 (未提交文件数, 相对创建基点的提交数)。
+        无法判定时返回 (-1, -1)。
         """
-        if not self._created or not self.path.exists():
-            return 0, 0
-        try:
-            # 未提交文件（porcelain 一行一个变更）
-            r1 = await self._run_git_in(str(self.path), ["status", "--porcelain"])
-            files = len([
-                l for l in r1.splitlines()
-                if l.strip() and not l[3:].startswith(".worktrees/")
-            ]) if r1 else 0
-            # 未推送提交（无上游分支时 git 报错 → 视为 0 或无法判定）
-            r2 = await self._run_git_in(
-                str(self.path), ["log", "@{push}..HEAD", "--oneline"]
-            )
-            commits = len([l for l in r2.splitlines() if l.strip()]) if r2 else 0
-            return files, commits
-        except Exception:  # noqa: BLE001
+        changes = await self.inspect_changes()
+        if changes.inspection_error:
             return -1, -1
+        return changes.uncommitted_count, changes.commit_count
+
+    async def finalize(
+        self,
+        action: WorktreeFinalizeAction,
+        *,
+        changes: WorktreeChanges | None = None,
+        partial: bool = False,
+    ) -> WorktreeArtifact:
+        """显式完成 worktree 生命周期，并返回结构化成果信息。"""
+        snapshot = changes or await self.inspect_changes()
+        head_commit = await self._head_commit()
+
+        if action == WorktreeFinalizeAction.RETAIN:
+            return WorktreeArtifact(
+                disposition=WorktreeDisposition.RETAINED,
+                branch=self.branch,
+                path=str(self.path),
+                base_commit=self._base_commit or self._base,
+                head_commit=head_commit,
+                changed_files=snapshot.changed_files,
+                uncommitted_count=snapshot.uncommitted_count,
+                commit_count=snapshot.commit_count,
+                partial=partial,
+                cleanup_required=True,
+                warning=snapshot.inspection_error,
+            )
+
+        await self._cleanup(force=True, honor_keep=False)
+        return WorktreeArtifact(
+            disposition=WorktreeDisposition.REMOVED,
+            branch=self.branch,
+            path=None,
+            base_commit=self._base_commit or self._base,
+            head_commit=head_commit,
+            changed_files=snapshot.changed_files,
+            uncommitted_count=snapshot.uncommitted_count,
+            commit_count=snapshot.commit_count,
+            partial=partial,
+            cleanup_required=False,
+            warning=snapshot.inspection_error,
+        )
+
+    async def _head_commit(self) -> str | None:
+        if not self._created or not self.path.exists():
+            return None
+        ok, out = await self._run_git_result_in(str(self.path), ["rev-parse", "HEAD"])
+        return out.splitlines()[0].strip() if ok and out.strip() else None
 
     def keep(self) -> None:
         """标记保留 worktree 供 review，后续 _cleanup 跳过清理（参考 s20 code.py:276）。"""
@@ -278,7 +443,7 @@ class WorktreeSession:
                            refuse（保护用户劳动）。None = 用构造时 discard_changes。
         """
         force = self._discard_changes if discard_changes is None else discard_changes
-        await self._cleanup(force=force)
+        await self._cleanup(force=force, honor_keep=True)
 
     # ------------------------------------------------------------------
     # 内部：async git 执行
@@ -286,14 +451,14 @@ class WorktreeSession:
 
     async def _run_git(self, args: list[str]) -> tuple[bool, str]:
         """跑 git 命令，返回 (success, merged_output)。不抛异常。"""
-        return self._run_git_sync(str(self._repo_path), args, 60)
+        return await asyncio.to_thread(
+            self._run_git_sync, str(self._repo_path), args, 60
+        )
 
-    async def _run_git_in(self, cwd: str, args: list[str]) -> str:
-        """在指定 cwd 跑 git，返回合并输出。失败返回空串（供 count_changes 容错）。"""
-        ok, out = self._run_git_sync(cwd, args, 30)
-        if not ok or out == "(no output)":
-            return ""
-        return out
+    async def _run_git_result_in(
+        self, cwd: str, args: list[str], timeout: int = 30,
+    ) -> tuple[bool, str]:
+        return await asyncio.to_thread(self._run_git_sync, cwd, args, timeout)
 
     @staticmethod
     def _run_git_sync(cwd: str, args: list[str], timeout: int) -> tuple[bool, str]:
@@ -322,3 +487,16 @@ class WorktreeSession:
             return False, f"Error: git timeout ({timeout}s)"
         except Exception as exc:  # noqa: BLE001
             return False, f"Error: git execution failed: {exc}"
+
+
+def _git_output_lines(output: str) -> list[str]:
+    if not output or output == "(no output)":
+        return []
+    return [line for line in output.splitlines() if line.strip()]
+
+
+def _porcelain_path(line: str) -> str:
+    path = line[3:] if len(line) > 3 else ""
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    return path.strip().strip('"')

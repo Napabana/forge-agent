@@ -17,7 +17,10 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from runtime.worktree import WorktreeArtifact
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +39,7 @@ class EventType(str, Enum):
     # M4 主循环集成：worktree 生命周期 + 权限决策 + 任务认领
     TASK_CLAIMED      = "task_claimed"
     WORKTREE_CREATED  = "worktree_created"
+    WORKTREE_RETAINED = "worktree_retained"
     WORKTREE_REMOVED  = "worktree_removed"
     PERMISSION_DECISION = "permission_decision"
 
@@ -217,8 +221,10 @@ class Event:
     - TASK_FAILED:   {"steps": int, "reason": str}
     - TASK_CLAIMED:      {"task_id": str, "owner": str}
     - WORKTREE_CREATED:  {"name": str, "path": str, "base": str}
+    - WORKTREE_RETAINED: {"branch": str, "path": str, "reason": str,
+                          "changed_files": list[str]}
     - WORKTREE_REMOVED:  {"name": str, "path": str, "reason": str}
-        reason ∈ {"normal", "exception", "kept"}
+        reason ∈ {"normal", "exception", "preflight_failed"}
     - PERMISSION_DECISION: {"tool": str, "decision": str, "reason": str, "params": dict}
         decision ∈ {"allow", "deny", "confirm"}
     """
@@ -257,6 +263,7 @@ class RunResult:
     total_tokens: int = 0
     patch: str | None = None            # git diff 格式的修改内容
     error: str | None = None            # status == FAILED 时的原因
+    worktree: "WorktreeArtifact | None" = None
 
     def is_success(self) -> bool:
         return self.status == RunStatus.SUCCESS

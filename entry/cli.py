@@ -207,6 +207,13 @@ def cli(ctx: click.Context, config: str | None) -> None:
 @click.option("--confirm", is_flag=True, default=False, help="Ask confirmation before running dangerous shell commands")
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
 @click.option("--isolate", is_flag=True, default=False,help="Run in an isolated git worktree + TaskEngine tracking (M4). Combines with --sandbox for Docker hardening.")
+@click.option(
+    "--result-policy",
+    type=click.Choice(["discard", "keep-if-changed"]),
+    default="keep-if-changed",
+    show_default=True,
+    help="How --isolate handles generated changes.",
+)
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logs")
 @click.pass_context
 def run(
@@ -222,6 +229,7 @@ def run(
     confirm: bool,
     sandbox: bool,
     isolate: bool,
+    result_policy: str,
     verbose: bool,
 ) -> None:
     """Run the coding agent on a repository."""
@@ -358,6 +366,7 @@ def run(
             sandbox=sandbox,
             config=agent_config,
             confirm_callback=confirm_cb,
+            result_policy=result_policy,
         ))
         elapsed = time.time() - t0
         _print_run_result(result, elapsed)
@@ -396,6 +405,19 @@ def _print_run_result(result, elapsed: float) -> None:
     click.echo(f"Time    : {elapsed:.1f}s")
     if result.error:
         click.echo(red(f"Error   : {result.error}"))
+    artifact = getattr(result, "worktree", None)
+    if artifact is not None:
+        click.echo(f"Branch  : {artifact.branch}")
+        if artifact.path:
+            click.echo(green(f"Worktree: {artifact.path}"))
+            click.echo(
+                f"Changes : {artifact.uncommitted_count} uncommitted, "
+                f"{artifact.commit_count} commit(s)"
+            )
+        elif artifact.changed_files:
+            click.echo(dim("Worktree: removed by result policy"))
+        if artifact.warning:
+            click.echo(red(f"Warning : {artifact.warning}"))
     click.echo(bold("─" * 60) + "\n")
 
 

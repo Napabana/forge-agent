@@ -17,7 +17,9 @@ import pytest
 
 from runtime.worktree import (
     VALID_WT_NAME,
+    WorktreeDisposition,
     WorktreeError,
+    WorktreeFinalizeAction,
     WorktreeSession,
     validate_worktree_name,
 )
@@ -215,6 +217,40 @@ class TestSafeCleanup:
             files, commits = await wt.count_changes()
             assert files >= 1
 
+    async def test_count_changes_detects_commit_without_upstream(self, repo):
+        """新 worktree 分支没有 upstream，也必须按创建基点检测新增提交。"""
+        async with WorktreeSession(repo, "committed") as wt:
+            (wt.path / "committed.txt").write_text("kept")
+            _git(["add", "committed.txt"], wt.path)
+            committed = _git(["commit", "-q", "-m", "worktree commit"], wt.path)
+            assert committed.returncode == 0
+
+            changes = await wt.inspect_changes()
+            assert changes.inspection_error is None
+            assert changes.uncommitted_count == 0
+            assert changes.commit_count == 1
+            assert "committed.txt" in changes.changed_files
+
+    async def test_explicit_finalize_retains_changed_worktree(self, repo):
+        wt = WorktreeSession(repo, "artifact")
+        await wt.create()
+        (wt.path / "result.txt").write_text("result")
+
+        changes = await wt.inspect_changes()
+        artifact = await wt.finalize(
+            WorktreeFinalizeAction.RETAIN,
+            changes=changes,
+        )
+
+        assert artifact.disposition == WorktreeDisposition.RETAINED
+        assert artifact.path == str(wt.path)
+        assert artifact.cleanup_required is True
+        assert "result.txt" in artifact.changed_files
+        assert wt.path.exists()
+
+        await wt.finalize(WorktreeFinalizeAction.DISCARD, changes=changes)
+        assert not wt.path.exists()
+
     async def test_close_refuses_dirty_when_discard_false(self, repo):
         """有改动 + discard_changes=False → close refuse，worktree 仍在。"""
         wt = WorktreeSession(repo, "keep1", discard_changes=False)
@@ -252,6 +288,15 @@ class TestSafeCleanup:
                 (wt.path / "dirty.txt").write_text("dirty")
                 raise RuntimeError("boom")
         # 即使 discard_changes=False，__aexit__ 仍强制清理（事务一致性）
+        assert not wt_ref["path"].exists()
+
+    async def test_aexit_also_ignores_legacy_keep_flag(self, repo):
+        """事务上下文保持兼容语义：keep() 不得覆盖 __aexit__ 的强制回滚。"""
+        wt_ref = {}
+        async with WorktreeSession(repo, "tx-keep") as wt:
+            wt_ref["path"] = wt.path
+            (wt.path / "dirty.txt").write_text("dirty")
+            wt.keep()
         assert not wt_ref["path"].exists()
 
     async def test_cleanup_failure_is_visible_and_retryable(

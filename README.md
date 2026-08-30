@@ -347,16 +347,21 @@ agent chat --repo /path/to/project --sandbox
 ```bash
 agent run --repo /path/to/git-repo \
   --task "验证修复方案" \
-  --isolate
+  --isolate --result-policy discard
 
 agent run --repo /path/to/git-repo \
-  --task "在容器和临时工作树中验证修复" \
+  --task "在容器和独立工作树中修复代码" \
   --isolate --sandbox
 ```
 
-`--isolate` 会创建临时 worktree，并通过 SQLite TaskEngine 记录任务状态。当前
-实现会在运行结束或异常时强制清理临时 worktree 及其分支，适合验证隔离、权限
-边界和审计流程。需要保留代码修改时，请使用普通 `run` 或 `chat` 模式。
+`--isolate` 会创建独立 worktree，并通过 SQLite TaskEngine 记录任务状态。
+默认的 `--result-policy keep-if-changed` 会清理没有修改的工作树，但在 Agent
+产生文件修改或新增提交时保留 worktree 和 `wt/<task>` 分支，并在最终输出中
+打印路径。纯验证任务可传 `--result-policy discard`，无论是否产生修改都清理。
+
+`--sandbox` 与成果策略彼此独立：它限制命令的进程、网络和挂载边界；worktree
+负责隔离 Git 分支和文件成果。组合使用时，Docker 容器始终清理，宿主机上的
+worktree 是否保留仍由 `--result-policy` 决定。
 
 ### 查看事件日志
 
@@ -432,7 +437,8 @@ curl -X POST http://127.0.0.1:8000/tasks \
     "provider": "anthropic",
     "model": "claude-sonnet-4-5",
     "max_steps": 40,
-    "sandbox": false
+    "sandbox": false,
+    "result_policy": "keep-if-changed"
   }'
 ```
 
@@ -449,7 +455,9 @@ curl -X POST http://127.0.0.1:8000/tasks/<task_id>/cancel
 
 第一版 API 默认在后台线程池执行任务，并使用 `orchestrate_run` 走隔离
 worktree、权限检查和事件审计链路。API 模式下不会交互确认危险命令；
-需要确认的命令会被权限管线拒绝。
+需要确认的命令会被权限管线拒绝。任务查询结果的 `artifact` 字段会返回保留
+worktree 的路径、分支、基点提交和修改文件列表。可传
+`"result_policy": "discard"` 恢复一次性验证行为。
 
 可用环境变量：
 
@@ -503,6 +511,7 @@ agent run
   [--confirm]
   [--sandbox]
   [--isolate]
+  [--result-policy discard|keep-if-changed]
   [--verbose]
 
 agent log list [--dir DIR]

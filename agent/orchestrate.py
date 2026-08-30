@@ -7,15 +7,16 @@ ToolExecutor/Permission）、M3（DockerRuntime 加固）接进 ReAct 主循环�
 核心设计——同步/异步阻抗失配的解法：
 - Agent.run() 是同步 ReAct 循环（清晰可测，CLAUDE.md 约束保持同步）。
 - WorktreeSession / AgentBus 是 async。
-- 解法：本模块提供一个 async 组合根 orchestrate_run()，用 `async with
-  WorktreeSession(...)` 包住整次运行。Agent.run() 同步执行，EventLog 事件
-  先进入队列，运行结束后由 forwarder 转发到 bus。Agent.run() 一行不改。
+- 解法：本模块提供一个 async 组合根 orchestrate_run()，显式管理
+  WorktreeSession 的创建、成果检查与最终处置。Agent.run() 同步执行，
+  EventLog 事件先进入队列，运行结束后由 forwarder 转发到 bus。
 
 safe_path 注入：PermissionManager(workspace=str(wt.path)) 在 executor 层
 强制文件路径不逃逸 worktree（读写工具都覆盖）。不依赖 LLM 填的 params。
 
 事件审计：orchestrator 在 worktree 生命周期 + 权限决策点上写新事件类型
-（WORKTREE_CREATED/REMOVED、PERMISSION_DECISION、TASK_CLAIMED）到 EventLog，
+（WORKTREE_CREATED/RETAINED/REMOVED、PERMISSION_DECISION、TASK_CLAIMED）
+到 EventLog，
 既有 ACTION/OBSERVATION/REFLECTION 由同步循环照常写。
 
 用法（见 scripts/m4_demo.py）：
@@ -40,7 +41,13 @@ from agent.task import RunResult, RunStatus, Task
 from harness.executor import ToolExecutor
 from harness.permission import PermissionDecision, PermissionManager
 from ipc.bus import AgentBus
-from runtime.worktree import WorktreeSession
+from runtime.worktree import (
+    WorktreeArtifact,
+    WorktreeDisposition,
+    WorktreeFinalizeAction,
+    WorktreeResultPolicy,
+    WorktreeSession,
+)
 from task.engine import TaskEngine
 from tools.runtime import CONTAINER_WORKDIR, DockerRuntime, LocalRuntime, Runtime
 
@@ -103,6 +110,65 @@ async def _stop_forwarder(q: asyncio.Queue | None, task: asyncio.Task | None) ->
         task.cancel()
     except Exception:  # noqa: BLE001
         pass
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _finalize_worktree(
+    session: WorktreeSession,
+    policy: WorktreeResultPolicy,
+    *,
+    partial: bool,
+) -> WorktreeArtifact:
+    """把用户结果策略转换为一次明确的 worktree 最终动作。"""
+    changes = await session.inspect_changes()
+    action = WorktreeFinalizeAction.DISCARD
+    if policy == WorktreeResultPolicy.KEEP_IF_CHANGED and changes.has_changes:
+        action = WorktreeFinalizeAction.RETAIN
+    return await session.finalize(action, changes=changes, partial=partial)
+
+
+async def _record_worktree_finalized(
+    *,
+    log: EventLog,
+    bus: AgentBus | None,
+    task_id: str,
+    name: str,
+    artifact: WorktreeArtifact,
+    reason: str,
+) -> None:
+    """记录真实的 worktree 最终状态；bus 故障沿用既有传播语义。"""
+    if artifact.disposition == WorktreeDisposition.RETAINED:
+        log.log_worktree_retained(
+            task_id,
+            artifact.branch,
+            artifact.path or "",
+            reason=reason,
+            changed_files=list(artifact.changed_files),
+        )
+        if bus is not None:
+            await bus.publish(
+                "worktree.retained",
+                sender="orchestrator",
+                content={
+                    "task_id": task_id,
+                    "path": artifact.path,
+                    "branch": artifact.branch,
+                    "reason": reason,
+                    "changed_files": list(artifact.changed_files),
+                },
+            )
+        return
+
+    log.log_worktree_removed(task_id, name, "", reason=reason)
+    if bus is not None:
+        await bus.publish(
+            "worktree.removed",
+            sender="orchestrator",
+            content={"task_id": task_id, "reason": reason},
+        )
 
 
 async def orchestrate_run(
@@ -121,6 +187,7 @@ async def orchestrate_run(
     confirm_callback: Callable[[str], bool] | None = None,
     agent_factory: AgentFactory | None = None,
     on_log_created: LogCreatedCallback | None = None,
+    result_policy: WorktreeResultPolicy | str = WorktreeResultPolicy.KEEP_IF_CHANGED,
 ) -> RunResult:
     """
     在隔离的 git worktree 内跑一次完整的 ReAct 循环，全程 TaskEngine 记账 +
@@ -140,12 +207,14 @@ async def orchestrate_run(
         config:           AgentConfig；None=默认
         confirm_callback: CONFIRM 决策的确认回调
         agent_factory:    构造 Agent 的回调（测试注入 FakeAgent）
+        result_policy:    discard=始终清理；keep-if-changed=有成果时保留 worktree
 
     Returns:
         RunResult（agent 的最终结果）
     """
     agent_cfg = config or AgentConfig()
     factory = agent_factory or _default_agent_factory
+    policy = WorktreeResultPolicy(result_policy)
 
     # 1. TaskEngine 记账：创建任务 → 认领。TaskEngine 为 task_id 权威源。
     task_id = engine.create_task(
@@ -182,75 +251,89 @@ async def orchestrate_run(
         forwarder_task = asyncio.create_task(_bus_forwarder(bus_q, bus, task_id))
 
     result: RunResult | None = None
-    exc_info: BaseException | None = None
-
+    run_error: BaseException | None = None
+    worktree_created = False
     worktree_exit_reason = "normal"
+    wt = WorktreeSession(task.repo_path, wt_name, engine, task_id)
+
     try:
-        async with WorktreeSession(task.repo_path, wt_name, engine, task_id) as wt:
-            log.log_worktree_created(task_id, wt.path.name, str(wt.path))
-            if bus is not None:
-                await bus.publish(
-                    "worktree.created", sender="orchestrator",
-                    content={"task_id": task_id, "path": str(wt.path)},
-                )
+        await wt.create()
+        worktree_created = True
+        log.log_worktree_created(
+            task_id,
+            wt.path.name,
+            str(wt.path),
+            base=wt.base_commit or "HEAD",
+        )
+        if bus is not None:
+            await bus.publish(
+                "worktree.created", sender="orchestrator",
+                content={
+                    "task_id": task_id,
+                    "path": str(wt.path),
+                    "branch": wt.branch,
+                    "base": wt.base_commit,
+                },
+            )
 
-            # 3. runtime（M3：sandbox 模式把 worktree rw 挂 /workspace，只读根）
-            runtime: Runtime
+        # 3. runtime（M3：sandbox 模式把 worktree rw 挂 /workspace，只读根）
+        runtime: Runtime
+        if sandbox:
+            from tools.runtime import SANDBOX_IMAGE
+            git_dir = Path(task.repo_path).resolve() / ".git"
+            git_mounts = (
+                [(str(git_dir), str(git_dir))]
+                if git_dir.is_dir()
+                else []
+            )
+            runtime = DockerRuntime(
+                repo_path=task.repo_path,
+                image=sandbox_image or SANDBOX_IMAGE,
+                extra_mounts=git_mounts,
+                readonly_root=readonly_root,
+                worktree_mount=(str(wt.path), CONTAINER_WORKDIR),
+                network=False,
+            )
+        else:
+            runtime = LocalRuntime()
+
+        try:
             if sandbox:
-                from tools.runtime import SANDBOX_IMAGE
-                git_dir = Path(task.repo_path).resolve() / ".git"
-                git_mounts = (
-                    [(str(git_dir), str(git_dir))]
-                    if git_dir.is_dir()
-                    else []
-                )
-                runtime = DockerRuntime(
-                    repo_path=task.repo_path,
-                    image=sandbox_image or SANDBOX_IMAGE,
-                    extra_mounts=git_mounts,
-                    readonly_root=readonly_root,
-                    worktree_mount=(str(wt.path), CONTAINER_WORKDIR),
-                    network=False,
-                )
-            else:
-                runtime = LocalRuntime()
+                preflight = runtime.preflight(cwd=str(wt.path))
+                if not preflight.success:
+                    detail = preflight.output.strip() or "unknown sandbox error"
+                    raise SandboxPreflightError(detail)
 
-            try:
-                if sandbox:
-                    preflight = runtime.preflight(cwd=str(wt.path))
-                    if not preflight.success:
-                        detail = preflight.output.strip() or "unknown sandbox error"
-                        raise SandboxPreflightError(detail)
+            # 4. registry（在 worktree 内执行）+ permission（safe_path 边界）
+            registry = registry_builder(
+                agent_cfg, confirm_callback, runtime, worktree_path=wt.path,
+            )
+            permission = PermissionManager(workspace=str(wt.path))
 
-                # 4. registry（在 worktree 内执行）+ permission（safe_path 边界）
-                registry = registry_builder(
-                    agent_cfg, confirm_callback, runtime, worktree_path=wt.path,
-                )
-                permission = PermissionManager(workspace=str(wt.path))
-
-                # 权限决策观察回调 → 写 PERMISSION_DECISION + 转发 bus
-                def _on_decision(
-                    name: str, params: dict[str, Any], decision: PermissionDecision,
-                ) -> None:
-                    log.log_permission_decision(
-                        task_id, name, decision.decision.value, decision.reason, params,
-                    )
-
-                executor = ToolExecutor(
-                    registry, permission=permission,
-                    confirm_callback=confirm_callback,
-                    decision_callback=_on_decision,
+            # 权限决策观察回调 → 写 PERMISSION_DECISION + 转发 bus
+            def _on_decision(
+                name: str, params: dict[str, Any], decision: PermissionDecision,
+            ) -> None:
+                log.log_permission_decision(
+                    task_id, name, decision.decision.value, decision.reason, params,
                 )
 
-                # 5. Agent：让它的 repo_path 指向 worktree（core.py 零改动）
-                agent = factory(backend, registry, agent_cfg, executor)
-                task_in_wt = dataclasses.replace(task, repo_path=str(wt.path))
+            executor = ToolExecutor(
+                registry, permission=permission,
+                confirm_callback=confirm_callback,
+                decision_callback=_on_decision,
+            )
 
-                # 6. 同步循环。事件通过 EventLog.on_append 先入队，运行结束后
-                # forwarder 转发，避免线程调度导致的收尾不确定性。
-                result = agent.run(task_in_wt, log)
-            finally:
-                runtime.cleanup()
+            # 5. Agent：让它的 repo_path 指向 worktree（core.py 零改动）
+            agent = factory(backend, registry, agent_cfg, executor)
+            task_in_wt = dataclasses.replace(task, repo_path=str(wt.path))
+
+            # 6. 同步循环。事件通过 EventLog.on_append 先入队，运行结束后
+            # forwarder 转发，避免线程调度导致的收尾不确定性。
+            result = agent.run(task_in_wt, log)
+        finally:
+            # sandbox 生命周期与 worktree 成果保留策略彼此独立。
+            runtime.cleanup()
 
     except SandboxPreflightError as exc:
         worktree_exit_reason = "preflight_failed"
@@ -264,26 +347,55 @@ async def orchestrate_run(
             steps_taken=0,
             error=reason,
         )
-    except BaseException as exc:  # noqa: BLE001 — 捕获含 KeyboardInterrupt 的回滚路径
-        exc_info = exc
-        # WorktreeSession.__aexit__ 已强制清理（事务语义），这里只记账
-        log.log_worktree_removed(task_id, wt_name, "", reason="exception")
-        if bus is not None:
-            await bus.publish(
-                "worktree.removed", sender="orchestrator",
-                content={"task_id": task_id, "reason": "exception"},
+    except BaseException as exc:  # noqa: BLE001 — 含 KeyboardInterrupt
+        run_error = exc
+
+    # bind_worktree 或 created 事件失败时，create() 可能已完成 Git 创建但尚未返回。
+    worktree_created = worktree_created or wt.created
+    artifact: WorktreeArtifact | None = None
+    if worktree_created:
+        try:
+            partial = run_error is not None or result is None or not result.is_success()
+            artifact = await _finalize_worktree(wt, policy, partial=partial)
+            final_reason = "exception" if run_error is not None else worktree_exit_reason
+            await _record_worktree_finalized(
+                log=log,
+                bus=bus,
+                task_id=task_id,
+                name=wt_name,
+                artifact=artifact,
+                reason=final_reason,
             )
+        except BaseException as exc:  # noqa: BLE001 — 最终处置失败不可静默
+            if run_error is None:
+                run_error = exc
+            else:
+                logger.exception(
+                    "[orchestrate] worktree finalization failed while preserving "
+                    "the original exception"
+                )
+
+    if run_error is not None:
         try:
             engine.fail_task(task_id)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("[orchestrate] fail_task on exception path: %s", e)
-        log.log_task_failed(steps=0, reason=f"exception: {exc!r}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[orchestrate] fail_task on exception path: %s", exc)
+        log.log_task_failed(steps=0, reason=f"exception: {run_error!r}")
         log.close()
         await _stop_forwarder(bus_q, forwarder_task)
-        raise
+        raise run_error.with_traceback(run_error.__traceback__)
 
-    # 7. 正常退出：记账 + 清理意图
-    log.log_worktree_removed(task_id, wt_name, "", reason=worktree_exit_reason)
+    if result is None:
+        # 防御性保护：正常路径必须产生 RunResult。
+        engine.fail_task(task_id)
+        log.log_task_failed(steps=0, reason="orchestrator produced no result")
+        log.close()
+        await _stop_forwarder(bus_q, forwarder_task)
+        raise RuntimeError("orchestrator produced no result")
+
+    result.worktree = artifact
+
+    # 7. 正常退出：任务状态与 worktree 最终状态分别记账
     if result is not None and result.is_success():
         engine.complete_task(task_id)
         if bus is not None:

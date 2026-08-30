@@ -45,6 +45,7 @@ class ApiTask:
     log_path: str | None = None
     forge_task_id: str | None = None
     options: dict[str, Any] | None = None
+    artifact: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -90,13 +91,21 @@ class ApiTaskStore:
                 error          TEXT,
                 log_path       TEXT,
                 forge_task_id  TEXT,
-                options_json   TEXT NOT NULL DEFAULT '{}'
+                options_json   TEXT NOT NULL DEFAULT '{}',
+                artifact_json  TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_api_tasks_status_created
                 ON api_tasks(status, created_at);
             """
         )
+        columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(api_tasks)")
+        }
+        if "artifact_json" not in columns:
+            self._conn.execute(
+                "ALTER TABLE api_tasks ADD COLUMN artifact_json TEXT"
+            )
 
     def create_task(
         self,
@@ -172,6 +181,7 @@ class ApiTaskStore:
         error: str | None = None,
         log_path: str | None = None,
         forge_task_id: str | None = None,
+        artifact: dict[str, Any] | None = None,
     ) -> None:
         if status not in (STATUS_SUCCEEDED, STATUS_FAILED, STATUS_CANCELED):
             raise ValueError(f"invalid finished status: {status}")
@@ -181,7 +191,8 @@ class ApiTaskStore:
                 UPDATE api_tasks
                 SET status=?, finished_at=?, result_summary=?, error=?,
                     log_path=COALESCE(?, log_path),
-                    forge_task_id=COALESCE(?, forge_task_id)
+                    forge_task_id=COALESCE(?, forge_task_id),
+                    artifact_json=COALESCE(?, artifact_json)
                 WHERE id=?
                 """,
                 (
@@ -191,6 +202,7 @@ class ApiTaskStore:
                     error,
                     log_path,
                     forge_task_id,
+                    json.dumps(artifact, ensure_ascii=False) if artifact else None,
                     task_id,
                 ),
             )
@@ -232,6 +244,7 @@ class ApiTaskStore:
         result_summary: str = "canceled",
         log_path: str | None = None,
         forge_task_id: str | None = None,
+        artifact: dict[str, Any] | None = None,
     ) -> None:
         self.mark_finished(
             task_id,
@@ -240,6 +253,7 @@ class ApiTaskStore:
             error=None,
             log_path=log_path,
             forge_task_id=forge_task_id,
+            artifact=artifact,
         )
 
     def get_task(self, task_id: str) -> ApiTask:
@@ -284,6 +298,11 @@ def _row_to_task(row: sqlite3.Row) -> ApiTask:
         options = json.loads(options_raw)
     except json.JSONDecodeError:
         options = {}
+    artifact_raw = row["artifact_json"] if "artifact_json" in row.keys() else None
+    try:
+        artifact = json.loads(artifact_raw) if artifact_raw else None
+    except json.JSONDecodeError:
+        artifact = None
     return ApiTask(
         id=row["id"],
         repo_path=row["repo_path"],
@@ -297,4 +316,5 @@ def _row_to_task(row: sqlite3.Row) -> ApiTask:
         log_path=row["log_path"],
         forge_task_id=row["forge_task_id"],
         options=options,
+        artifact=artifact,
     )

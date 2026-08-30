@@ -39,6 +39,7 @@ from entry.api_store import (
 )
 from entry.cli import _build_registry
 from llm.router import create_backend_from_config
+from runtime.worktree import WorktreeResultPolicy
 from task.engine import TaskEngine
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ class TaskCreateRequest(BaseModel):
     model: str | None = None
     max_steps: int | None = Field(default=None, ge=1, le=200)
     sandbox: bool = False
+    result_policy: WorktreeResultPolicy = WorktreeResultPolicy.KEEP_IF_CHANGED
 
 
 def create_app(
@@ -278,6 +280,9 @@ def run_agent_task(
             sandbox=bool(request.get("sandbox", False)),
             config=agent_cfg,
             confirm_callback=None,
+            result_policy=request.get(
+                "result_policy", WorktreeResultPolicy.KEEP_IF_CHANGED
+            ),
             on_log_created=lambda tid, path: store.set_runtime_info(
                 api_task_id, forge_task_id=tid, log_path=path,
             ),
@@ -290,6 +295,7 @@ def run_agent_task(
                 result_summary=result.summary,
                 log_path=log_path,
                 forge_task_id=forge_task_id,
+                artifact=result.worktree.to_dict() if result.worktree else None,
             )
         else:
             status = STATUS_SUCCEEDED if result.status == RunStatus.SUCCESS else STATUS_FAILED
@@ -300,6 +306,7 @@ def run_agent_task(
                 error=result.error,
                 log_path=log_path,
                 forge_task_id=forge_task_id,
+                artifact=result.worktree.to_dict() if result.worktree else None,
             )
     except Exception as exc:  # noqa: BLE001 - background task must report failure
         logger.exception("API task %s failed", api_task_id)
