@@ -8,12 +8,12 @@
 #   max_tokens: 8192
 
 ### Failed: LLM error: Error code: 403 - {'type': 'error', 'error': {'type': 'forbidden_error', 'message': 'your token is not authorized for any channel serving this model'}}
-llm:
-  provider: openai
-  model: gpt-5.5
-  api_key: ${KRILL_openai_API_KEY}
-  base_url: https://api.krill-ai.net/codex/v1
-  max_tokens: 1024
+# llm:
+#   provider: openai
+#   model: gpt-5.5
+#   api_key: ${KRILL_openai_API_KEY}
+#   base_url: https://api.krill-ai.net/codex/v1
+#   max_tokens: 1024
 
 #现在可以了，需要--no-stream运行
 # llm:
@@ -59,7 +59,7 @@ llm:
 llm:
   provider: openai
   protocol: responses
-  model: gpt-5.4
+  model: gpt-5.6-terra
   api_key: ${KRILL_API_KEY}
   base_url: https://api-slb.krill-ai.net/coding/v1
   max_tokens: 1024

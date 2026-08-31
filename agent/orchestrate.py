@@ -213,6 +213,7 @@ async def orchestrate_run(
         RunResult（agent 的最终结果）
     """
     agent_cfg = config or AgentConfig()
+    # 正常运行时调用默认工厂；测试可注入 agent_factory。
     factory = agent_factory or _default_agent_factory
     policy = WorktreeResultPolicy(result_policy)
 
@@ -241,9 +242,11 @@ async def orchestrate_run(
 
     wt_name = worktree_name or f"task-{task_id}"
 
-    # bus 逐步事件转发（M4 第二波）：on_append → queue → forwarder 协程。
+    # bus 逐步事件转发：on_append → queue → forwarder 协程。
     # 同步循环每写一条 event 就 put_nowait，forwarder 异步 publish 到 events.* 。
     bus_q: asyncio.Queue | None = None
+    # 把 EventLog.on_append 绑定到队列，再由 _bus_forwarder 异步发布，
+    # 避免同步 Agent.run() 与异步 AgentBus 直接耦合。
     forwarder_task: asyncio.Task | None = None
     if bus is not None:
         bus_q = asyncio.Queue()
@@ -257,6 +260,8 @@ async def orchestrate_run(
     wt = WorktreeSession(task.repo_path, wt_name, engine, task_id)
 
     try:
+        # 显式创建而不使用 async context manager：上下文管理器固定回滚，
+        # 无法表达“检测到成果后保留 worktree”的结果策略。
         await wt.create()
         worktree_created = True
         log.log_worktree_created(
@@ -276,7 +281,7 @@ async def orchestrate_run(
                 },
             )
 
-        # 3. runtime（M3：sandbox 模式把 worktree rw 挂 /workspace，只读根）
+        # runtime：sandbox 模式把 worktree 以 rw 挂载到 /workspace。
         runtime: Runtime
         if sandbox:
             from tools.runtime import SANDBOX_IMAGE
@@ -286,6 +291,8 @@ async def orchestrate_run(
                 if git_dir.is_dir()
                 else []
             )
+            # 容器看不到宿主文件系统，需要显式挂载 worktree 和独立的
+            # .git 目录；readonly_root 只限制容器根文件系统。
             runtime = DockerRuntime(
                 repo_path=task.repo_path,
                 image=sandbox_image or SANDBOX_IMAGE,
@@ -295,22 +302,25 @@ async def orchestrate_run(
                 network=False,
             )
         else:
+            # LocalRuntime 在宿主运行，命令的 cwd 直接指向 wt.path，
+            # 不需要额外的路径映射或挂载。
             runtime = LocalRuntime()
 
         try:
             if sandbox:
+                # 在调用模型前确认镜像工具和 worktree 可见性。
                 preflight = runtime.preflight(cwd=str(wt.path))
                 if not preflight.success:
                     detail = preflight.output.strip() or "unknown sandbox error"
                     raise SandboxPreflightError(detail)
 
-            # 4. registry（在 worktree 内执行）+ permission（safe_path 边界）
+            # registry 在 worktree 内执行，PermissionManager 再强制 safe_path 边界。
             registry = registry_builder(
                 agent_cfg, confirm_callback, runtime, worktree_path=wt.path,
             )
             permission = PermissionManager(workspace=str(wt.path))
 
-            # 权限决策观察回调 → 写 PERMISSION_DECISION + 转发 bus
+            # 每次权限决策都写入 EventLog，便于审计与回放。
             def _on_decision(
                 name: str, params: dict[str, Any], decision: PermissionDecision,
             ) -> None:
@@ -324,15 +334,14 @@ async def orchestrate_run(
                 decision_callback=_on_decision,
             )
 
-            # 5. Agent：让它的 repo_path 指向 worktree（core.py 零改动）
+            # 创建新 Task 而不修改原对象，让 Agent 的所有相对路径都落在 worktree。
             agent = factory(backend, registry, agent_cfg, executor)
             task_in_wt = dataclasses.replace(task, repo_path=str(wt.path))
 
-            # 6. 同步循环。事件通过 EventLog.on_append 先入队，运行结束后
-            # forwarder 转发，避免线程调度导致的收尾不确定性。
+            # Agent.run() 保持同步；EventLog 事件先入队，随后由 forwarder 转发。
             result = agent.run(task_in_wt, log)
         finally:
-            # sandbox 生命周期与 worktree 成果保留策略彼此独立。
+            # runtime 生命周期与 worktree 成果保留策略彼此独立。
             runtime.cleanup()
 
     except SandboxPreflightError as exc:
@@ -350,7 +359,7 @@ async def orchestrate_run(
     except BaseException as exc:  # noqa: BLE001 — 含 KeyboardInterrupt
         run_error = exc
 
-    # bind_worktree 或 created 事件失败时，create() 可能已完成 Git 创建但尚未返回。
+    # bind_worktree 或 created 事件失败时，Git 创建可能已成功但 create() 尚未返回。
     worktree_created = worktree_created or wt.created
     artifact: WorktreeArtifact | None = None
     if worktree_created:
@@ -393,10 +402,11 @@ async def orchestrate_run(
         await _stop_forwarder(bus_q, forwarder_task)
         raise RuntimeError("orchestrator produced no result")
 
+    # CLI/API 通过这个结构化对象拿到保留路径、分支和变更统计。
     result.worktree = artifact
 
-    # 7. 正常退出：任务状态与 worktree 最终状态分别记账
-    if result is not None and result.is_success():
+    # Agent 任务状态和 worktree 最终状态分别记账。
+    if result.is_success():
         engine.complete_task(task_id)
         if bus is not None:
             await bus.publish(
@@ -408,8 +418,7 @@ async def orchestrate_run(
         if bus is not None:
             await bus.publish(
                 "tasks.failed", sender="orchestrator",
-                content={"task_id": task_id,
-                         "result": result.to_dict() if result else None},
+                content={"task_id": task_id, "result": result.to_dict()},
             )
 
     log.close()
