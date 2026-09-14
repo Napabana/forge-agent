@@ -56,8 +56,9 @@ def test_isolate_invokes_orchestrate_run(tmp_path, monkeypatch):
 
     # CLI run 里是函数内 `from agent.orchestrate import orchestrate_run`，
     # 所以 patch 源头模块的属性，让那次 import 拿到假函数。
-    import agent.orchestrate as orch_mod
-    monkeypatch.setattr(orch_mod, "orchestrate_run", _fake_orchestrate)
+    import agent.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "orchestrate_run", _fake_orchestrate)
+    monkeypatch.setattr(runner_mod, "TaskEngine", lambda _path: object())
     # 同时 patch backend 工厂，避免真 LLM 配置/调用
     import entry.cli as cli_mod
     monkeypatch.setattr(cli_mod, "create_backend_from_config",
@@ -110,10 +111,11 @@ def test_isolate_accepts_discard_result_policy(tmp_path, monkeypatch):
         called.update(kwargs)
         return _FakeResult()
 
-    import agent.orchestrate as orch_mod
+    import agent.runner as runner_mod
     import entry.cli as cli_mod
     import llm.router as router_mod
-    monkeypatch.setattr(orch_mod, "orchestrate_run", _fake_orchestrate)
+    monkeypatch.setattr(runner_mod, "orchestrate_run", _fake_orchestrate)
+    monkeypatch.setattr(runner_mod, "TaskEngine", lambda _path: object())
     monkeypatch.setattr(cli_mod, "create_backend_from_config", lambda cfg: object())
     monkeypatch.setattr(router_mod, "create_backend_from_config", lambda cfg: object())
 

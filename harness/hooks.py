@@ -14,8 +14,8 @@ Hook 的意义是把可扩展规则与 ToolExecutor 主流程分离。新增检�
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable
-
 
 # ---------------------------------------------------------------------------
 # 事件类型（对齐 s20 HOOKS 的 key）
@@ -29,6 +29,13 @@ class HookEvent:
 
 
 HookCallback = Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class HookBlockResult:
+    """PreToolUse 明确拒绝执行时返回的结果。"""
+
+    reason: str
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +74,18 @@ class Hooks:
             return True
         except ValueError:
             return False
+
+    def trigger_pre_tool_use(self, block: Any) -> HookBlockResult | None:
+        """触发 PreToolUse，并统一转换为类型化的阻止结果。"""
+
+        result = self.trigger(HookEvent.PRE_TOOL_USE, block)
+        if result is None:
+            return None
+        if isinstance(result, HookBlockResult):
+            return result
+
+        # 兼容旧 Hook 返回字符串或其他非 None 值的行为。
+        return HookBlockResult(reason=str(result))
 
     def trigger(self, event: str, *args: Any) -> Any:
         """

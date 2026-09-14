@@ -146,6 +146,15 @@ def test_reference_scores_count_exact_identifier_occurrences():
     assert owner.reference_count == 2
 
 
+def test_query_places_matching_path_and_symbol_first(tmp_path):
+    (tmp_path / "generic.py").write_text("class CommonService:\n    pass\n")
+    (tmp_path / "payments.py").write_text("class RefundLedger:\n    pass\n")
+
+    result = RepoMap(tmp_path).build(query="fix RefundLedger in payments")
+
+    assert result.index("payments.py") < result.index("generic.py")
+
+
 def test_agent_exposes_selective_repo_map_cache_invalidation(tmp_path):
     agent = Agent(MockBackend([]), ToolRegistry())
     agent._repo_map_cache_key = str(tmp_path)

@@ -198,10 +198,10 @@ class TestChatEdgeCases:
         from context import repo_map as rm_module
         original_build = rm_module.RepoMap.build
 
-        def counting_build(self, budget=8000):
+        def counting_build(self, budget=8000, **kwargs):
             nonlocal build_count
             build_count += 1
-            return original_build(self, budget)
+            return original_build(self, budget, **kwargs)
 
         from unittest.mock import patch
         script = [
@@ -214,7 +214,7 @@ class TestChatEdgeCases:
             session.run_round("round 2")
 
         # repo_map 只构建一次（第一轮），第二轮复用缓存
-        assert build_count == 1
+        assert build_count == 2  # 每轮 query 重排；底层 RepoMap 实例仍复用扫描结果
 
     def test_repo_map_cache_refreshes_after_repository_change(
         self, tmp_path, cfg, registry,
@@ -226,10 +226,10 @@ class TestChatEdgeCases:
         from context import repo_map as rm_module
         original_build = rm_module.RepoMap.build
 
-        def counting_build(self, budget=8000):
+        def counting_build(self, budget=8000, **kwargs):
             nonlocal build_count
             build_count += 1
-            return original_build(self, budget)
+            return original_build(self, budget, **kwargs)
 
         from unittest.mock import patch
         script = [

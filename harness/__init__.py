@@ -4,7 +4,7 @@ Hooks + Permission + ToolExecutor，移植并现代化自 s20 的 Hooks/Permissi
 """
 
 from harness.executor import ToolExecutor
-from harness.hooks import HookEvent, Hooks
+from harness.hooks import HookBlockResult, HookEvent, Hooks
 from harness.permission import (
     ALLOW,
     Decision,
@@ -17,6 +17,7 @@ __all__ = [
     "ToolExecutor",
     "Hooks",
     "HookEvent",
+    "HookBlockResult",
     "PermissionManager",
     "PermissionDecision",
     "Decision",

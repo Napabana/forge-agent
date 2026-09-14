@@ -33,6 +33,7 @@ class LLMMessage:
     role: str
     content: str
     tool_call_id: str | None = None     # OpenAI function calling 回传结果时需要
+    event_ref: str | None = None        # 本地 EventLog 引用，不发送给 provider
 
 
 @dataclass

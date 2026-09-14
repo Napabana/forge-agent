@@ -25,7 +25,7 @@ from typing import Any, Callable
 
 from harness.hooks import HookEvent, Hooks
 from harness.permission import PermissionDecision, PermissionManager, ToolUseBlock
-from tools.base import ToolRegistry, ToolResult
+from tools.base import ToolErrorType, ToolRegistry, ToolResult
 from tools.shell_tool import ConfirmCallback
 
 logger = logging.getLogger(__name__)
@@ -69,14 +69,32 @@ class ToolExecutor:
 
     def execute(self, name: str, params: dict[str, Any]) -> ToolResult:
         """Run hooks, permission checks, and the underlying tool."""
+        invalid = self._registry.validate_tool_call(name, params)
+        if invalid is not None:
+            return invalid
         block = ToolUseBlock(name, params)
 
-        # 1. PreToolUse hooks（短路）
+        # 1. PreToolUse hooks（异常或明确拒绝都 fail-closed）
         if self._hooks is not None:
-            blocked = self._hooks.trigger(HookEvent.PRE_TOOL_USE, block)
-            if blocked is not None:
-                return ToolResult(success=False, output="", error=str(blocked))
+            try:
+                blocked = self._hooks.trigger_pre_tool_use(block)
+            except Exception as exc:
+                reason = f"PreToolUse hook failed: {type(exc).__name__}: {exc}"
+                logger.warning("[executor] %s", reason)
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=reason,
+                    error_type=ToolErrorType.HOOK_FAILED,
+                )
 
+            if blocked is not None:
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=blocked.reason,
+                    error_type=ToolErrorType.HOOK_BLOCKED,
+                )
         # 2. Permission
         if self._permission is not None:
             decision = self._permission.check(block)
@@ -90,15 +108,25 @@ class ToolExecutor:
                     logger.warning("[executor] decision_callback error: %s", exc)
 
             if decision.is_deny:
-                return ToolResult(success=False, output="",
-                                  error=f"Permission denied: {decision.reason}")
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=f"Permission denied: {decision.reason}",
+                    error_type=ToolErrorType.PERMISSION_DENIED,
+                )
             if decision.is_confirm:
                 if not self._confirm_prompt_ok(decision, block):
-                    return ToolResult(success=False, output="",
-                                      error=f"Permission denied by user: {decision.reason}")
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error=f"Permission denied by user: {decision.reason}",
+                        error_type=ToolErrorType.PERMISSION_DENIED,
+                    )
 
         # 3. 执行底层工具
         result = self._registry.execute_tool(name, params)
+        if not result.success and result.error_type is None:
+            result.error_type = _classify_tool_error(name, result)
 
         # 4. PostToolUse hooks（不拦截，仅观察）
         if self._hooks is not None:
@@ -106,6 +134,7 @@ class ToolExecutor:
                 self._hooks.trigger(HookEvent.POST_TOOL_USE, block, result)
             except Exception as exc:  # noqa: BLE001  观察钩子不能影响主流程
                 logger.warning("[executor] PostToolUse hook error: %s", exc)
+                result.diagnostics += (f"post_tool_hook:{type(exc).__name__}",)
 
         return result
 
@@ -124,3 +153,18 @@ class ToolExecutor:
         except Exception:  # noqa: BLE001
             logger.warning("[executor] confirm_callback raised; denying")
             return False
+
+
+def _classify_tool_error(name: str, result: ToolResult) -> ToolErrorType:
+    text = "\n".join(part for part in (result.output, result.error) if part).lower()
+    if "timed out" in text or "timeout" in text:
+        return ToolErrorType.TIMEOUT
+    if name in {"shell", "test", "pytest", "git"} and any(marker in text for marker in (
+        "cannot connect to the docker daemon",
+        "docker is not available",
+        "failed to start container",
+        "duplicate mount point",
+        "invalid mount config",
+    )):
+        return ToolErrorType.INFRASTRUCTURE
+    return ToolErrorType.TOOL_EXECUTION

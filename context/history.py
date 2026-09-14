@@ -56,13 +56,27 @@ class ConversationHistory:
 
     def to_dicts(self) -> list[dict]:
         """转为 dict 列表，供 TokenBudget.trim_history() 使用。"""
-        return [{"role": m.role, "content": m.content} for m in self._messages]
+        return [
+            {
+                "role": message.role,
+                "content": message.content,
+                **({"event_ref": message.event_ref} if message.event_ref else {}),
+            }
+            for message in self._messages
+        ]
 
     @classmethod
     def from_dicts(cls, dicts: list[dict], max_messages: int = 40) -> "ConversationHistory":
         """从 dict 列表恢复（断点续跑时用）。"""
         h = cls(max_messages=max_messages)
-        h._messages = [LLMMessage(role=d["role"], content=d["content"]) for d in dicts]
+        h._messages = [
+            LLMMessage(
+                role=item["role"],
+                content=item["content"],
+                event_ref=item.get("event_ref"),
+            )
+            for item in dicts
+        ]
         return h
 
     @property
@@ -81,6 +95,11 @@ class ConversationHistory:
     def clear(self) -> None:
         """清除全部消息，用于显式重置 Chat 会话上下文。"""
         self._messages.clear()
+
+    def replace(self, messages: list[LLMMessage]) -> None:
+        """Atomically replace the model-visible history."""
+        self._messages = list(messages)
+        self._trim()
 
     def _trim(self) -> None:
         """超出 max_messages 时，从索引 1 开始丢弃最旧的消息。"""

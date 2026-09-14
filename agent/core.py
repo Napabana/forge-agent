@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agent.event_log import EventLog
 from agent.loop_detector import LoopDetector, LoopSeverity, snapshot_repository
@@ -40,11 +43,39 @@ from agent.task import (
     Observation, ObservationStatus, RunResult, RunStatus, Task, ToolCall,
 )
 from llm.base import LLMBackend, LLMMessage, LLMToolSchema
-from llm.errors import LLMCallbackError, classify_llm_error
+from llm.errors import LLMCallbackError, LLMErrorInfo, classify_llm_error
 from llm.usage import SessionUsage
 from tools.base import ToolRegistry
 
+if TYPE_CHECKING:
+    from harness.hooks import Hooks
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PrepareNextTurnContext:
+    """下一次 LLM 调用前可观察的运行上下文。"""
+
+    task: Task
+    step: int
+    history: ConversationHistory
+    repo_map: RepoMap
+    token_budget: TokenBudget
+    cancel_event: object | None
+    event_log: EventLog
+
+
+@dataclass(frozen=True)
+class PrepareNextTurnResult:
+    """允许 prepare_next_turn 注入下一轮可见的消息。"""
+
+    messages: tuple[LLMMessage, ...] = ()
+
+PrepareNextTurn = Callable[
+    [PrepareNextTurnContext],
+    PrepareNextTurnResult | None,
+]
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +103,8 @@ class AgentConfig:
     confirm_dangerous: bool = False        # 是否对危险命令要求用户确认
     confirm_callback: object = None        # ConfirmCallback，None=跳过确认
     cancel_event: object = None            # threading.Event-like；set 后协作取消
-
+    hooks: Hooks | None = None              # 可选工具生命周期 hooks
+    prepare_next_turn: PrepareNextTurn | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +133,7 @@ class Agent:
         # 默认透明直通：未注入 executor 时用一个无 hooks/permission 的
         # ToolExecutor 包住 registry，行为等价于直接 registry.execute_tool。
         # 需要安全管线的地方（如 --confirm / 多智能体入口）显式注入 executor。
-        self._executor = executor or _default_executor(registry)
+        self._executor = executor or _default_executor(registry, self._cfg.hooks)
         self._repo_map_cache_key: str | None = None
         self._repo_map_force_refresh = False
 
@@ -147,6 +179,7 @@ class Agent:
         ##本质就是一个简单的 per-repository cache invalidation（按仓库粒度的缓存失效机制）。
         #同一个 Agent 实例可能被用来跑不同仓库的任务（比如 chat 模式跨轮、或多次 run），而 repo_map 缓存必须跟着仓库走。
         self._current_repo_path = task.repo_path
+        self._repo_map_query = task.description
         # 按 repo_path 隔离 repo_map 缓存，换 repo 时自动重建
         cache_key = task.repo_path
         #用getattr和hasattr：
@@ -155,6 +188,10 @@ class Agent:
             self.invalidate_repo_map_cache()
             self._repo_map_force_refresh = False  # 新 RepoMap 本身会做完整首扫
             self._repo_map_cache_key = cache_key#删掉旧缓存，强迫重建
+            self._repo_map_instance = RepoMap(task.repo_path)
+        elif getattr(self, "_repo_map_cache_query", None) != task.description:
+            if hasattr(self, "_repo_map_cache"):
+                del self._repo_map_cache
         
         #2.写入 TASK_START 事件
         log.log_task_start(task)
@@ -177,7 +214,7 @@ class Agent:
         token_budget = TokenBudget(total=self._cfg.budget_tokens)
         #把根路径 resolve() 存下来，扫描仓库生成一段给 LLM 看的目录+符号摘要
         #5.创建 RepoMap。
-        repo_map = RepoMap(task.repo_path)
+        repo_map = getattr(self, "_repo_map_instance", RepoMap(task.repo_path))
 
         usage = SessionUsage()
         total_tokens = 0
@@ -207,17 +244,118 @@ class Agent:
                     total_tokens=total_tokens,
                     usage=usage.snapshot(),
                 )
-            
+
+            if step > 1 and self._cfg.prepare_next_turn is not None:
+                prepare_started = time.perf_counter()
+                prepare_span = log.log_trace(
+                    EventType.PREPARE_NEXT_TURN_STARTED,
+                    step,
+                )
+                context = PrepareNextTurnContext(
+                    task=task,
+                    step=step,
+                    history=history,
+                    repo_map=repo_map,
+                    token_budget=token_budget,
+                    cancel_event=self._cfg.cancel_event,
+                    event_log=log,
+                )
+
+                try:
+                    prepared = self._cfg.prepare_next_turn(context)
+                except Exception as exc:
+                    log.log_trace(
+                        EventType.PREPARE_NEXT_TURN_FAILED,
+                        step,
+                        span_id=prepare_span,
+                        duration_ms=(time.perf_counter() - prepare_started) * 1000,
+                        error_type=type(exc).__name__,
+                    )
+                    reason = f"prepare_next_turn failed: {type(exc).__name__}: {exc}"
+                    logger.exception("prepare_next_turn failed before step %d", step)
+                    log.log_task_failed(steps=step - 1, reason=reason)
+                    return RunResult(
+                        task_id=task.task_id,
+                        status=RunStatus.FAILED,
+                        summary=reason,
+                        steps_taken=step - 1,
+                        total_tokens=total_tokens,
+                        usage=usage.snapshot(),
+                        error=reason,
+                    )
+
+                log.log_trace(
+                    EventType.PREPARE_NEXT_TURN_FINISHED,
+                    step,
+                    span_id=prepare_span,
+                    duration_ms=(time.perf_counter() - prepare_started) * 1000,
+                    injected_messages=len(prepared.messages) if prepared else 0,
+                )
+
+                if self._is_cancel_requested():
+                    reason = "Canceled by external request"
+                    logger.info(
+                        "Agent task %s canceled after prepare_next_turn",
+                        task.task_id,
+                    )
+                    log.log_task_failed(steps=step - 1, reason=reason)
+                    return RunResult(
+                        task_id=task.task_id,
+                        status=RunStatus.CANCELED,
+                        summary=reason,
+                        steps_taken=step - 1,
+                        total_tokens=total_tokens,
+                        usage=usage.snapshot(),
+                    )
+
+                if prepared is not None:
+                    history.add_many(list(prepared.messages))
+
             logger.debug("Step %d/%d", step, task.max_steps)
 
             # ── 1. 组装 messages，调用 LLM ──────────────────────────────
             messages = self._build_messages(history, token_budget, repo_map)
             tools = self._registry.get_schemas()#得到概述
+            llm_started = time.perf_counter()
+            llm_span = log.log_trace(
+                EventType.LLM_CALL_STARTED,
+                step,
+                model=self._backend.model_name,
+                provider=type(self._backend).__name__,
+                message_count=len(messages),
+                tool_schema_count=len(tools),
+            )
+            llm_retries = 0
+
+            def log_retry(attempt: int, error: LLMErrorInfo) -> None:
+                nonlocal llm_retries
+                llm_retries += 1
+                log.log_trace(
+                    EventType.LLM_CALL_RETRY,
+                    step,
+                    span_id=llm_span,
+                    attempt=attempt,
+                    error_type=error.kind.value,
+                    status_code=error.status_code,
+                    retry_after=error.retry_after,
+                )
 
             try:
                 #调用、分类、等待、重试、抛异常
-                response = self._call_with_retry(messages, tools)
+                response = self._call_with_retry(messages, tools, on_retry=log_retry)
             except Exception as exc:
+                error = classify_llm_error(exc)
+                log.log_trace(
+                    EventType.LLM_CALL_FAILED,
+                    step,
+                    span_id=llm_span,
+                    duration_ms=(time.perf_counter() - llm_started) * 1000,
+                    model=self._backend.model_name,
+                    provider=type(self._backend).__name__,
+                    retries=llm_retries,
+                    error_type=error.kind.value,
+                    status_code=error.status_code,
+                )
                 #写任务失败日志
                 # → 构造 RunResult
                 # → 将任务状态设为 FAILED
@@ -233,12 +371,22 @@ class Agent:
                     error=str(exc),
                 )
 
+            log.log_trace(
+                EventType.LLM_CALL_FINISHED,
+                step,
+                span_id=llm_span,
+                duration_ms=(time.perf_counter() - llm_started) * 1000,
+                model=self._backend.model_name,
+                provider=type(self._backend).__name__,
+                retries=llm_retries,
+                usage=response.usage.to_dict(),
+            )
             usage.record(response.usage)
             total_tokens = usage.total_tokens
             action = response.action
 
             # ── 2. 写入 Action event ────────────────────────────────────
-            log.log_action(
+            action_event_ref = log.log_action(
                 step=step,
                 action=action,
                 raw_content=response.raw_content,
@@ -348,7 +496,41 @@ class Agent:
 
                 tc = action.tool_call
                 #TOOL_CALL 进入 ToolExecutor；ToolResult 转 Observation。
-                result = self._executor.execute(tc.name, tc.params)
+                tool_started = time.perf_counter()
+                tool_span = log.log_trace(
+                    EventType.TOOL_EXECUTION_STARTED,
+                    step,
+                    tool_name=tc.name,
+                )
+                try:
+                    result = self._executor.execute(tc.name, tc.params)
+                except Exception as exc:
+                    log.log_trace(
+                        EventType.TOOL_EXECUTION_FAILED,
+                        step,
+                        span_id=tool_span,
+                        tool_name=tc.name,
+                        duration_ms=(time.perf_counter() - tool_started) * 1000,
+                        result_bytes=0,
+                        error_type=type(exc).__name__,
+                    )
+                    raise
+
+                tool_event = (
+                    EventType.TOOL_EXECUTION_FINISHED
+                    if result.success
+                    else EventType.TOOL_EXECUTION_FAILED
+                )
+                log.log_trace(
+                    tool_event,
+                    step,
+                    span_id=tool_span,
+                    tool_name=tc.name,
+                    duration_ms=(time.perf_counter() - tool_started) * 1000,
+                    result_bytes=len(result.output.encode("utf-8")),
+                    error_type=result.error_type.value if result.error_type else None,
+                    diagnostics=list(result.diagnostics),
+                )
                 observation = result.to_observation(tc.name)
 
                 # 追踪是否有文件写操作
@@ -367,7 +549,10 @@ class Agent:
                     if last_test_passed:
                         last_successful_test_step = step
 
-                log.log_observation(step=step, observation=observation)
+                observation_event_ref = log.log_observation(
+                    step=step,
+                    observation=observation,
+                )
 
                 #追踪基础设施错误
                 infrastructure_error = self._detect_known_fatal_infrastructure_error(observation)
@@ -403,10 +588,12 @@ class Agent:
                 history.add(LLMMessage(
                     role="assistant",
                     content=self._format_action_for_history(action),
+                    event_ref=action_event_ref,
                 ))
                 history.add(LLMMessage(
                     role="user",
                     content=self._format_observation_for_history(observation),
+                    event_ref=observation_event_ref,
                 ))
 
                 test_state = (
@@ -576,10 +763,15 @@ class Agent:
                 self._repo_map_cache = repo_map.build(
                     budget=map_budget,
                     force_refresh=True,
+                    query=getattr(self, "_repo_map_query", None),
                 )
             else:
-                self._repo_map_cache = repo_map.build(budget=map_budget)
+                self._repo_map_cache = repo_map.build(
+                    budget=map_budget,
+                    query=getattr(self, "_repo_map_query", None),
+                )
             self._repo_map_force_refresh = False
+            self._repo_map_cache_query = getattr(self, "_repo_map_query", None)
 
         #生成系统提示词
         system_content = build_system_prompt(
@@ -624,10 +816,10 @@ class Agent:
         self,
         messages: list[LLMMessage],
         tools: list[LLMToolSchema],
+        on_retry: Callable[[int, LLMErrorInfo], None] | None = None,
     ):
         """Call the backend with bounded retry for whitelisted transient errors."""
         import random
-        import time
 
         attempts = self._cfg.llm_max_retries
         if attempts < 1:
@@ -689,6 +881,8 @@ class Agent:
                     exc,
                     delay,
                 )
+                if on_retry is not None:
+                    on_retry(attempt, error)
                 time.sleep(delay)
 
         raise AssertionError("retry loop exited unexpectedly")
@@ -728,10 +922,13 @@ class Agent:
         except Exception:
             return None
 
-def _default_executor(registry: ToolRegistry) -> "ToolExecutor":
+def _default_executor(
+    registry: ToolRegistry,
+    hooks: "Hooks | None" = None,
+) -> "ToolExecutor":
     """
     构造一个透明直通的 ToolExecutor：无 hooks、无 permission，
     行为等价于直接调 registry.execute_tool。延迟 import 避免 agent <-> harness 循环。
     """
     from harness.executor import ToolExecutor
-    return ToolExecutor(registry)
+    return ToolExecutor(registry, hooks=hooks)

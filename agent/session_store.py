@@ -5,16 +5,26 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
 from agent.session import (
+    ChatSessionConflict,
     ChatSessionFormatError,
     ChatSessionNotFound,
     ChatSessionState,
+)
+
+
+_SECRET_PATTERNS = (
+    (re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(api[_-]?key|access[_-]?token|secret|password)\s*([:=])\s*[^\s,;]+"), r"\1\2[REDACTED]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"), "[REDACTED]"),
 )
 
 
@@ -87,22 +97,34 @@ class JsonChatSessionStore:
             path.parent.chmod(0o700)
         except OSError:
             pass
-        tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        try:
-            with tmp_path.open("w", encoding="utf-8") as fh:
-                json.dump(state.to_dict(), fh, ensure_ascii=False, indent=2)
-                fh.write("\n")
-                fh.flush()
-                os.fsync(fh.fileno())
+        with self._session_lock(path):
+            disk_revision = self._disk_revision(path)
+            if disk_revision != state.revision:
+                raise ChatSessionConflict(
+                    f"stale chat session revision: expected {state.revision}, "
+                    f"found {disk_revision}"
+                )
+            next_revision = state.revision + 1
+            payload = state.to_dict()
+            payload["revision"] = next_revision
+            payload = self._redact(payload)
+            tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
             try:
-                tmp_path.chmod(0o600)
-            except OSError:
-                pass
-            os.replace(tmp_path, path)
-            self._fsync_directory(path.parent)
-        finally:
-            if tmp_path.exists():
-                tmp_path.unlink()
+                with tmp_path.open("w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, ensure_ascii=False, indent=2)
+                    fh.write("\n")
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                try:
+                    tmp_path.chmod(0o600)
+                except OSError:
+                    pass
+                os.replace(tmp_path, path)
+                self._fsync_directory(path.parent)
+                state.revision = next_revision
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink()
 
     def load(self, session_id: str) -> ChatSessionState:
         matches = list(self.root.glob(f"*/{session_id}/state.json"))
@@ -130,6 +152,55 @@ class JsonChatSessionStore:
         if not isinstance(raw, dict):
             raise ChatSessionFormatError(f"invalid chat session state: {path}")
         return ChatSessionState.from_dict(raw)
+
+    @staticmethod
+    def _disk_revision(path: Path) -> int:
+        if not path.exists():
+            return 0
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            return int(raw.get("revision", 0))
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError) as exc:
+            raise ChatSessionFormatError(f"cannot read chat session {path}: {exc}") from exc
+
+    @staticmethod
+    def _redact(value):
+        if isinstance(value, dict):
+            return {key: JsonChatSessionStore._redact(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [JsonChatSessionStore._redact(item) for item in value]
+        if isinstance(value, str):
+            for pattern, replacement in _SECRET_PATTERNS:
+                value = pattern.sub(replacement, value)
+        return value
+
+    @staticmethod
+    @contextmanager
+    def _session_lock(path: Path):
+        lock_path = path.with_suffix(".lock")
+        with lock_path.open("a+b") as lock_file:
+            if os.name == "nt":
+                import msvcrt
+
+                if lock_file.seek(0, os.SEEK_END) == 0:
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:

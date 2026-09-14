@@ -228,8 +228,10 @@ class ChatSession:
         stream: bool = True,
         session_store=None,
         session_id: str | None = None,
+        prepare_next_turn=None,
     ) -> None:
-        from agent.core import Agent, AgentConfig
+        from agent.core import AgentConfig
+        from agent.runner import ExecutionRunner
         from context.history import ConversationHistory
 
         self.repo_path = repo_path
@@ -237,6 +239,7 @@ class ChatSession:
         self.config = config
         self._confirm_callback = confirm_callback
         self._session_store = session_store
+        self._prepare_next_turn = prepare_next_turn
         self._state = None
         self.recovery_warning: str | None = None
         self._history_max_messages = config.context.history_window * 2
@@ -286,8 +289,16 @@ class ChatSession:
             thought_callback=_thought_cb if stream else None,
             confirm_dangerous=confirm_callback is not None,
             confirm_callback=confirm_callback,
+            prepare_next_turn=prepare_next_turn,
         )
-        self.agent = Agent(backend, registry, agent_cfg)
+        self.runner = ExecutionRunner(
+            backend=backend,
+            registry=registry,
+            config=agent_cfg,
+            log_dir=log_dir,
+            confirm_callback=confirm_callback,
+        )
+        self.agent = self.runner.agent
         self._shared_history = ConversationHistory(
             max_messages=self._history_max_messages
         )
@@ -350,7 +361,7 @@ class ChatSession:
             else self.log_dir
         )
         try:
-            with EventLog.create(task, log_dir=log_dir) as log:
+            with EventLog.create(task, log_dir=log_dir, session_id=self.session_id) as log:
                 self.round_count = round_number
                 if self._state is not None:
                     self._state.pending_round = PendingRoundState(
@@ -580,6 +591,13 @@ class ChatSession:
         self._state.total_tokens = self.total_tokens
         self._state.usage = self.usage.snapshot()
         self._state.repo_revision = self._repo_revision
+        checkpoints = getattr(self._prepare_next_turn, "checkpoints", ())
+        known = {item.get("checkpoint_id") for item in self._state.compaction_checkpoints}
+        self._state.compaction_checkpoints.extend(
+            checkpoint.to_dict()
+            for checkpoint in checkpoints
+            if checkpoint.checkpoint_id not in known
+        )
         self._session_store.save(self._state)
 
     def _run_with_live_print(self, task, log):
@@ -589,11 +607,18 @@ class ChatSession:
         Agent.run() 是同步的，但 EventLog 每次 append 后会调用公开观察者。
         这个回调只影响终端显示，不读取或修改 ConversationHistory。
         """
-        log.on_append(_print_event_live)
-        try:
-            return self.agent.run(task, log, history=self._shared_history)
-        finally:
-            log.on_append(None)
+        from agent.runner import RunRequest
+
+        return self.runner.run(
+            RunRequest(
+                task=task,
+                history=self._shared_history,
+                prepare_next_turn=self._prepare_next_turn,
+                session_id=self.session_id,
+            ),
+            log=log,
+            on_event=_print_event_live,
+        )
 
     def print_stats(self) -> None:
         """打印会话总统计。"""

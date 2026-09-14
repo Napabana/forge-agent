@@ -16,10 +16,58 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from agent.task import Observation, ObservationStatus
 from llm.base import LLMToolSchema
+
+
+class ToolErrorType(str, Enum):
+    UNKNOWN_TOOL = "unknown_tool"
+    INVALID_ARGUMENTS = "invalid_arguments"
+    PERMISSION_DENIED = "permission_denied"
+    TIMEOUT = "timeout"
+    TOOL_EXECUTION = "tool_execution"
+    INFRASTRUCTURE = "infrastructure"
+    HOOK_BLOCKED = "hook_blocked"
+    HOOK_FAILED = "hook_failed"
+
+
+_JSON_TYPES = {
+    "string": str,
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+}
+
+
+def _matches_json_type(value: Any, expected: str) -> bool:
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "null":
+        return value is None
+    expected_type = _JSON_TYPES.get(expected)
+    return expected_type is None or isinstance(value, expected_type)
+
+
+def _validate_tool_params(params: Any, schema: dict[str, Any]) -> str | None:
+    if not isinstance(params, dict):
+        return "Tool arguments must be an object"
+
+    missing = [name for name in schema.get("required", []) if name not in params]
+    if missing:
+        return f"Missing required argument(s): {', '.join(missing)}"
+
+    properties = schema.get("properties", {})
+    for name, value in params.items():
+        expected = properties.get(name, {}).get("type")
+        if isinstance(expected, str) and not _matches_json_type(value, expected):
+            return f"Argument '{name}' must be {expected}"
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +83,8 @@ class ToolResult:
     success: bool
     output: str                         # 工具的文本输出，已做截断处理
     error: str | None = None            # 失败时的错误信息
+    error_type: ToolErrorType | None = None
+    diagnostics: tuple[str, ...] = ()   # 不改变结果的观察阶段诊断
 
     def to_observation(self, tool_name: str) -> Observation:
         """转换为 Observation，供 core.py 写入 EventLog 和注入上下文。"""
@@ -43,6 +93,7 @@ class ToolResult:
             output=self.output,
             tool_name=tool_name,
             error=self.error,
+            error_type=self.error_type.value if self.error_type is not None else None,
         )
 
 
@@ -127,28 +178,40 @@ class ToolRegistry:
         self._tools[tool.name] = tool
         return self
 
-    def execute_tool(self, name: str, params: dict[str, Any]) -> ToolResult:
-        """
-        按名称查找工具并执行。
-        工具不存在时返回 error ToolResult（不抛异常，让 agent 继续运行）。
-        """
+    def validate_tool_call(self, name: str, params: Any) -> ToolResult | None:
         if name not in self._tools:
-            available = ", ".join(self._tools.keys()) or "none"
+            available = ", ".join(self._tools) or "none"
             return ToolResult(
                 success=False,
                 output="",
                 error=f"Unknown tool '{name}'. Available tools: {available}",
+                error_type=ToolErrorType.UNKNOWN_TOOL,
             )
 
-        tool = self._tools[name]
+        error = _validate_tool_params(params, self._tools[name].parameters_schema)
+        if error is not None:
+            return ToolResult(
+                success=False,
+                output="",
+                error=error,
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
+
+        return None
+
+    def execute_tool(self, name: str, params: dict[str, Any]) -> ToolResult:
+        invalid = self.validate_tool_call(name, params)
+        if invalid is not None:
+            return invalid
+
         try:
-            return tool.execute(params)
+            return self._tools[name].execute(params)
         except Exception as exc:
-            # 工具内部未捕获的异常，降级为 error 结果
             return ToolResult(
                 success=False,
                 output="",
                 error=f"Tool '{name}' raised an unexpected error: {exc}",
+                error_type=ToolErrorType.TOOL_EXECUTION,
             )
 
     def get_schemas(self) -> list[LLMToolSchema]:

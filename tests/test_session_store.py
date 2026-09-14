@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent.session import (
+    ChatSessionConflict,
     ChatSessionState,
     ChatSessionRepoMismatch,
     PendingRoundState,
@@ -64,6 +65,56 @@ def test_json_store_round_trip_and_latest(tmp_path):
     assert latest is not None
     assert latest.session_id == state.session_id
     assert not list(store.state_path(state).parent.glob("*.tmp"))
+
+
+def test_stale_session_save_is_rejected(tmp_path):
+    store = JsonChatSessionStore(tmp_path / "logs" / "chat")
+    state = store.create(tmp_path)
+    first = store.load(state.session_id)
+    stale = store.load(state.session_id)
+
+    first.title = "first writer"
+    store.save(first)
+    stale.title = "stale writer"
+
+    with pytest.raises(ChatSessionConflict):
+        store.save(stale)
+
+    assert store.load(state.session_id).title == "first writer"
+
+
+def test_v1_session_is_migrated_on_read(tmp_path):
+    state = ChatSessionState(
+        session_id="legacy",
+        repo_path=str(tmp_path),
+        repo_key="repo",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    raw = state.to_dict()
+    raw["version"] = 1
+    raw.pop("revision")
+    raw.pop("compaction_checkpoints")
+
+    migrated = ChatSessionState.from_dict(raw)
+
+    assert migrated.version == 2
+    assert migrated.revision == 0
+    assert migrated.compaction_checkpoints == []
+
+
+def test_session_store_redacts_secrets_on_disk(tmp_path):
+    store = JsonChatSessionStore(tmp_path / "logs" / "chat")
+    state = store.create(tmp_path)
+    state.history = [{"role": "user", "content": "Authorization: Bearer very-secret-token"}]
+    state.title = "api_key=sk-abcdefghijklmnop"
+
+    store.save(state)
+
+    persisted = store.state_path(state).read_text(encoding="utf-8")
+    assert "very-secret-token" not in persisted
+    assert "sk-abcdefghijklmnop" not in persisted
+    assert persisted.count("[REDACTED]") == 2
 
 
 def test_chat_session_resumes_history_and_statistics(tmp_path):

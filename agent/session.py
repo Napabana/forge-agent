@@ -8,7 +8,7 @@ from typing import Any
 from llm.usage import SessionUsage
 
 
-SESSION_STATE_VERSION = 1
+SESSION_STATE_VERSION = 2
 
 
 class ChatSessionError(RuntimeError):
@@ -25,6 +25,10 @@ class ChatSessionRepoMismatch(ChatSessionError):
 
 class ChatSessionFormatError(ChatSessionError):
     """Raised when persisted session data cannot be read safely."""
+
+
+class ChatSessionConflict(ChatSessionError):
+    """Raised when saving a stale copy of a chat session."""
 
 
 @dataclass
@@ -83,6 +87,8 @@ class ChatSessionState:
     repo_revision: str = ""
     pending_round: PendingRoundState | None = None
     rounds: list[ChatRoundState] = field(default_factory=list)
+    compaction_checkpoints: list[dict[str, Any]] = field(default_factory=list)
+    revision: int = 0
     version: int = SESSION_STATE_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -91,12 +97,16 @@ class ChatSessionState:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ChatSessionState":
         version = data.get("version")
-        if version != SESSION_STATE_VERSION:
+        if version not in {1, SESSION_STATE_VERSION}:
             raise ChatSessionFormatError(
                 f"unsupported chat session version: {version!r}"
             )
         try:
             raw = dict(data)
+            if version == 1:
+                raw["version"] = SESSION_STATE_VERSION
+                raw.setdefault("revision", 0)
+                raw.setdefault("compaction_checkpoints", [])
             pending = raw.get("pending_round")
             raw["pending_round"] = (
                 PendingRoundState.from_dict(pending) if pending else None

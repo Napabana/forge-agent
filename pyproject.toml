@@ -44,7 +44,7 @@ agent = "entry.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*", "runtime*", "ipc*", "harness*"]
+include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*", "runtime*", "ipc*", "harness*", "evals*"]
 
 [tool.setuptools.package-data]
 tools = ["sandbox.Dockerfile"]

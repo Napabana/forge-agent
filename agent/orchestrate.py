@@ -329,7 +329,7 @@ async def orchestrate_run(
                 )
 
             executor = ToolExecutor(
-                registry, permission=permission,
+                registry, hooks=agent_cfg.hooks, permission=permission,
                 confirm_callback=confirm_callback,
                 decision_callback=_on_decision,
             )

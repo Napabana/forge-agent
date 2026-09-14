@@ -44,6 +44,17 @@ class EventType(str, Enum):
     WORKTREE_RETAINED = "worktree_retained"
     WORKTREE_REMOVED  = "worktree_removed"
     PERMISSION_DECISION = "permission_decision"
+    PREPARE_NEXT_TURN_STARTED = "prepare_next_turn_started"
+    PREPARE_NEXT_TURN_FINISHED = "prepare_next_turn_finished"
+    PREPARE_NEXT_TURN_FAILED = "prepare_next_turn_failed"
+    LLM_CALL_STARTED = "llm_call_started"
+    LLM_CALL_RETRY = "llm_call_retry"
+    LLM_CALL_FINISHED = "llm_call_finished"
+    LLM_CALL_FAILED = "llm_call_failed"
+    TOOL_EXECUTION_STARTED = "tool_execution_started"
+    TOOL_EXECUTION_FINISHED = "tool_execution_finished"
+    TOOL_EXECUTION_FAILED = "tool_execution_failed"
+    CONTEXT_COMPACTED = "context_compacted"
 
 
 class ActionType(str, Enum):
@@ -189,6 +200,7 @@ class Observation:
     tool_name: str                      # 来自哪个工具
     tokens_used: int = 0                # 这条 observation 消耗的 token 数（估算）
     error: str | None = None            # status == ERROR 时的错误信息
+    error_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -267,6 +279,8 @@ class RunResult:
     patch: str | None = None            # git diff 格式的修改内容
     error: str | None = None            # status == FAILED 时的原因
     worktree: "WorktreeArtifact | None" = None
+    trace_path: str | None = None
+    delivery_status: str = "not_requested"
 
     def __post_init__(self) -> None:
         if self.usage.total_tokens:

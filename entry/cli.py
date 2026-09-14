@@ -287,9 +287,14 @@ def run(
     from tools.runtime import create_runtime
     confirm_cb = terminal_confirm if confirm else None
     #runtime是执行器实例， 有生命周期，后续还需要清理
-    runtime = create_runtime(sandbox=sandbox, repo_path=str(repo_path)) if sandbox else None
+    runtime = (
+        create_runtime(sandbox=True, repo_path=str(repo_path))
+        if sandbox and not isolate
+        else None
+    )
     if sandbox:
-        click.echo(dim(f"  Sandbox: Docker ({runtime.name})"))
+        runtime_name = runtime.name if runtime is not None else "managed by isolate"
+        click.echo(dim(f"  Sandbox: Docker ({runtime_name})"))
     # 注册工具
     registry = _build_registry(
         config,
@@ -298,8 +303,9 @@ def run(
         workspace=str(repo_path),
     )
 
-    from agent.core import Agent, AgentConfig
+    from agent.core import AgentConfig
     from agent.event_log import EventLog, summarize_run
+    from agent.runner import ExecutionRunner, RunRequest
     from agent.task import Task, infer_completion_requirements
     try:
         from context.token_budget import is_tiktoken_available
@@ -329,9 +335,6 @@ def run(
         confirm_dangerous=confirm,
         confirm_callback=confirm_cb,
     )
-    #llm后端，注册工具，agent配置
-    agent = Agent(backend, registry, agent_config)
-
     require_changes, require_tests = infer_completion_requirements(description)
     task_obj = Task(
         description=description,
@@ -341,31 +344,31 @@ def run(
         require_changes=require_changes,
         require_tests=require_tests,
     )
+    runner = ExecutionRunner(
+        backend=backend,
+        registry=registry,
+        config=agent_config,
+        log_dir=config.agent.log_dir,
+        registry_builder=_build_registry,
+        confirm_callback=confirm_cb,
+    )
 
     # M4 第二波：--isolate 走 async 组合根（worktree + TaskEngine + permission workspace）
     #事务隔离，在worktree中跑：异步async 不用之前的agent实例，只有 backend、task_obj、agent_config、confirm_cb 被复用
     if isolate:
-        import asyncio
-        from agent.orchestrate import orchestrate_run
         from ipc.bus import AgentBus
-        from task.engine import TaskEngine
 
         #持久化状态
-        engine = TaskEngine(Path(config.agent.log_dir) / "tasks.db")
+        Path(config.agent.log_dir).mkdir(parents=True, exist_ok=True)
         bus = AgentBus() if verbose else None
-        click.echo(dim(f"  Isolate: worktree + TaskEngine ({engine.__class__.__name__})\n"))
+        runner.bus = bus
+        click.echo(dim("  Isolate: worktree + TaskEngine\n"))
 
         t0 = time.time()
-        result = asyncio.run(orchestrate_run(
-            backend=backend,
+        result = runner.run(RunRequest(
             task=task_obj,
-            engine=engine,
-            registry_builder=_build_registry,
-            bus=bus,
-            log_dir=config.agent.log_dir,
+            isolate=True,
             sandbox=sandbox,
-            config=agent_config,
-            confirm_callback=confirm_cb,
             result_policy=result_policy,
         ))
         elapsed = time.time() - t0
@@ -381,7 +384,7 @@ def run(
         with EventLog.create(task_obj, log_dir=config.agent.log_dir) as log:
             click.echo(dim(f"  Log: {log.path}\n"))
             #真正的执行核心。它的职责包括维护对话历史、组装 messages 调用 LLM、拿到 Action 后执行工具、写入 Action 和 Observation 到 EventLog、检测终止条件和 reflection 条件，最后返回 RunResult。
-            result = agent.run(task_obj, log)
+            result = runner.run(RunRequest(task=task_obj), log=log)
             # 打印所有 events
             for event in log.replay():
                 _print_step(event)

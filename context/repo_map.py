@@ -210,7 +210,13 @@ class RepoMap:
         self._files, self._last_report = self._scan(force_refresh=True)
         return self._last_report
 
-    def build(self, budget: int = 8000, *, force_refresh: bool = False) -> str:
+    def build(
+        self,
+        budget: int = 8000,
+        *,
+        force_refresh: bool = False,
+        query: str | None = None,
+    ) -> str:
         if force_refresh:
             self.refresh()
         elif self._files is None:
@@ -220,7 +226,11 @@ class RepoMap:
         if not files:
             return "(empty repository)"
 
-        files.sort(key=lambda item: (-item.importance_score(), item.rel_path))
+        relevance = _query_relevance(files, query)
+        files.sort(key=lambda item: (
+            -(item.importance_score() + relevance.get(item.path, 0.0)),
+            item.rel_path,
+        ))
         lines: list[str] = []
         char_count = 0
         max_chars = budget * 4
@@ -373,6 +383,41 @@ def _apply_reference_scores(files: list[FileInfo]) -> None:
                 continue
             for defining_path in defining_files:
                 files_by_path[defining_path].reference_count += occurrences
+
+
+def _query_relevance(
+    files: list[FileInfo],
+    query: str | None,
+) -> dict[Path, float]:
+    """Return deterministic path/symbol/keyword relevance boosts."""
+
+    terms = {term.lower() for term in _IDENTIFIER_RE.findall(query or "") if len(term) >= 2}
+    if not terms:
+        return {}
+
+    scores: dict[Path, float] = {}
+    matched_symbols: set[str] = set()
+    for file_info in files:
+        path_text = file_info.path.as_posix().lower()
+        path_parts = {part.lower() for part in _IDENTIFIER_RE.findall(path_text)}
+        symbol_names = {symbol.name.lower() for symbol in file_info.symbols}
+        path_hits = terms & path_parts
+        symbol_hits = terms & symbol_names
+        substring_hits = {term for term in terms if term in path_text}
+        score = len(path_hits) * 3.0 + len(symbol_hits) * 4.0
+        score += len(substring_hits - path_hits) * 1.0
+        if score:
+            scores[file_info.path] = score
+            matched_symbols.update(symbol_hits)
+
+    # Files using a directly matched symbol are useful dependency neighbours.
+    for file_info in files:
+        if matched_symbols and file_info._content:
+            identifiers = {name.lower() for name in _IDENTIFIER_RE.findall(file_info._content)}
+            neighbour_hits = matched_symbols & identifiers
+            if neighbour_hits:
+                scores[file_info.path] = scores.get(file_info.path, 0.0) + len(neighbour_hits)
+    return scores
 
 
 def _extract_symbols(

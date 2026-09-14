@@ -12,13 +12,14 @@ import pytest
 
 from harness import (
     ALLOW,
+    HookBlockResult,
     HookEvent,
     Hooks,
     PermissionManager,
     ToolExecutor,
     ToolUseBlock,
 )
-from tools.base import BaseTool, ToolRegistry, ToolResult
+from tools.base import BaseTool, ToolErrorType, ToolRegistry, ToolResult
 from tools.shell_tool import always_allow, always_deny
 
 
@@ -54,6 +55,7 @@ def registry():
     r = ToolRegistry()
     r.register(EchoTool("echo"))
     r.register(EchoTool("shell"))   # 名为 shell 的 echo，供 permission 路径测试
+    r.register(EchoTool("file_read"))
     return r
 
 
@@ -170,6 +172,17 @@ class TestToolExecutor:
         result = ex.execute("echo", {"text": "hello"})
         assert result.success and result.output == "hello"
 
+    def test_invalid_arguments_stop_before_hooks_and_keep_error_type(self, registry):
+        seen = []
+        hooks = Hooks().register(HookEvent.PRE_TOOL_USE, lambda block: seen.append(block))
+
+        result = ToolExecutor(registry, hooks=hooks).execute("echo", {"text": 123})
+
+        assert not result.success
+        assert result.error_type is ToolErrorType.INVALID_ARGUMENTS
+        assert result.to_observation("echo").error_type == "invalid_arguments"
+        assert seen == []
+
     def test_permission_denies_blocked_command(self, registry):
         # 即便底层是 echo 工具，permission 看 block.name=="shell" 也校验；
         # 这里用 shell 名 + 危险参数验证拒绝路径
@@ -177,6 +190,7 @@ class TestToolExecutor:
         ex = ToolExecutor(registry, permission=perm)
         result = ex.execute("shell", {"cmd": "rm -rf /"})
         assert not result.success
+        assert result.error_type is ToolErrorType.PERMISSION_DENIED
         assert "deny" in result.error.lower() or "permission" in result.error.lower()
 
     def test_confirm_allowed_by_callback(self, registry):
@@ -228,15 +242,38 @@ class TestToolExecutor:
         ex = ToolExecutor(registry, hooks=hooks)
         result = ex.execute("echo", {"text": "x"})
         assert not result.success
+        assert result.error_type is ToolErrorType.HOOK_BLOCKED
         assert "vetoed" in result.error
+
+    def test_typed_pre_hook_block_and_exception_fail_closed(self, registry):
+        blocked = Hooks().register(
+            HookEvent.PRE_TOOL_USE,
+            lambda _block: HookBlockResult("typed veto"),
+        )
+        failed = Hooks().register(
+            HookEvent.PRE_TOOL_USE,
+            lambda _block: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        blocked_result = ToolExecutor(registry, hooks=blocked).execute("echo", {"text": "x"})
+        failed_result = ToolExecutor(registry, hooks=failed).execute("echo", {"text": "x"})
+
+        assert blocked_result.error_type is ToolErrorType.HOOK_BLOCKED
+        assert failed_result.error_type is ToolErrorType.HOOK_FAILED
 
     def test_post_tool_hook_observed(self, registry):
         seen = []
         hooks = Hooks()
-        hooks.register(HookEvent.POST_TOOL_USE, lambda b, r: seen.append((b.name, r.output)) or None)
+
+        def observe(block, result):
+            seen.append((block.name, result.output))
+            return ToolResult(False, "replacement")
+
+        hooks.register(HookEvent.POST_TOOL_USE, observe)
         ex = ToolExecutor(registry, hooks=hooks)
         result = ex.execute("echo", {"text": "y"})
         assert result.success
+        assert result.output == "y"
         assert seen == [("echo", "y")]
 
     def test_post_tool_hook_error_does_not_break_flow(self, registry):
@@ -246,9 +283,26 @@ class TestToolExecutor:
         result = ex.execute("echo", {"text": "z"})
         assert result.success   # 观察钩子抛错不影响主流程
         assert result.output == "z"
+        assert result.diagnostics == ("post_tool_hook:RuntimeError",)
 
     def test_unknown_tool(self, registry):
         ex = ToolExecutor(registry)
         result = ex.execute("nope", {})
         assert not result.success
+        assert result.error_type is ToolErrorType.UNKNOWN_TOOL
         assert "Unknown" in (result.error or "")
+
+    def test_tool_failures_are_classified(self):
+        def fake_tool(name, result=None, error=None):
+            tool = EchoTool(name)
+            tool.execute = lambda _params: result if error is None else (_ for _ in ()).throw(error)
+            return tool
+
+        registry = ToolRegistry()
+        registry.register(fake_tool("timeout", ToolResult(False, "", "command timed out")))
+        registry.register(fake_tool("shell", ToolResult(False, "", "Docker is not available")))
+        registry.register(fake_tool("boom", error=RuntimeError("boom")))
+
+        assert ToolExecutor(registry).execute("timeout", {}).error_type is ToolErrorType.TIMEOUT
+        assert ToolExecutor(registry).execute("shell", {}).error_type is ToolErrorType.INFRASTRUCTURE
+        assert ToolExecutor(registry).execute("boom", {}).error_type is ToolErrorType.TOOL_EXECUTION

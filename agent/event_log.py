@@ -17,13 +17,17 @@ Append-only JSONL 事件日志。
 from __future__ import annotations
 
 import json
+import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
 from agent.task import Event, EventType, Task, Action, Observation
 from llm.usage import SessionUsage, TokenUsage
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -45,12 +49,18 @@ class EventLog:
         {log_dir}/{task_id}_{timestamp}.jsonl
     """
 
-    def __init__(self, path: Path, task_id: str | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        task_id: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self._path = path
         self._file = open(path, "a", encoding="utf-8")  # append mode
         # 显式记录 task_id，避免依赖文件名解析（orchestrator 的 task_id 含下划线
         # 会让 _current_task_id 的 stem.split("_")[0] 只取到 "task"）。
         self._task_id = task_id
+        self._session_id = session_id
         # on_append 钩子：每条 event 写入后同步触发，供 orchestrator 转发到 AgentBus。
         self._on_append: "Callable[[Event], None] | None" = None
 
@@ -59,7 +69,12 @@ class EventLog:
     # ------------------------------------------------------------------
 
     @classmethod
-    def create(cls, task: Task, log_dir: str = "./logs") -> "EventLog":
+    def create(
+        cls,
+        task: Task,
+        log_dir: str = "./logs",
+        session_id: str | None = None,
+    ) -> "EventLog":
         """
         为一次新运行创建 EventLog。
         目录不存在时自动创建。
@@ -69,7 +84,7 @@ class EventLog:
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"{task.task_id}_{timestamp}.jsonl"
-        return cls(log_path / filename, task_id=task.task_id)
+        return cls(log_path / filename, task_id=task.task_id, session_id=session_id)
 
     @classmethod
     def open_existing(cls, path: str | Path) -> "EventLog":
@@ -94,9 +109,9 @@ class EventLog:
         action: Action,
         raw_content: str = "",
         usage: TokenUsage | None = None,
-    ) -> None:
+    ) -> str:
         """Agent 的每一步决策。raw_content 是模型返回的完整原始文本。"""
-        self._append(Event(
+        event = Event(
             event_type=EventType.ACTION,
             task_id=self._current_task_id,
             payload={
@@ -105,18 +120,55 @@ class EventLog:
                 "raw_content": raw_content,  # 模型原始输出，含完整推理链
                 "usage":       usage.to_dict() if usage else None,
             },
-        ))
+        )
+        self._append(event)
+        return event.event_id
 
-    def log_observation(self, step: int, observation: Observation) -> None:
+    def log_observation(self, step: int, observation: Observation) -> str:
         """工具执行结果。"""
-        self._append(Event(
+        event = Event(
             event_type=EventType.OBSERVATION,
             task_id=self._current_task_id,
             payload={
                 "step":        step,
                 "observation": observation.to_dict(),
             },
-        ))
+        )
+        self._append(event)
+        return event.event_id
+
+    def log_trace(
+        self,
+        event_type: EventType,
+        step: int,
+        *,
+        span_id: str | None = None,
+        parent_span_id: str | None = None,
+        session_id: str | None = None,
+        **details,
+    ) -> str:
+        """Append one schema-v2 lifecycle event without exposing raw request data."""
+        span_id = span_id or uuid.uuid4().hex[:16]
+        run_id = self._path.stem
+        payload = {
+            "schema_version": 2,
+            "run_id": run_id,
+            "session_id": session_id if session_id is not None else self._session_id,
+            "turn_id": f"{run_id}:{step}",
+            "step_id": step,
+            "span_id": span_id,
+            "parent_span_id": parent_span_id,
+            **details,
+        }
+        try:
+            self._append(Event(
+                event_type=event_type,
+                task_id=self._current_task_id,
+                payload=payload,
+            ))
+        except Exception as exc:  # trace must not replace the Agent result
+            logger.warning("Trace write failed for %s: %s", event_type.value, exc)
+        return span_id
 
     def log_reflection(self, step: int, reason: str, prompt: str) -> None:
         """
@@ -395,6 +447,14 @@ def summarize_run(log: EventLog) -> dict:
         "observations_err": 0,
         "final_status":    None,
         "usage":           None,
+        "trace": {
+            "prepare_calls": 0,
+            "llm_calls": 0,
+            "llm_retries": 0,
+            "tool_calls": 0,
+            "duration_ms": {"prepare": 0.0, "llm": 0.0, "tool": 0.0},
+            "errors": {},
+        },
     }
 
     usage = SessionUsage()
@@ -425,6 +485,29 @@ def summarize_run(log: EventLog) -> dict:
 
         elif event.event_type in (EventType.TASK_COMPLETE, EventType.TASK_FAILED):
             stats["final_status"] = event.event_type.value
+
+        if event.event_type in (
+            EventType.PREPARE_NEXT_TURN_FINISHED,
+            EventType.PREPARE_NEXT_TURN_FAILED,
+        ):
+            stats["trace"]["prepare_calls"] += 1
+            stats["trace"]["duration_ms"]["prepare"] += event.payload.get("duration_ms", 0)
+        elif event.event_type in (EventType.LLM_CALL_FINISHED, EventType.LLM_CALL_FAILED):
+            stats["trace"]["llm_calls"] += 1
+            stats["trace"]["duration_ms"]["llm"] += event.payload.get("duration_ms", 0)
+        elif event.event_type == EventType.LLM_CALL_RETRY:
+            stats["trace"]["llm_retries"] += 1
+        elif event.event_type in (
+            EventType.TOOL_EXECUTION_FINISHED,
+            EventType.TOOL_EXECUTION_FAILED,
+        ):
+            stats["trace"]["tool_calls"] += 1
+            stats["trace"]["duration_ms"]["tool"] += event.payload.get("duration_ms", 0)
+
+        error_type = event.payload.get("error_type")
+        if error_type:
+            errors = stats["trace"]["errors"]
+            errors[error_type] = errors.get(error_type, 0) + 1
 
     stats["usage"] = usage.to_dict()
 

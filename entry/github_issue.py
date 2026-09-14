@@ -181,8 +181,8 @@ def run_on_issue(
         0 if success, 1 if failed
     """
     from config.schema import load_config
-    from agent.core import Agent, AgentConfig
-    from agent.event_log import EventLog
+    from agent.core import AgentConfig
+    from agent.runner import ExecutionRunner, RunRequest
     from agent.task import Task, infer_completion_requirements
     from llm.router import create_backend_from_config
 
@@ -232,8 +232,6 @@ def run_on_issue(
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
     )
-    agent = Agent(backend, registry, agent_config)
-
     require_changes, require_tests = infer_completion_requirements(description)
     task = Task(
         description=description,
@@ -248,8 +246,12 @@ def run_on_issue(
     # 5. 运行 agent
     click.echo(f"\nRunning agent on issue #{issue_number} ...")
     t0 = time.time()
-    with EventLog.create(task, log_dir=config.agent.log_dir) as log:
-        result = agent.run(task, log)
+    result = ExecutionRunner(
+        backend=backend,
+        registry=registry,
+        config=agent_config,
+        log_dir=config.agent.log_dir,
+    ).run(RunRequest(task=task))
 
     elapsed = time.time() - t0
     click.echo(f"  Status : {result.status.value}")
