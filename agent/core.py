@@ -41,6 +41,7 @@ from agent.task import (
 )
 from llm.base import LLMBackend, LLMMessage, LLMToolSchema
 from llm.errors import LLMCallbackError, classify_llm_error
+from llm.usage import SessionUsage
 from tools.base import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,7 @@ class Agent:
         #5.创建 RepoMap。
         repo_map = RepoMap(task.repo_path)
 
+        usage = SessionUsage()
         total_tokens = 0
         steps_without_edit = 0
         loop_detector = LoopDetector(repeats=self._cfg.loop_detection_window, max_period=self._cfg.loop_detection_max_period,)
@@ -203,6 +205,7 @@ class Agent:
                     summary=reason,
                     steps_taken=step - 1,
                     total_tokens=total_tokens,
+                    usage=usage.snapshot(),
                 )
             
             logger.debug("Step %d/%d", step, task.max_steps)
@@ -226,14 +229,21 @@ class Agent:
                     summary=f"LLM call failed: {exc}",
                     steps_taken=step,
                     total_tokens=total_tokens,
+                    usage=usage.snapshot(),
                     error=str(exc),
                 )
 
-            total_tokens += response.total_tokens
+            usage.record(response.usage)
+            total_tokens = usage.total_tokens
             action = response.action
 
             # ── 2. 写入 Action event ────────────────────────────────────
-            log.log_action(step=step, action=action, raw_content=response.raw_content)
+            log.log_action(
+                step=step,
+                action=action,
+                raw_content=response.raw_content,
+                usage=response.usage,
+            )
             logger.info("Step %d: %r", step, action)
 
             # ── 4. 终止 action ──────────────────────────────────────────
@@ -293,6 +303,7 @@ class Agent:
                         summary=verification_error,
                         steps_taken=step,
                         total_tokens=total_tokens,
+                        usage=usage.snapshot(),
                         patch=patch,
                         error=verification_error,
                     )
@@ -304,6 +315,7 @@ class Agent:
                     summary=summary,
                     steps_taken=step,
                     total_tokens=total_tokens,
+                    usage=usage.snapshot(),
                     patch=patch,
                 )
 
@@ -316,6 +328,7 @@ class Agent:
                     summary=reason,
                     steps_taken=step,
                     total_tokens=total_tokens,
+                    usage=usage.snapshot(),
                 )
 
             # ── 5. 执行工具 ─────────────────────────────────────────────
@@ -330,6 +343,7 @@ class Agent:
                         summary=reason,
                         steps_taken=step,
                         total_tokens=total_tokens,
+                        usage=usage.snapshot(),
                     )
 
                 tc = action.tool_call
@@ -375,6 +389,7 @@ class Agent:
                             summary=reason,
                             steps_taken=step,
                             total_tokens=total_tokens,
+                            usage=usage.snapshot(),
                             patch=self._get_git_diff(task.repo_path),
                             error=reason,
                         )
@@ -430,6 +445,7 @@ class Agent:
                             summary=reason,
                             steps_taken=step,
                             total_tokens=total_tokens,
+                            usage=usage.snapshot(),
                         )
 
                     reflect_prompt = reflection_loop_detected(
@@ -489,6 +505,7 @@ class Agent:
             summary=reason,
             steps_taken=task.max_steps,
             total_tokens=total_tokens,
+            usage=usage.snapshot(),
         )
         
     @staticmethod

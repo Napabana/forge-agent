@@ -22,6 +22,7 @@ from typing import Any
 
 from agent.task import Action, ActionType, ToolCall
 from llm.base import LLMBackend, LLMMessage, LLMResponse, LLMToolSchema
+from llm.usage import TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +110,12 @@ class OpenAICompatBackend(LLMBackend):
         )
 
         choices = getattr(response, "choices", None) or []
-        input_tokens, output_tokens = _response_usage_tokens(
-            response, api_messages, ""
-        )
+        usage = _response_usage(response, api_messages, "")
         if not choices:
             logger.warning("OpenAI-compatible response contained no choices")
             return _empty_model_response(
                 "Model returned no choices",
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
+                usage=usage,
             )
 
         choice = choices[0]
@@ -126,15 +124,15 @@ class OpenAICompatBackend(LLMBackend):
         thought = content or "(no thought)"
         if not isinstance(thought, str):
             thought = str(thought)
-        input_tokens, output_tokens = _response_usage_tokens(
+        usage = _response_usage(
             response, api_messages, "" if thought == "(no thought)" else thought
         )
 
         logger.debug(
             "OpenAI-compat response: finish_reason=%s input=%d output=%d",
             getattr(choice, "finish_reason", None),
-            input_tokens,
-            output_tokens,
+            usage.input_tokens,
+            usage.output_tokens,
         )
 
         action = _parse_openai_response(choice, thought)
@@ -142,8 +140,7 @@ class OpenAICompatBackend(LLMBackend):
         return LLMResponse(
             action=action,
             raw_content=thought,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            usage=usage,
         )
 
     # ------------------------------------------------------------------
@@ -173,14 +170,11 @@ class OpenAICompatBackend(LLMBackend):
 
         choices = getattr(response, "choices", None) or []
         if not choices:
-            input_tokens, output_tokens = _response_usage_tokens(
-                response, augmented, ""
-            )
+            usage = _response_usage(response, augmented, "")
             logger.warning("OpenAI-compatible response contained no choices")
             return _empty_model_response(
                 "Model returned no choices",
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
+                usage=usage,
             )
 
         choice = choices[0]
@@ -191,15 +185,12 @@ class OpenAICompatBackend(LLMBackend):
             raw_text = str(raw_text)
 
         action = _parse_text_response(raw_text)
-        input_tokens, output_tokens = _response_usage_tokens(
-            response, augmented, raw_text
-        )
+        usage = _response_usage(response, augmented, raw_text)
 
         return LLMResponse(
             action=action,
             raw_content=raw_text,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            usage=usage,
         )
 
 
@@ -233,38 +224,53 @@ def _to_openai_tool(schema: LLMToolSchema) -> dict:
         },
     }
 
-
-def _response_usage_tokens(
+#这里解析不对吧，没必要自己解析 completionusage输出不对，好像也没问题
+def _response_usage(
     response: Any,
     messages: list[dict],
     output_text: str,
-) -> tuple[int, int]:
-    """Return provider usage when present, otherwise estimate it safely."""
-    usage = getattr(response, "usage", None)
-    input_tokens = getattr(usage, "prompt_tokens", None) if usage is not None else None
-    output_tokens = (
-        getattr(usage, "completion_tokens", None) if usage is not None else None
-    )
+) -> TokenUsage:
+    """Normalize Chat Completions usage into disjoint token buckets."""
+    raw_usage = _field(response, "usage", None)
+    prompt_tokens = _field(raw_usage, "prompt_tokens", None)
+    output_tokens = _field(raw_usage, "completion_tokens", None)
+    prompt_details = _field(raw_usage, "prompt_tokens_details", None)
+    completion_details = _field(raw_usage, "completion_tokens_details", None)
+    cached_tokens = _field(prompt_details, "cached_tokens", None)
+    if cached_tokens is None:
+        cached_tokens = _field(raw_usage, "prompt_cache_hit_tokens", None)
+    if cached_tokens is None:
+        cached_tokens = _field(raw_usage, "cached_tokens", 0)
+    cache_write_tokens = _field(prompt_details, "cache_write_tokens", 0)
+    reasoning_tokens = _field(completion_details, "reasoning_tokens", 0)
+    estimated = prompt_tokens is None or output_tokens is None
 
-    if input_tokens is None or output_tokens is None:
+    if estimated:
         from context.token_budget import estimate_tokens
 
-        if input_tokens is None:
-            input_tokens = sum(
+        if prompt_tokens is None:
+            prompt_tokens = sum(
                 estimate_tokens(str(message.get("content") or ""))
                 for message in messages
             )
         if output_tokens is None:
             output_tokens = estimate_tokens(output_text)
 
-    return int(input_tokens), int(output_tokens)
-
+    cached_tokens = _non_negative_int(cached_tokens)
+    cache_write_tokens = _non_negative_int(cache_write_tokens)
+    return TokenUsage(
+        input_tokens=_non_negative_int(prompt_tokens),
+        cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
+        output_tokens=_non_negative_int(output_tokens),
+        reasoning_tokens=_non_negative_int(reasoning_tokens),
+        estimated=estimated,
+    )
 
 def _empty_model_response(
     reason: str,
     *,
-    input_tokens: int = 0,
-    output_tokens: int = 0,
+    usage: TokenUsage = TokenUsage(),
 ) -> LLMResponse:
     """Convert malformed-but-successful upstream responses into a safe GIVE_UP."""
     return LLMResponse(
@@ -274,9 +280,26 @@ def _empty_model_response(
             message=reason,
         ),
         raw_content="",
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
+        usage=usage,
     )
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _non_negative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0
 
 
 def _parse_openai_response(choice: Any, thought: str) -> Action:
@@ -515,6 +538,7 @@ def _stream_with_tools(self, api_messages, tools, on_text, on_thought=None):
         max_tokens=self._max_tokens,
         messages=api_messages,
         stream=True,
+        stream_options={"include_usage": True},
     )
     if api_tools:
         kwargs["tools"] = api_tools
@@ -525,9 +549,12 @@ def _stream_with_tools(self, api_messages, tools, on_text, on_thought=None):
     full_reasoning = ""  # reasoning_content（推理模型专有）
     finish_reason = None
     tool_calls_raw = []      # 收集 tool call deltas
+    usage_response = None
 
     stream = self._client.chat.completions.create(**kwargs)
     for chunk in stream:
+        if _field(chunk, "usage", None) is not None:
+            usage_response = chunk
         choices = getattr(chunk, "choices", None) or []
         choice = choices[0] if choices else None
         if not choice:
@@ -618,16 +645,10 @@ def _stream_with_tools(self, api_messages, tools, on_text, on_thought=None):
             message=action.message,
         )
 
-    # 流式模式拿不到精确 token 数，估算
-    from context.token_budget import estimate_tokens
-    input_tokens = sum(estimate_tokens(m.get("content", "")) for m in api_messages)
-    output_tokens = estimate_tokens(full_text)
-
     return LLMResponse(
         action=action,
         raw_content=full_text,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
+        usage=_response_usage(usage_response, api_messages, full_text),
     )
 
 
@@ -647,8 +668,12 @@ def _stream_text_only(self, api_messages, tools, on_text):
         max_tokens=self._max_tokens,
         messages=augmented,
         stream=True,
+        stream_options={"include_usage": True},
     )
+    usage_response = None
     for chunk in stream:
+        if _field(chunk, "usage", None) is not None:
+            usage_response = chunk
         choices = getattr(chunk, "choices", None) or []
         choice = choices[0] if choices else None
         if not choice:
@@ -666,12 +691,10 @@ def _stream_text_only(self, api_messages, tools, on_text):
 
     action = _parse_text_response(full_text)
 
-    from context.token_budget import estimate_tokens
     return LLMResponse(
         action=action,
         raw_content=full_text,
-        input_tokens=sum(estimate_tokens(m.get("content", "")) for m in augmented),
-        output_tokens=estimate_tokens(full_text),
+        usage=_response_usage(usage_response, augmented, full_text),
     )
 
 

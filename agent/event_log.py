@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from agent.task import Event, EventType, Task, Action, Observation
+from llm.usage import SessionUsage, TokenUsage
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +88,13 @@ class EventLog:
             payload={"task": task.to_dict()},
         ))
 
-    def log_action(self, step: int, action: Action, raw_content: str = "") -> None:
+    def log_action(
+        self,
+        step: int,
+        action: Action,
+        raw_content: str = "",
+        usage: TokenUsage | None = None,
+    ) -> None:
         """Agent 的每一步决策。raw_content 是模型返回的完整原始文本。"""
         self._append(Event(
             event_type=EventType.ACTION,
@@ -96,6 +103,7 @@ class EventLog:
                 "step":        step,
                 "action":      action.to_dict(),
                 "raw_content": raw_content,  # 模型原始输出，含完整推理链
+                "usage":       usage.to_dict() if usage else None,
             },
         ))
 
@@ -386,11 +394,20 @@ def summarize_run(log: EventLog) -> dict:
         "observations_ok": 0,
         "observations_err": 0,
         "final_status":    None,
+        "usage":           None,
     }
+
+    usage = SessionUsage()
 
     for event in events:
         if event.event_type == EventType.ACTION:
             stats["actions"] += 1
+            raw_usage = event.payload.get("usage")
+            if raw_usage:
+                usage.record(TokenUsage(**{
+                    key: value for key, value in raw_usage.items()
+                    if key in TokenUsage.__dataclass_fields__
+                }))
             tc = event.payload["action"].get("tool_call")
             if tc:
                 name = tc["name"]
@@ -408,5 +425,7 @@ def summarize_run(log: EventLog) -> dict:
 
         elif event.event_type in (EventType.TASK_COMPLETE, EventType.TASK_FAILED):
             stats["final_status"] = event.event_type.value
+
+    stats["usage"] = usage.to_dict()
 
     return stats

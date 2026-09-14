@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent.session import (
+    ChatSessionState,
     ChatSessionRepoMismatch,
     PendingRoundState,
 )
@@ -101,6 +102,24 @@ def test_chat_session_resumes_history_and_statistics(tmp_path):
     assert len(saved.rounds) == 2
     assert saved.rounds[-1].status == "success"
     assert Path(saved.rounds[-1].log_path).parent.name == "rounds"
+    assert saved.usage.llm_calls == 2
+    assert saved.usage.input_tokens == 200
+    assert saved.usage.output_tokens == 100
+    assert saved.usage.total_tokens == 300
+    assert saved.rounds[-1].usage.llm_calls == 1
+
+
+def test_old_session_tokens_remain_explicitly_unattributed(tmp_path):
+    store = JsonChatSessionStore(tmp_path / "logs" / "chat")
+    state = store.create(tmp_path)
+    raw = state.to_dict()
+    raw.pop("usage")
+    raw["total_tokens"] = 321
+
+    loaded = ChatSessionState.from_dict(raw)
+
+    assert loaded.usage.unattributed_tokens == 321
+    assert loaded.usage.total_tokens == 321
 
 
 def test_keyboard_interrupt_is_checkpointed(tmp_path):

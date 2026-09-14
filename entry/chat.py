@@ -48,6 +48,24 @@ def dim(t: str) -> str:    return _c(t, "2")
 def magenta(t: str) -> str: return _c(t, "35")
 
 
+def _format_usage(usage) -> str:
+    cache_hit_rate = (
+        usage.cached_tokens / usage.input_tokens if usage.input_tokens else 0.0
+    )
+    suffix = f", estimated {usage.estimated_calls}" if usage.estimated_calls else ""
+    legacy = (
+        f", legacy {usage.unattributed_tokens:,}"
+        if usage.unattributed_tokens else ""
+    )
+    return (
+        f"{usage.total_tokens:,} tokens "
+        f"({usage.llm_calls} calls; input {usage.input_tokens:,}, "
+        f"cached {usage.cached_tokens:,}, cache-write {usage.cache_write_tokens:,}, "
+        f"output {usage.output_tokens:,}, reasoning {usage.reasoning_tokens:,}"
+        f", cache-hit {cache_hit_rate:.1%}{suffix}{legacy})"
+    )
+
+
 def _repository_revision(repo_path: str | Path) -> str:
     """返回用于 Repo Map 缓存失效的轻量仓库指纹。
 
@@ -276,6 +294,8 @@ class ChatSession:
         self._repo_revision = _repository_revision(self.repo_path)
 
         # 累计统计
+        from llm.usage import SessionUsage
+        self.usage = SessionUsage()
         self.total_tokens = 0
         self.total_steps = 0
         self.round_count = 0
@@ -376,7 +396,8 @@ class ChatSession:
                 self._repo_revision = current_revision
 
         elapsed = time.time() - t0
-        self.total_tokens += result.total_tokens
+        self.usage.add(result.usage)
+        self.total_tokens = self.usage.total_tokens
         self.total_steps += result.steps_taken
 
         # 把 agent 这轮的最后回复追加到共享 history
@@ -397,6 +418,7 @@ class ChatSession:
                 log_path=str(log.path),
                 steps=result.steps_taken,
                 tokens=result.total_tokens,
+                usage=result.usage.snapshot(),
                 started_at=started_at,
                 finished_at=utc_now(),
                 error=result.error,
@@ -413,7 +435,7 @@ class ChatSession:
         click.echo(dim(
             f"  ─── Round {self.round_count} · "
             f"{result.steps_taken} steps · "
-            f"{result.total_tokens:,} tokens · "
+            f"{_format_usage(result.usage)} · "
             f"{elapsed:.1f}s ───"
         ))
 
@@ -446,6 +468,8 @@ class ChatSession:
             max_messages=self._history_max_messages
         )
         self.total_tokens = 0
+        from llm.usage import SessionUsage
+        self.usage = SessionUsage()
         self.total_steps = 0
         self.round_count = 0
         self.recovery_warning = None
@@ -508,7 +532,8 @@ class ChatSession:
             state.history,
             max_messages=self._history_max_messages,
         )
-        self.total_tokens = state.total_tokens
+        self.usage = state.usage.snapshot()
+        self.total_tokens = self.usage.total_tokens
         self.total_steps = state.total_steps
         self.round_count = state.round_count
         self._repo_revision = state.repo_revision or _repository_revision(self.repo_path)
@@ -553,6 +578,7 @@ class ChatSession:
         self._state.round_count = self.round_count
         self._state.total_steps = self.total_steps
         self._state.total_tokens = self.total_tokens
+        self._state.usage = self.usage.snapshot()
         self._state.repo_revision = self._repo_revision
         self._session_store.save(self._state)
 
@@ -575,5 +601,5 @@ class ChatSession:
         click.echo(f"  Session stats:")
         click.echo(f"    Rounds  : {self.round_count}")
         click.echo(f"    Steps   : {self.total_steps}")
-        click.echo(f"    Tokens  : {self.total_tokens:,}")
+        click.echo(f"    Tokens  : {_format_usage(self.usage)}")
         click.echo(bold(f"{'─'*50}\n"))

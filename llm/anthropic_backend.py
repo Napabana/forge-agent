@@ -18,6 +18,7 @@ from typing import Any
 
 from agent.task import Action, ActionType, ToolCall
 from llm.base import LLMBackend, LLMMessage, LLMResponse, LLMToolSchema
+from llm.usage import TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -91,12 +92,13 @@ class AnthropicBackend(LLMBackend):
         )
 
         response = self._client.messages.create(**kwargs)
+        usage = _response_usage(response, messages, _extract_text(response))
 
         logger.debug(
             "Anthropic response: stop_reason=%s input_tokens=%d output_tokens=%d",
             response.stop_reason,
-            response.usage.input_tokens,
-            response.usage.output_tokens,
+            usage.input_tokens,
+            usage.output_tokens,
         )
 
         action = _parse_anthropic_response(response)
@@ -104,8 +106,7 @@ class AnthropicBackend(LLMBackend):
         return LLMResponse(
             action=action,
             raw_content=_extract_text(response),
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
+            usage=usage,
         )
 
 
@@ -154,6 +155,60 @@ def _extract_text(response: Any) -> str:
         if getattr(block, "type", None) == "text" and isinstance(getattr(block, "text", None), str):
             parts.append(block.text)
     return "\n".join(parts)
+
+
+def _response_usage(
+    response: Any,
+    messages: list[LLMMessage],
+    output_text: str,
+) -> TokenUsage:
+    """Normalize Anthropic's disjoint cache counters."""
+    raw_usage = _field(response, "usage", None)
+    input_tokens = _field(raw_usage, "input_tokens", None)
+    output_tokens = _field(raw_usage, "output_tokens", None)
+    estimated = input_tokens is None or output_tokens is None
+    if estimated:
+        from context.token_budget import estimate_tokens
+
+        if input_tokens is None:
+            input_tokens = sum(estimate_tokens(message.content) for message in messages)
+        if output_tokens is None:
+            output_tokens = estimate_tokens(output_text)
+    output_details = _field(raw_usage, "output_tokens_details", None)
+    cached_tokens = _token_count(_field(raw_usage, "cache_read_input_tokens", 0))
+    cache_write_tokens = _token_count(
+        _field(raw_usage, "cache_creation_input_tokens", 0)
+    )
+    return TokenUsage(
+        input_tokens=(
+            _token_count(input_tokens) + cached_tokens + cache_write_tokens
+        ),
+        cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
+        output_tokens=_token_count(output_tokens),
+        reasoning_tokens=_token_count(
+            _field(output_details, "thinking_tokens", 0)
+        ),
+        estimated=estimated,
+    )
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _token_count(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0
 
 
 def _parse_anthropic_response(response: Any) -> Action:
@@ -277,8 +332,7 @@ def _anthropic_stream(
     return LLMResponse(
         action=action,
         raw_content=_extract_text(final),
-        input_tokens=final.usage.input_tokens,
-        output_tokens=final.usage.output_tokens,
+        usage=_response_usage(final, messages, _extract_text(final)),
     )
 
 # 把 stream() 方法绑定到 AnthropicBackend

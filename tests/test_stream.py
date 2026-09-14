@@ -252,6 +252,37 @@ class TestOpenAICompatStreamShapes:
         assert result.action.message == "done"
         assert collected == ["done"]
 
+    def test_stream_uses_provider_usage_chunk(self):
+        backend = self._make_backend()
+        usage = SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=50,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=60),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=15),
+        )
+        chunks = [
+            self._choice(
+                delta=SimpleNamespace(
+                    content="done",
+                    tool_calls=None,
+                    reasoning_content=None,
+                ),
+                finish_reason="stop",
+            ),
+            SimpleNamespace(choices=[], usage=usage),
+        ]
+        backend._client.chat.completions.create.return_value = iter(chunks)
+
+        result = backend.stream([LLMMessage(role="user", content="go")], [])
+
+        assert result.input_tokens == 100
+        assert result.cached_tokens == 60
+        assert result.output_tokens == 50
+        assert result.reasoning_tokens == 15
+        assert result.total_tokens == 150
+        kwargs = backend._client.chat.completions.create.call_args.kwargs
+        assert kwargs["stream_options"] == {"include_usage": True}
+
     def test_stream_accepts_message_instead_of_delta(self):
         backend = self._make_backend()
         message = SimpleNamespace(

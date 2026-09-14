@@ -8,6 +8,7 @@ from typing import Any
 
 from agent.task import Action, ActionType, ToolCall
 from llm.base import LLMBackend, LLMMessage, LLMResponse, LLMToolSchema, StreamCallback
+from llm.usage import TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,7 @@ def _parse_response(response: Any, input_items: list[dict[str, Any]]) -> LLMResp
     )
     text = _response_output_text(response, output)
     reasoning = _response_reasoning_text(output)
-    input_tokens, output_tokens = _response_usage_tokens(response, input_items, text)
+    usage = _response_usage(response, input_items, text)
 
     if function_call is not None:
         action = _function_call_action(function_call, reasoning or text)
@@ -202,8 +203,7 @@ def _parse_response(response: Any, input_items: list[dict[str, Any]]) -> LLMResp
     return LLMResponse(
         action=action,
         raw_content=text,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
+        usage=usage,
     )
 
 
@@ -254,15 +254,22 @@ def _response_reasoning_text(output: list[Any]) -> str:
     return "".join(parts)
 
 
-def _response_usage_tokens(
+def _response_usage(
     response: Any,
     input_items: list[dict[str, Any]],
     output_text: str,
-) -> tuple[int, int]:
-    usage = _field(response, "usage", None)
-    input_tokens = _field(usage, "input_tokens", None)
-    output_tokens = _field(usage, "output_tokens", None)
-    if input_tokens is None or output_tokens is None:
+) -> TokenUsage:
+    raw_usage = _field(response, "usage", None)
+    input_tokens = _field(raw_usage, "input_tokens", None)
+    output_tokens = _field(raw_usage, "output_tokens", None)
+    input_details = _field(raw_usage, "input_tokens_details", None)
+    output_details = _field(raw_usage, "output_tokens_details", None)
+    cached_tokens = _token_count(_field(input_details, "cached_tokens", 0))
+    cache_write_tokens = _token_count(
+        _field(input_details, "cache_write_tokens", 0)
+    )
+    estimated = input_tokens is None or output_tokens is None
+    if estimated:
         from context.token_budget import estimate_tokens
         if input_tokens is None:
             input_tokens = sum(
@@ -271,7 +278,16 @@ def _response_usage_tokens(
             )
         if output_tokens is None:
             output_tokens = estimate_tokens(output_text)
-    return int(input_tokens), int(output_tokens)
+    return TokenUsage(
+        input_tokens=_token_count(input_tokens),
+        cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
+        output_tokens=_token_count(output_tokens),
+        reasoning_tokens=_token_count(
+            _field(output_details, "reasoning_tokens", 0)
+        ),
+        estimated=estimated,
+    )
 
 
 def _parse_stream_fallback(
@@ -308,15 +324,10 @@ def _parse_stream_fallback(
             message="Responses stream ended without a completed response",
         )
 
-    from context.token_budget import estimate_tokens
     return LLMResponse(
         action=action,
         raw_content=full_text,
-        input_tokens=sum(
-            estimate_tokens(str(item.get("content") or item.get("output") or ""))
-            for item in input_items
-        ),
-        output_tokens=estimate_tokens(full_text),
+        usage=_response_usage(None, input_items, full_text),
     )
 
 
@@ -332,3 +343,13 @@ def _string_value(value: Any) -> str:
     if value is None:
         return ""
     return value if isinstance(value, str) else str(value)
+
+
+def _token_count(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0

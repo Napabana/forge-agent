@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from llm.usage import SessionUsage
+
 
 SESSION_STATE_VERSION = 1
 
@@ -49,12 +51,20 @@ class ChatRoundState:
     summary: str = ""
     steps: int = 0
     tokens: int = 0
+    usage: SessionUsage = field(default_factory=SessionUsage)
     finished_at: str | None = None
     error: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ChatRoundState":
-        return cls(**data)
+        raw = dict(data)
+        if "usage" in raw:
+            raw["usage"] = SessionUsage.from_dict(raw["usage"])
+        else:
+            raw["usage"] = SessionUsage(
+                unattributed_tokens=int(raw.get("tokens", 0))
+            )
+        return cls(**raw)
 
 
 @dataclass
@@ -69,6 +79,7 @@ class ChatSessionState:
     round_count: int = 0
     total_steps: int = 0
     total_tokens: int = 0
+    usage: SessionUsage = field(default_factory=SessionUsage)
     repo_revision: str = ""
     pending_round: PendingRoundState | None = None
     rounds: list[ChatRoundState] = field(default_factory=list)
@@ -93,6 +104,12 @@ class ChatSessionState:
             raw["rounds"] = [
                 ChatRoundState.from_dict(item) for item in raw.get("rounds", [])
             ]
+            if "usage" in raw:
+                raw["usage"] = SessionUsage.from_dict(raw["usage"])
+            else:
+                raw["usage"] = SessionUsage(
+                    unattributed_tokens=int(raw.get("total_tokens", 0))
+                )
             return cls(**raw)
         except (TypeError, KeyError, AttributeError) as exc:
             raise ChatSessionFormatError(f"invalid chat session state: {exc}") from exc

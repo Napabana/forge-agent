@@ -275,6 +275,27 @@ class TestAnthropicBackend:
         assert result.output_tokens == 50
         assert result.total_tokens == 150
 
+    def test_cache_and_reasoning_usage_are_preserved(self):
+        backend = self._make_backend()
+        response = self._make_response("end_turn", [self._make_text_block("done")])
+        response.usage = SimpleNamespace(
+            input_tokens=100,
+            cache_read_input_tokens=20,
+            cache_creation_input_tokens=10,
+            output_tokens=50,
+            output_tokens_details=SimpleNamespace(thinking_tokens=15),
+        )
+        backend._client.messages.create.return_value = response
+
+        result = backend.complete(make_messages("user", "fix it"), [])
+
+        assert result.input_tokens == 130
+        assert result.cached_tokens == 20
+        assert result.cache_write_tokens == 10
+        assert result.output_tokens == 50
+        assert result.reasoning_tokens == 15
+        assert result.total_tokens == 180
+
     def test_tools_converted_to_anthropic_format(self):
         backend = self._make_backend()
         response = self._make_response("end_turn", [self._make_text_block("done")])
@@ -365,6 +386,45 @@ class TestOpenAICompatBackend:
         assert result.input_tokens == 80
         assert result.output_tokens == 40
 
+    def test_usage_details_are_disjoint_and_not_double_counted(self):
+        backend = self._make_backend()
+        response = self._make_response("stop", content="done")
+        response.usage = SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=50,
+            prompt_tokens_details=SimpleNamespace(
+                cached_tokens=20,
+                cache_write_tokens=10,
+            ),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=15),
+        )
+        backend._client.chat.completions.create.return_value = response
+
+        result = backend.complete(make_messages("user", "fix it"), [])
+
+        assert result.input_tokens == 100
+        assert result.cached_tokens == 20
+        assert result.cache_write_tokens == 10
+        assert result.output_tokens == 50
+        assert result.reasoning_tokens == 15
+        assert result.total_tokens == 150
+
+    def test_deepseek_cache_hit_compatibility_field(self):
+        backend = self._make_backend(model="deepseek-chat")
+        response = self._make_response("stop", content="done")
+        response.usage = {
+            "prompt_tokens": 100,
+            "prompt_cache_hit_tokens": 60,
+            "completion_tokens": 20,
+        }
+        backend._client.chat.completions.create.return_value = response
+
+        result = backend.complete(make_messages("user", "fix it"), [])
+
+        assert result.input_tokens == 100
+        assert result.cached_tokens == 60
+        assert result.total_tokens == 120
+
     def test_empty_choices_returns_give_up(self):
         backend = self._make_backend()
         backend._client.chat.completions.create.return_value = SimpleNamespace(
@@ -401,6 +461,7 @@ class TestOpenAICompatBackend:
         assert result.action.action_type == ActionType.FINISH
         assert result.input_tokens > 0
         assert result.output_tokens > 0
+        assert result.usage.estimated is True
 
 
 # ===========================================================================

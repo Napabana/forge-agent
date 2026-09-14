@@ -91,6 +91,31 @@ class TestResponsesComplete:
         assert "function" not in tool
         assert tool["parameters"]["type"] == "object"
 
+    def test_usage_details_are_disjoint_and_not_double_counted(self):
+        backend = _backend()
+        usage = SimpleNamespace(
+            input_tokens=100,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=20,
+                cache_write_tokens=10,
+            ),
+            output_tokens=50,
+            output_tokens_details=SimpleNamespace(reasoning_tokens=15),
+        )
+        backend._client.responses.create.return_value = _response(
+            text="done",
+            usage=usage,
+        )
+
+        result = backend.complete([LLMMessage("user", "go")], [])
+
+        assert result.input_tokens == 100
+        assert result.cached_tokens == 20
+        assert result.cache_write_tokens == 10
+        assert result.output_tokens == 50
+        assert result.reasoning_tokens == 15
+        assert result.total_tokens == 150
+
     def test_output_text_falls_back_to_message_parts(self):
         backend = _backend()
         message = {
@@ -131,6 +156,7 @@ class TestResponsesComplete:
 
         assert result.input_tokens > 0
         assert result.output_tokens > 0
+        assert result.usage.estimated is True
 
     def test_tool_result_input_uses_function_call_output(self):
         backend = _backend()

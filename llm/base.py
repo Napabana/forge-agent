@@ -12,10 +12,11 @@ Agent Core 只依赖这个抽象，永不 import 具体 SDK。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from agent.task import Action, ActionType, ToolCall
+from llm.usage import TokenUsage
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ class LLMToolSchema:
     parameters: dict[str, Any]          # JSON Schema 格式
 
 
-@dataclass
+@dataclass(init=False)
 class LLMResponse:
     """
     LLM 返回的统一响应格式。
@@ -53,12 +54,48 @@ class LLMResponse:
     """
     action: Action                      # 解析好的 Action，直接给 core.py 用
     raw_content: str                    # LLM 原始文本输出，调试用
-    input_tokens: int = 0
-    output_tokens: int = 0
+    usage: TokenUsage
+
+    def __init__(
+        self,
+        action: Action,
+        raw_content: str,
+        usage: TokenUsage | None = None,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> None:
+        """Accept both structured usage and the legacy token arguments."""
+        self.action = action
+        self.raw_content = raw_content
+        self.usage = usage or TokenUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+    @property
+    def input_tokens(self) -> int:
+        return self.usage.input_tokens
+
+    @property
+    def cached_tokens(self) -> int:
+        return self.usage.cached_tokens
+
+    @property
+    def cache_write_tokens(self) -> int:
+        return self.usage.cache_write_tokens
+
+    @property
+    def output_tokens(self) -> int:
+        return self.usage.output_tokens
+
+    @property
+    def reasoning_tokens(self) -> int:
+        return self.usage.reasoning_tokens
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
+        return self.usage.total_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -157,11 +194,19 @@ class MockBackend(LLMBackend):
         script: list[Action],
         input_tokens: int = 100,
         output_tokens: int = 50,
+        cached_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        reasoning_tokens: int = 0,
+        estimated: bool = False,
     ) -> None:
         self._script = script
         self._index = 0
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
+        self._cached_tokens = cached_tokens
+        self._cache_write_tokens = cache_write_tokens
+        self._reasoning_tokens = reasoning_tokens
+        self._estimated = estimated
         # 记录所有 complete() 调用，供测试断言
         self.call_count = 0
         self.received_messages: list[list[LLMMessage]] = []
@@ -192,8 +237,14 @@ class MockBackend(LLMBackend):
         return LLMResponse(
             action=action,
             raw_content=f"[mock] {action!r}",
-            input_tokens=self._input_tokens,
-            output_tokens=self._output_tokens,
+            usage=TokenUsage(
+                input_tokens=self._input_tokens,
+                cached_tokens=self._cached_tokens,
+                cache_write_tokens=self._cache_write_tokens,
+                output_tokens=self._output_tokens,
+                reasoning_tokens=self._reasoning_tokens,
+                estimated=self._estimated,
+            ),
         )
 
     def reset(self) -> None:

@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from llm.usage import SessionUsage
+
 if TYPE_CHECKING:
     from runtime.worktree import WorktreeArtifact
 
@@ -261,9 +263,14 @@ class RunResult:
     summary: str                        # 人类可读的结果摘要
     steps_taken: int
     total_tokens: int = 0
+    usage: SessionUsage = field(default_factory=SessionUsage)
     patch: str | None = None            # git diff 格式的修改内容
     error: str | None = None            # status == FAILED 时的原因
     worktree: "WorktreeArtifact | None" = None
+
+    def __post_init__(self) -> None:
+        if self.usage.total_tokens:
+            self.total_tokens = self.usage.total_tokens
 
     def is_success(self) -> bool:
         return self.status == RunStatus.SUCCESS

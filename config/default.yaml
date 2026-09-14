@@ -32,12 +32,12 @@
 #   max_tokens: 1024
 
 #这个也能跑，注意baseurl不同
-# llm: 
-#   provider: openai
-#   model: kimi-k3
-#   api_key: ${KRILL_API_KEY}
-#   base_url: https://api-slb.krill-ai.net/coding/v1
-#   max_tokens: 1024
+llm: 
+  provider: openai
+  model: kimi-k3
+  api_key: ${KRILL_API_KEY}
+  base_url: https://api-slb.krill-ai.net/coding/v1
+  max_tokens: 1024
 
 #不行呀
 # llm:
@@ -56,13 +56,14 @@
 #   base_url: https://api.cdn-krill-ai.com
 #   max_tokens: 1024
 
-llm:
-  provider: openai
-  protocol: responses
-  model: gpt-5.6-terra
-  api_key: ${KRILL_API_KEY}
-  base_url: https://api-slb.krill-ai.net/coding/v1
-  max_tokens: 1024
+
+
+# llm:
+#   provider: openai
+#   model: deepseek-v4-flash-0731
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api-slb.krill-ai.net/coding/v1
+#   max_tokens: 8192
 
 agent:
   max_steps: 40
