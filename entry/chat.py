@@ -5,10 +5,12 @@ entry/chat.py
 history 跨轮保留，像 Claude Code 一样可以持续对话。
 
 架构设计：
-- ChatSession 持有 backend / registry / history，跨轮复用
-- 每轮创建一个新 Task，但 history 通过 agent._inject_history() 延续
+- ChatSession 持有 backend / registry / ConversationHistory，在当前进程内跨轮复用
+- 每轮创建一个新 Task，并通过 Agent.run(..., history=history) 正式传入共享历史
 - EventLog 每轮独立（方便单轮审计），但统计累计显示
-- 实时打印：每条 event 写入 log 后立刻 echo，不等跑完
+- 实时打印通过 EventLog.on_append() 观察事件，只负责显示，不参与记忆传递
+- 可选 JsonChatSessionStore 在每轮前后原子保存 history、统计和轮次元数据
+- EventLog 仍是单轮审计记录；会话 state.json 才是 Chat 恢复点
 
 用法：
     agent chat --repo /path/to/repo
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import time
 import sys
+import subprocess
 from pathlib import Path
 from typing import Callable
 
@@ -43,6 +46,32 @@ def cyan(t: str) -> str:   return _c(t, "36")
 def bold(t: str) -> str:   return _c(t, "1")
 def dim(t: str) -> str:    return _c(t, "2")
 def magenta(t: str) -> str: return _c(t, "35")
+
+
+def _repository_revision(repo_path: str | Path) -> str:
+    """返回用于 Repo Map 缓存失效的轻量仓库指纹。
+
+    HEAD 覆盖“提交后工作区重新变干净”的情况；snapshot_repository 覆盖
+    暂存、未暂存、未跟踪文件以及非 Git 目录中的文件变化。
+    """
+    from agent.loop_detector import snapshot_repository
+
+    root = Path(repo_path)
+    head = "no-head"
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            head = proc.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return f"{head}:{snapshot_repository(root)}"
 
 
 # ---------------------------------------------------------------------------
@@ -155,16 +184,19 @@ def _print_event_live(event) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ChatSession — 跨轮持久化的会话状态
+# ChatSession — 跨轮共享并可选持久化的会话状态
 # ---------------------------------------------------------------------------
 
 class ChatSession:
     """
-    持久化会话。跨多轮对话保留：
+    Chat 会话。ChatSession 实例存活期间跨轮保留：
     - backend / registry（不变）
     - ConversationHistory（核心：让 agent 记得之前做了什么）
     - 累计 token / 步数统计
-    - repo_map 缓存（换 repo 时自动失效）
+    - repo_map 缓存（仓库指纹变化时自动失效）
+
+    传入 session_store 后，ConversationHistory、轮次和统计会原子落盘，可在
+    新进程中恢复。每轮 EventLog 仍独立保存，负责审计而不是充当恢复真相源。
     """
 
     def __init__(
@@ -176,6 +208,8 @@ class ChatSession:
         log_dir: str,
         confirm_callback=None,
         stream: bool = True,
+        session_store=None,
+        session_id: str | None = None,
     ) -> None:
         from agent.core import Agent, AgentConfig
         from context.history import ConversationHistory
@@ -184,6 +218,10 @@ class ChatSession:
         self.log_dir = log_dir
         self.config = config
         self._confirm_callback = confirm_callback
+        self._session_store = session_store
+        self._state = None
+        self.recovery_warning: str | None = None
+        self._history_max_messages = config.context.history_window * 2
 
         # 流式回调：每个 token 立刻 flush 到终端
         _stream_started = [False]
@@ -233,13 +271,21 @@ class ChatSession:
         )
         self.agent = Agent(backend, registry, agent_cfg)
         self._shared_history = ConversationHistory(
-            max_messages=config.context.history_window * 2
+            max_messages=self._history_max_messages
         )
+        self._repo_revision = _repository_revision(self.repo_path)
 
         # 累计统计
         self.total_tokens = 0
         self.total_steps = 0
         self.round_count = 0
+
+        if self._session_store is not None:
+            if session_id:
+                self._restore_session(session_id)
+            else:
+                self._state = self._session_store.create(self.repo_path)
+                self._checkpoint()
 
     def run_round(self, user_input: str) -> bool:
         """
@@ -251,12 +297,19 @@ class ChatSession:
         Returns:
             True 表示成功/正常结束，False 表示失败
         """
-        from agent.core import AgentConfig
         from agent.event_log import EventLog
+        from agent.session import ChatRoundState, PendingRoundState
+        from agent.session_store import utc_now
         from agent.task import Task
         from llm.base import LLMMessage
 
-        self.round_count += 1
+        # 用户可能在两轮之间手动改仓库；先检查再构建本轮 Repo Map。
+        current_revision = _repository_revision(self.repo_path)
+        if current_revision != self._repo_revision:
+            self.agent.invalidate_repo_map_cache(self.repo_path)
+            self._repo_revision = current_revision
+
+        round_number = self.round_count + 1
 
         # 把用户输入追加到共享 history
         self._shared_history.add(LLMMessage(role="user", content=user_input))
@@ -269,14 +322,58 @@ class ChatSession:
             budget_tokens=self.config.agent.budget_tokens,
         )
 
-        # 把共享 history 注入 agent（替换它内部的 history）
-        # 通过 monkey-patch _shared_history 实现跨轮续接
-        self.agent._shared_history = self._shared_history
-
         t0 = time.time()
-        with EventLog.create(task, log_dir=self.log_dir) as log:
-            # 实时打印：每条 event 写入后立刻 echo
-            result = self._run_with_live_print(task, log)
+        started_at = utc_now()
+        log_dir = (
+            str(self._session_store.round_log_dir(self._state))
+            if self._session_store is not None and self._state is not None
+            else self.log_dir
+        )
+        try:
+            with EventLog.create(task, log_dir=log_dir) as log:
+                self.round_count = round_number
+                if self._state is not None:
+                    self._state.pending_round = PendingRoundState(
+                        round_number=round_number,
+                        task_id=task.task_id,
+                        user_input=user_input,
+                        started_at=started_at,
+                        log_path=str(log.path),
+                    )
+                    # 在任何 LLM 或工具调用前写恢复点；保存失败则不开始执行。
+                    self._checkpoint()
+                # 实时打印只观察 EventLog；共享记忆由 Agent.run(history=...) 传入。
+                try:
+                    result = self._run_with_live_print(task, log)
+                except BaseException as exc:
+                    if self._state is not None:
+                        self._shared_history.add(LLMMessage(
+                            role="assistant",
+                            content=(
+                                f"[Round {round_number} interrupted]\n"
+                                "The previous run did not complete. Inspect the repository "
+                                "and round log before assuming tool side effects succeeded."
+                            ),
+                        ))
+                        self._state.rounds.append(ChatRoundState(
+                            round_number=round_number,
+                            task_id=task.task_id,
+                            user_input=user_input,
+                            status="interrupted",
+                            log_path=str(log.path),
+                            started_at=started_at,
+                            finished_at=utc_now(),
+                            error=f"{type(exc).__name__}: {exc}",
+                        ))
+                        self._state.pending_round = None
+                        self._checkpoint()
+                    raise
+        finally:
+            # 本轮若修改或提交了代码，让下一轮重新生成 Repo Map。
+            current_revision = _repository_revision(self.repo_path)
+            if current_revision != self._repo_revision:
+                self.agent.invalidate_repo_map_cache(self.repo_path)
+                self._repo_revision = current_revision
 
         elapsed = time.time() - t0
         self.total_tokens += result.total_tokens
@@ -289,6 +386,23 @@ class ChatSession:
                 role="assistant",
                 content=f"[Round {self.round_count} complete]\n{result.summary}",
             ))
+
+        if self._state is not None:
+            self._state.rounds.append(ChatRoundState(
+                round_number=round_number,
+                task_id=task.task_id,
+                user_input=user_input,
+                status=result.status.value,
+                summary=result.summary or "",
+                log_path=str(log.path),
+                steps=result.steps_taken,
+                tokens=result.total_tokens,
+                started_at=started_at,
+                finished_at=utc_now(),
+                error=result.error,
+            ))
+            self._state.pending_round = None
+            self._checkpoint()
 
         # 流式输出结束后打换行，重置 readline 的行状态
         import sys as _sys
@@ -305,26 +419,155 @@ class ChatSession:
 
         return result.is_success() or result.status.value == "gave_up"
 
+    @property
+    def is_persisted(self) -> bool:
+        return self._session_store is not None and self._state is not None
+
+    @property
+    def session_id(self) -> str | None:
+        return self._state.session_id if self._state is not None else None
+
+    @property
+    def session_path(self) -> Path | None:
+        if self._session_store is None or self._state is None:
+            return None
+        return self._session_store.state_path(self._state)
+
+    def clear_history(self) -> None:
+        """清空当前会话的有效 LLM 上下文并立即保存。"""
+        self._shared_history.clear()
+        self._checkpoint()
+
+    def start_new_session(self) -> str | None:
+        """结束当前上下文并创建一个全新的 Chat 会话。"""
+        from context.history import ConversationHistory
+
+        self._shared_history = ConversationHistory(
+            max_messages=self._history_max_messages
+        )
+        self.total_tokens = 0
+        self.total_steps = 0
+        self.round_count = 0
+        self.recovery_warning = None
+        self.agent.invalidate_repo_map_cache(self.repo_path)
+        self._repo_revision = _repository_revision(self.repo_path)
+        if self._session_store is not None:
+            self._state = self._session_store.create(self.repo_path)
+            self._checkpoint()
+        else:
+            self._state = None
+        return self.session_id
+
+    def resume_session(self, session_id: str) -> None:
+        """切换到同一仓库的一条已保存会话。"""
+        if self._session_store is None:
+            from agent.session import ChatSessionError
+
+            raise ChatSessionError("session persistence is disabled")
+        self._restore_session(session_id)
+        self.agent.invalidate_repo_map_cache(self.repo_path)
+
+    def rename(self, title: str) -> None:
+        if self._state is None:
+            from agent.session import ChatSessionError
+
+            raise ChatSessionError("session persistence is disabled")
+        title = title.strip()
+        if not title:
+            raise ValueError("session title cannot be empty")
+        self._state.title = title
+        self._checkpoint()
+
+    def print_session_info(self) -> None:
+        if self._state is None:
+            click.echo("  Session  : ephemeral (--no-session)")
+            return
+        click.echo(f"  Session  : {self._state.session_id}")
+        click.echo(f"  Title    : {self._state.title or '-'}")
+        click.echo(f"  State    : {self.session_path}")
+        click.echo(f"  Rounds   : {self.round_count}")
+
+    def _restore_session(self, session_id: str) -> None:
+        from agent.session import (
+            ChatRoundState,
+            ChatSessionRepoMismatch,
+        )
+        from agent.session_store import repo_key_for_path, utc_now
+        from context.history import ConversationHistory
+        from llm.base import LLMMessage
+
+        state = self._session_store.load(session_id)
+        current_key = repo_key_for_path(self.repo_path)
+        if state.repo_key != current_key:
+            raise ChatSessionRepoMismatch(
+                f"session {session_id} belongs to another repository"
+            )
+
+        self._state = state
+        self._shared_history = ConversationHistory.from_dicts(
+            state.history,
+            max_messages=self._history_max_messages,
+        )
+        self.total_tokens = state.total_tokens
+        self.total_steps = state.total_steps
+        self.round_count = state.round_count
+        self._repo_revision = state.repo_revision or _repository_revision(self.repo_path)
+        self.recovery_warning = None
+
+        pending = state.pending_round
+        if pending is not None:
+            self.round_count = max(self.round_count, pending.round_number)
+            self.recovery_warning = (
+                f"Recovered interrupted round {pending.round_number} "
+                f"(task {pending.task_id}); inspect {pending.log_path} and the "
+                "repository before retrying."
+            )
+            self._shared_history.add(LLMMessage(
+                role="assistant",
+                content=(
+                    f"[Round {pending.round_number} interrupted]\n"
+                    "The process stopped before the round completed. Tool side effects "
+                    "may be partial; inspect the repository and round log before retrying."
+                ),
+            ))
+            state.rounds.append(ChatRoundState(
+                round_number=pending.round_number,
+                task_id=pending.task_id,
+                user_input=pending.user_input,
+                status="interrupted",
+                log_path=pending.log_path,
+                started_at=pending.started_at,
+                finished_at=utc_now(),
+                error="process ended before the post-round checkpoint",
+            ))
+            state.pending_round = None
+
+        state.repo_path = str(Path(self.repo_path).resolve())
+        self._checkpoint()
+
+    def _checkpoint(self) -> None:
+        if self._session_store is None or self._state is None:
+            return
+        self._state.repo_path = str(Path(self.repo_path).resolve())
+        self._state.history = self._shared_history.to_dicts()
+        self._state.round_count = self.round_count
+        self._state.total_steps = self.total_steps
+        self._state.total_tokens = self.total_tokens
+        self._state.repo_revision = self._repo_revision
+        self._session_store.save(self._state)
+
     def _run_with_live_print(self, task, log):
         """
         运行 agent，同时实时打印 event。
 
-        因为 agent.run() 是同步的（跑完才返回），
-        我们通过 monkey-patch EventLog._append 来实现"写入即打印"。
+        Agent.run() 是同步的，但 EventLog 每次 append 后会调用公开观察者。
+        这个回调只影响终端显示，不读取或修改 ConversationHistory。
         """
-        original_append = log._append
-
-        def live_append(event):
-            original_append(event)
-            _print_event_live(event)
-
-        log._append = live_append
-
-        return self._run_injecting_history(task, log)
-
-    def _run_injecting_history(self, task, log):
-        """运行 agent，并通过正式参数传入跨轮共享 history。"""
-        return self.agent.run(task, log, history=self._shared_history)
+        log.on_append(_print_event_live)
+        try:
+            return self.agent.run(task, log, history=self._shared_history)
+        finally:
+            log.on_append(None)
 
     def print_stats(self) -> None:
         """打印会话总统计。"""

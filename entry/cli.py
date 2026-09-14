@@ -438,6 +438,14 @@ def _print_run_result(result, elapsed: float) -> None:
     help="Enable or disable streaming output (default: on)",
 )
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
+@click.option(
+    "--continue",
+    "continue_session",
+    is_flag=True,
+    help="Resume the most recently used session for this repository",
+)
+@click.option("--resume", "resume_session", metavar="SESSION_ID", help="Resume a saved chat session")
+@click.option("--no-session", is_flag=True, help="Do not persist or resume chat state")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logs")
 @click.pass_context
 def chat(
@@ -449,11 +457,23 @@ def chat(
     max_steps: int | None,
     stream: bool,
     sandbox: bool,
+    continue_session: bool,
+    resume_session: str | None,
+    no_session: bool,
     verbose: bool,
 ) -> None:
     """Interactive chat mode — continuous conversation with the agent."""
     import logging
+    from agent.session import ChatSessionError
+    from agent.session_store import JsonChatSessionStore
     from entry.chat import ChatSession
+
+    if continue_session and resume_session:
+        raise click.UsageError("--continue and --resume cannot be used together")
+    if no_session and (continue_session or resume_session):
+        raise click.UsageError(
+            "--no-session cannot be combined with --continue or --resume"
+        )
 
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.WARNING,
@@ -499,15 +519,34 @@ def chat(
         runtime=runtime,
         workspace=str(repo_path),
     )
-    session = ChatSession(
-        backend=backend,
-        registry=registry,
-        config=config,
-        repo_path=str(repo_path),
-        log_dir=config.agent.log_dir,
-        confirm_callback=terminal_confirm,   # chat 模式默认开启确认
-        stream=stream,
+    session_store = (
+        None
+        if no_session
+        else JsonChatSessionStore(Path(config.agent.log_dir) / "chat")
     )
+    initial_session_id = resume_session
+    continued_existing = False
+    try:
+        if continue_session and session_store is not None:
+            latest = session_store.latest_for_repo(repo_path)
+            if latest is not None:
+                initial_session_id = latest.session_id
+                continued_existing = True
+        session = ChatSession(
+            backend=backend,
+            registry=registry,
+            config=config,
+            repo_path=str(repo_path),
+            log_dir=config.agent.log_dir,
+            confirm_callback=terminal_confirm,   # chat 模式默认开启确认
+            stream=stream,
+            session_store=session_store,
+            session_id=initial_session_id,
+        )
+    except (ChatSessionError, OSError) as exc:
+        if runtime is not None:
+            runtime.cleanup()
+        raise click.ClickException(str(exc)) from exc
 
     # 欢迎信息
     click.echo(bold(f"\n🤖 Coding Agent — Chat Mode"))
@@ -515,7 +554,19 @@ def chat(
     click.echo(f"  Protocol : {config.llm.protocol}")
     click.echo(f"  Model    : {config.llm.model}")
     click.echo(f"  Repo     : {repo_path}")
-    click.echo(dim(f"  Type your task. Commands: /exit /stats /clear /help\n"))
+    if getattr(session, "is_persisted", False):
+        mode = "resumed" if continued_existing or resume_session else "new"
+        click.echo(f"  Session  : {session.session_id} ({mode})")
+        click.echo(dim(f"  State    : {session.session_path}"))
+    else:
+        click.echo("  Session  : ephemeral")
+    recovery_warning = getattr(session, "recovery_warning", None)
+    if recovery_warning:
+        click.echo(yellow(f"  Warning  : {recovery_warning}"))
+    click.echo(dim(
+        "  Type your task. Commands: "
+        "/exit /stats /session /new /resume /rename /clear /help\n"
+    ))
 
     # 启用行编辑：退格、方向键、Ctrl+A/E、历史记录（↑↓）
     try:
@@ -564,20 +615,54 @@ def chat(
 
             # 内置命令
             if user_input.startswith("/"):
-                cmd = user_input.lower()
+                parts = user_input.split(maxsplit=1)
+                cmd = parts[0].lower()
+                arg = parts[1].strip() if len(parts) > 1 else ""
                 if cmd in ("/exit", "/quit", "/q"):
                     break
                 elif cmd == "/stats":
                     session.print_stats()
+                elif cmd == "/session":
+                    session.print_session_info()
+                elif cmd == "/new":
+                    new_id = session.start_new_session()
+                    if new_id:
+                        click.echo(dim(f"  Started new session: {new_id}"))
+                    else:
+                        click.echo(dim("  Started new ephemeral session."))
+                elif cmd == "/resume":
+                    if not arg:
+                        click.echo(dim("  Usage: /resume SESSION_ID"))
+                    else:
+                        try:
+                            session.resume_session(arg)
+                            click.echo(dim(f"  Resumed session: {session.session_id}"))
+                            if session.recovery_warning:
+                                click.echo(yellow(f"  Warning: {session.recovery_warning}"))
+                        except ChatSessionError as exc:
+                            click.echo(red(f"  Cannot resume session: {exc}"))
+                elif cmd == "/rename":
+                    if not arg:
+                        click.echo(dim("  Usage: /rename NAME"))
+                    else:
+                        try:
+                            session.rename(arg)
+                            click.echo(dim(f"  Session renamed: {arg}"))
+                        except (ChatSessionError, ValueError) as exc:
+                            click.echo(red(f"  Cannot rename session: {exc}"))
                 elif cmd == "/clear":
-                    session._shared_history.clear_except_first()
-                    click.echo(dim("  History cleared (kept initial context)."))
+                    session.clear_history()
+                    click.echo(dim("  Conversation history cleared."))
                 elif cmd == "/help":
                     click.echo(dim(
                         "  Commands:\n"
                         "    /exit   — quit\n"
                         "    /stats  — show session statistics\n"
-                        "    /clear  — clear conversation history\n"
+                        "    /session — show current session id and state path\n"
+                        "    /new    — start a new session\n"
+                        "    /resume SESSION_ID — switch to a saved session\n"
+                        "    /rename NAME — name the current session\n"
+                        "    /clear  — clear effective conversation history\n"
                         "    /help   — show this help\n"
                         "  Anything else is sent to the agent."
                     ))

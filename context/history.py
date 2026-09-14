@@ -78,6 +78,10 @@ class ConversationHistory:
         if self._messages:
             self._messages = [self._messages[0]]
 
+    def clear(self) -> None:
+        """清除全部消息，用于显式重置 Chat 会话上下文。"""
+        self._messages.clear()
+
     def _trim(self) -> None:
         """超出 max_messages 时，从索引 1 开始丢弃最旧的消息。"""
         while len(self._messages) > self._max:

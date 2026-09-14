@@ -216,6 +216,45 @@ class TestChatEdgeCases:
         # repo_map 只构建一次（第一轮），第二轮复用缓存
         assert build_count == 1
 
+    def test_repo_map_cache_refreshes_after_repository_change(
+        self, tmp_path, cfg, registry,
+    ):
+        """两轮之间仓库变化时，第二轮应重新构建 repo_map。"""
+        (tmp_path / "first.py").write_text("def first(): pass\n")
+        build_count = 0
+
+        from context import repo_map as rm_module
+        original_build = rm_module.RepoMap.build
+
+        def counting_build(self, budget=8000):
+            nonlocal build_count
+            build_count += 1
+            return original_build(self, budget)
+
+        from unittest.mock import patch
+        script = [
+            Action(ActionType.FINISH, "r1", message="done1"),
+            Action(ActionType.FINISH, "r2", message="done2"),
+        ]
+        with patch.object(rm_module.RepoMap, "build", counting_build):
+            session = make_session(MockBackend(script), registry, cfg, tmp_path)
+            session.run_round("round 1")
+            (tmp_path / "second.py").write_text("def second(): pass\n")
+            session.run_round("round 2")
+
+        assert build_count == 2
+
+    def test_shared_history_is_passed_without_agent_monkeypatch(
+        self, tmp_path, cfg, registry,
+    ):
+        """共享 history 只通过 Agent.run(history=...) 传入。"""
+        script = [Action(ActionType.FINISH, "done", message="ok")]
+        session = make_session(MockBackend(script), registry, cfg, tmp_path)
+
+        session.run_round("round 1")
+
+        assert not hasattr(session.agent, "_shared_history")
+
 
 # ---------------------------------------------------------------------------
 # CLI chat 命令注册
@@ -230,6 +269,9 @@ class TestChatCommand:
         assert result.exit_code == 0
         assert "--repo" in result.output
         assert "--model" in result.output
+        assert "--continue" in result.output
+        assert "--resume" in result.output
+        assert "--no-session" in result.output
 
     def test_chat_listed_in_root_help(self):
         from click.testing import CliRunner
