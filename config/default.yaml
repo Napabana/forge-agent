@@ -32,12 +32,12 @@
 #   max_tokens: 1024
 
 #这个也能跑，注意baseurl不同
-llm: 
-  provider: openai
-  model: kimi-k3
-  api_key: ${KRILL_API_KEY}
-  base_url: https://api-slb.krill-ai.net/coding/v1
-  max_tokens: 1024
+# llm: 
+#   provider: openai
+#   model: kimi-k3
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api-slb.krill-ai.net/coding/v1
+#   max_tokens: 1024
 
 #不行呀
 # llm:
@@ -53,16 +53,39 @@ llm:
 #   provider: openai
 #   model: gemini-3.5-flash
 #   api_key: ${KRILL_API_KEY}
-#   base_url: https://api.cdn-krill-ai.com
-#   max_tokens: 1024
-
-
+#   base_url: https://api-slb.krill-code.net/v1
+#   max_tokens: 8192
 
 # llm:
 #   provider: openai
-#   model: deepseek-v4-flash-0731
+#   model: deepseek-v4-pro-0813
 #   api_key: ${KRILL_API_KEY}
-#   base_url: https://api-slb.krill-ai.net/coding/v1
+#   base_url: https://api.krill-code.net/coding/v1 
+#   max_tokens: 8192
+
+#可以的
+llm:
+  provider: openai
+  model: deepseek-v4.1-flash
+  api_key: ${KRILL_API_KEY}
+  base_url: https://api.krill-code.net/coding/v1 
+  #https://api-slb.krill-ai.net/coding/v1
+  max_tokens: 8192
+
+# llm:
+#   provider: openai
+#   protocal: responses
+#   model: gpt-5.6-luna
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api-slb.krill-code.net/codex/v1
+#   max_tokens: 8192
+
+# SILICONFLOW_API_KEY
+# llm:
+#   provider: openai
+#   model: deepseek-ai/DeepSeek-V4-Flash
+#   api_key: ${SILICONFLOW_API_KEY}
+#   base_url: https://api.siliconflow.cn/v1
 #   max_tokens: 8192
 
 agent:

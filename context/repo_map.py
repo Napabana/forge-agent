@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -30,6 +31,8 @@ _FUNC_NODES = frozenset({
     "function_definition", "async_function_definition", "function_declaration",
     "method_declaration", "method_definition", "function_item", "arrow_function",
 })
+
+_IDENTIFIER_RE = re.compile(r"\b\w+\b")
 _CLASS_NODES = frozenset({
     "class_definition", "class_declaration", "struct_item", "impl_item",
     "interface_declaration",
@@ -361,10 +364,13 @@ def _apply_reference_scores(files: list[FileInfo]) -> None:
     for file_info in files:
         if not file_info._content:
             continue
-        for name, defining_files in owners.items():
+        occurrences_by_name = Counter(_IDENTIFIER_RE.findall(file_info._content))
+        for name, occurrences in occurrences_by_name.items():
+            defining_files = owners.get(name)
+            if not defining_files:
+                continue
             if file_info.path in defining_files:
                 continue
-            occurrences = len(re.findall(rf"\b{re.escape(name)}\b", file_info._content))
             for defining_path in defining_files:
                 files_by_path[defining_path].reference_count += occurrences
 

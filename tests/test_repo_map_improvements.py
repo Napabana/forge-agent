@@ -129,6 +129,23 @@ def test_import_reference_and_path_signals_affect_importance():
     assert central.importance_score() > peripheral.importance_score()
 
 
+def test_reference_scores_count_exact_identifier_occurrences():
+    owner = FileInfo(
+        path=Path("src/engine.py"),
+        size=100,
+        symbols=[Symbol("Engine", "class", 1, Path("src/engine.py"))],
+    )
+    consumer = FileInfo(
+        path=Path("src/use_engine.py"),
+        size=100,
+        _content="Engine Engine\nEngineFactory not_Engine\n",
+    )
+
+    repo_map._apply_reference_scores([owner, consumer])
+
+    assert owner.reference_count == 2
+
+
 def test_agent_exposes_selective_repo_map_cache_invalidation(tmp_path):
     agent = Agent(MockBackend([]), ToolRegistry())
     agent._repo_map_cache_key = str(tmp_path)
