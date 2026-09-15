@@ -4,7 +4,7 @@
 
 执行原则：一次只收口一个 Context 契约；每批生产代码修改前按 `AGENTS.md` 检查工作树/分支/remote/stash，列出拟修改文件和理由，等待用户确认。测试先定向后扩展，不把未执行测试写成通过。
 
-当前状态：C1、C2、C3、C4 已完成，并经用户本地 pytest 验证全部通过；C5 Hybrid Structured Compaction **代码完成，等待用户本地 pytest 验收**。
+当前状态：C1、C2、C3、C4、C5 已完成，并经用户本地 pytest 验证通过。Context Compaction 主实现已收口；下一阶段进入 B1 Context Policy 离线 Benchmark。C6 `context_recall(event_ref)` 继续数据驱动后置。
 
 ## 0. 实施门禁
 
@@ -60,7 +60,7 @@
 
 ## C5：Hybrid Structured Compaction
 
-状态：代码完成，等待用户本地 pytest 验收。
+状态：已完成，用户本地 pytest 全部通过。
 
 设计：`2026-09-15-Context-Compaction-C5设计收口.md`。
 交接：`2026-09-15-Context-Compaction-C5改动内容.md`。
@@ -113,11 +113,12 @@
 - [x] round-boundary 与 turn-boundary 的 semantic side-call 都由同一 policy usage accumulator 覆盖。
 - [x] checkpoint/Trace 记录 `summary_usage`、`semantic_duration_ms`、packet truncation、semantic error。
 
-### Safe fallback
+### Safe fallback / Compatibility
 
 - [x] malformed ToolCall / provider failure 不改 canonical history。
-- [x] semantic failure 使用 deterministic evidence + bounded user-authored raw excerpts。
+- [x] semantic failure 使用 deterministic evidence + bounded user-authored raw excerpts，method=`structured-fallback-v1`。
 - [x] fallback 不用 regex 假装理解中文约束。
+- [x] 没有 semantic summarizer 的程序化/C1-C4 兼容路径继续使用 `extractive-v1`，避免小历史 token 反向膨胀。
 - [x] final TokenBudget trim 继续做硬兜底。
 
 ### 实际生产范围
@@ -139,8 +140,9 @@
 
 - [x] 新增 `tests/test_structured_compaction.py`
 - [x] `tests/test_tool_pruning.py`
-- [ ] 用户本地运行 C5 定向测试。
-- [ ] 用户本地运行 Chat/Session/Day2 回归。
+- [x] `tests/test_compaction.py` 兼容回归。
+- [x] 用户本地运行 `tests/test_structured_compaction.py tests/test_tool_pruning.py tests/test_compaction.py`：最终 33 tests 全部通过。
+- [x] 用户本地运行 `tests/test_chat.py tests/test_session_store.py tests/test_day2.py`：全部通过。
 
 明确未改：
 
@@ -160,7 +162,9 @@
 
 ## B1：Context Policy 离线 Benchmark
 
-C5 收口后开始。固定 prerecorded histories，不调用真实模型生成 Agent 历史；Hybrid variant 的 summary call 真实成本需要单独记录。
+状态：下一阶段，待设计与实施范围确认。
+
+目标：固定 prerecorded histories，不调用真实模型生成 Agent 历史；Hybrid variant 的 semantic summary call 成本单独记录。
 
 Cases：
 
@@ -172,7 +176,7 @@ Cases：
 - [ ] `resume-long-session`
 - [ ] `dirty-repo-revision`
 
-指标：before/after tokens、compaction ratio、projected input、context pressure、hard constraints preserved、orphan units、source event coverage、recent tokens kept、repo state changed、checkpoint atomic、raw event traceable、summary-call count/usage。
+指标：before/after tokens、compaction ratio、projected input、context pressure、hard constraints preserved、orphan units、source event coverage、recent tokens kept、repo state changed、checkpoint atomic、raw event traceable、summary-call count/usage、semantic duration。
 
 ## B2：真实 Agent 消融
 
@@ -193,4 +197,4 @@ Formal：5 cases × 3 variants × 3 repeats = 45 runs，冻结 Forge commit/mode
 
 ## Claim 门禁
 
-正式 benchmark 前不得写具体 Token/成功率提升数字，不得宣称“长历史不丢约束”“Agent 可自主回查历史 Tool 结果”。C5 验收通过后可以表述“实现 Hybrid Structured Compaction”，但效果数字仍必须等 fixed commit + fixed cases + raw Trace + hidden verifier 支持后再形成 Claim。
+正式 benchmark 前不得写具体 Token/成功率提升数字，不得宣称“长历史不丢约束”“Agent 可自主回查历史 Tool 结果”。当前可以表述“实现 Hybrid Structured Compaction”，但效果数字仍必须等 fixed commit + fixed cases + raw Trace + hidden verifier 支持后再形成 Claim。
