@@ -298,6 +298,18 @@ def test_compaction_returns_pruning_only_view_when_stage_a_relief_is_enough(tmp_
 
 
 def test_stage_b_fallback_does_not_reintroduce_pruned_old_tool_body(tmp_path):
+    from context.structured_compaction import SemanticSummaryResult
+    from llm.usage import TokenUsage
+
+    class FailingSemanticSummarizer:
+        def summarize(self, **kwargs):
+            return SemanticSummaryResult(
+                fields=None,
+                usage=TokenUsage(input_tokens=3, output_tokens=1),
+                packet_truncated=False,
+                error="forced semantic failure",
+            )
+
     history = _history_for_compaction(include_unprunable_old_output=True)
     canonical_before = history.to_dicts()
     keep_recent_tokens = _recent_budget(history)
@@ -328,6 +340,7 @@ def test_stage_b_fallback_does_not_reintroduce_pruned_old_tool_body(tmp_path):
         keep_recent_tokens=keep_recent_tokens,
         max_summary_chars=4_000,
         pruner=pruner,
+        semantic_summarizer=FailingSemanticSummarizer(),
     )
     task = Task("continue", str(tmp_path), task_id="pruning-stage-b", max_steps=2)
     log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
