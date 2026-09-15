@@ -158,6 +158,79 @@ def test_query_places_matching_path_and_symbol_first(tmp_path):
     assert result.index("payments.py") < result.index("generic.py")
 
 
+def test_query_normalizes_snake_case_and_inflections():
+    target = FileInfo(
+        path=Path("context/token_budget.py"),
+        size=100,
+        symbols=[Symbol("trim_history", "function", 1, Path("context/token_budget.py"))],
+        _content="def trim_history():\n    pass\n",
+    )
+    other = FileInfo(
+        path=Path("agent/core.py"),
+        size=100,
+        symbols=[Symbol("Agent", "class", 1, Path("agent/core.py"))],
+        _content="class Agent:\n    pass\n",
+    )
+
+    scores = repo_map._query_relevance(
+        [target, other],
+        "fix token history trimming gaps",
+    )
+
+    assert scores[target.path] > scores.get(other.path, 0.0)
+    assert repo_map._normalized_terms("token_budget trimHistory trimming") >= {
+        "token", "budget", "trim", "history",
+    }
+
+
+def test_query_content_signal_can_outweigh_static_centrality():
+    target = FileInfo(
+        path=Path("storage/ledger.py"),
+        size=200,
+        _content=(
+            "def recover_request():\n"
+            "    # retry timeout provider response failure\n"
+            "    pass\n"
+        ),
+    )
+    noisy = FileInfo(
+        path=Path("agent/core.py"),
+        size=200,
+        symbols=[
+            Symbol(f"Service{i}", "class", i + 1, Path("agent/core.py"))
+            for i in range(8)
+        ],
+        _content="class CoreRuntime:\n    pass\n",
+    )
+    files = [target, noisy]
+    relevance = repo_map._query_relevance(
+        files,
+        "handle provider retry timeout failure",
+    )
+    ranked = sorted(
+        files,
+        key=lambda item: -(
+            item.importance_score() + relevance.get(item.path, 0.0)
+        ),
+    )
+
+    assert ranked[0] is target
+
+
+def test_empty_query_preserves_static_ranking():
+    files = [
+        FileInfo(
+            path=Path("agent/core.py"),
+            size=100,
+            symbols=[Symbol("Agent", "class", 1, Path("agent/core.py"))],
+        ),
+        FileInfo(path=Path("misc.py"), size=100),
+    ]
+
+    assert repo_map._query_relevance(files, None) == {}
+    assert repo_map._query_relevance(files, "   ") == {}
+
+
 def test_agent_exposes_selective_repo_map_cache_invalidation(tmp_path):
     agent = Agent(MockBackend([]), ToolRegistry())
     agent._repo_map_cache_key = str(tmp_path)
@@ -168,6 +241,7 @@ def test_agent_exposes_selective_repo_map_cache_invalidation(tmp_path):
     assert agent.invalidate_repo_map_cache(tmp_path)
     assert not hasattr(agent, "_repo_map_cache")
     assert not agent.invalidate_repo_map_cache(tmp_path)
+
 
 def test_agent_invalidation_forces_refresh_on_live_repo_map(tmp_path):
     (tmp_path / "first.py").write_text("def first(): pass\n")
