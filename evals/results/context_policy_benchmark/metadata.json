@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "runner_revision": "eccf8991ff49bec651c7ac9ba829aa7d5b3bc056",
+  "fixture_sha256": "f9f57af5faead4715e52ba21ac247787107a3ad6622f8663759c7d34ab1ccece",
+  "semantic": {
+    "mode": "fixture"
+  },
+  "variants": [
+    "budget_trim_only",
+    "deterministic_pruning",
+    "hybrid_compaction"
+  ],
+  "case_count": 7
+}

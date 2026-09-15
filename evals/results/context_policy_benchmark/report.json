@@ -1,0 +1,67 @@
+{
+  "metadata": {
+    "schema_version": 1,
+    "runner_revision": "eccf8991ff49bec651c7ac9ba829aa7d5b3bc056",
+    "fixture_sha256": "f9f57af5faead4715e52ba21ac247787107a3ad6622f8663759c7d34ab1ccece",
+    "semantic": {
+      "mode": "fixture"
+    },
+    "variants": [
+      "budget_trim_only",
+      "deterministic_pruning",
+      "hybrid_compaction"
+    ],
+    "case_count": 7
+  },
+  "aggregate": {
+    "budget_trim_only": {
+      "runs": 7,
+      "passed": 5,
+      "pass_rate": 0.7142857142857143,
+      "mean_raw_history_tokens": 6080.857142857143,
+      "mean_final_tokens": 1529,
+      "mean_compaction_ratio": 0.7162446259750257,
+      "mean_final_pressure_ratio": 0.445433658816772,
+      "mean_hard_constraint_recall": 0.8571428571428571,
+      "mean_recent_raw_recall": 0.7142857142857143,
+      "orphan_actions": 0,
+      "orphan_observations": 0,
+      "summary_calls": 0,
+      "summary_total_tokens": 0,
+      "semantic_duration_ms": 0
+    },
+    "deterministic_pruning": {
+      "runs": 7,
+      "passed": 6,
+      "pass_rate": 0.8571428571428571,
+      "mean_raw_history_tokens": 6080.857142857143,
+      "mean_final_tokens": 1588.142857142857,
+      "mean_compaction_ratio": 0.7067875495807139,
+      "mean_final_pressure_ratio": 0.46241897103470914,
+      "mean_hard_constraint_recall": 0.8571428571428571,
+      "mean_recent_raw_recall": 0.8571428571428571,
+      "orphan_actions": 0,
+      "orphan_observations": 0,
+      "summary_calls": 0,
+      "summary_total_tokens": 0,
+      "semantic_duration_ms": 0
+    },
+    "hybrid_compaction": {
+      "runs": 7,
+      "passed": 7,
+      "pass_rate": 1.0,
+      "mean_raw_history_tokens": 6080.857142857143,
+      "mean_final_tokens": 901.1428571428571,
+      "mean_compaction_ratio": 0.8343971807896898,
+      "mean_final_pressure_ratio": 0.265118568966932,
+      "mean_hard_constraint_recall": 1.0,
+      "mean_recent_raw_recall": 1.0,
+      "orphan_actions": 0,
+      "orphan_observations": 0,
+      "summary_calls": 8,
+      "summary_total_tokens": 0,
+      "semantic_duration_ms": 1.2595200014402508
+    }
+  },
+  "rows": 21
+}
