@@ -64,14 +64,21 @@ class PrepareNextTurnContext:
     token_budget: TokenBudget
     cancel_event: object | None
     event_log: EventLog
+    # 以下三项由 Core 只读提供，让 context/ 能按完整下一请求评估压力。
+    system_content: str = ""
+    repo_map_content: str = ""
+    tool_schemas: tuple[LLMToolSchema, ...] = ()
 
 
 @dataclass(frozen=True)
 class PrepareNextTurnResult:
-    """允许 prepare_next_turn 注入消息或请求刷新下一轮 Repo Map。"""
+    """prepare_next_turn 的薄结果：持久消息、Repo Map 刷新和一次性模型视图。"""
 
     messages: tuple[LLMMessage, ...] = ()
     refresh_repo_map: bool = False  # True 时让下一次消息组装重新扫描当前仓库
+    # 仅下一次 LLM 调用可见；不会写回 canonical ConversationHistory。
+    history_override: tuple[LLMMessage, ...] | None = None
+
 
 PrepareNextTurn = Callable[
     [PrepareNextTurnContext],
@@ -93,7 +100,7 @@ class AgentConfig:
     test_tool_names: tuple[str, ...] = ("test", "pytest")  # 触发 Reflection 的工具名
     fatal_tool_error_repeats: int = 2     # repeated fatal infrastructure errors before abort
     budget_tokens: int = 80_000            # 总 token 预算
-    history_max_messages: int = 40         # 历史最大条数
+    history_max_messages: int = 40         # 兼容旧配置；canonical history 不再按条数破坏性裁剪
     llm_max_retries: int = 3               # LLM 调用失败最大重试次数
     llm_retry_delay: float = 2.0           # 重试间隔（秒，指数退避）
     llm_retry_max_delay: float = 30.0      # 单次等待上限
@@ -137,6 +144,7 @@ class Agent:
         self._executor = executor or _default_executor(registry, self._cfg.hooks)
         self._repo_map_cache_key: str | None = None
         self._repo_map_force_refresh = False
+        self._prepared_history_override: tuple[LLMMessage, ...] | None = None
 
     def invalidate_repo_map_cache(self, repo_path: str | Path | None = None) -> bool:
         """Invalidate the cached repository summary, optionally by repo."""
@@ -173,66 +181,50 @@ class Agent:
         Returns:
             RunResult，包含最终状态和统计信息
         """
-        
-        #5步初始化
-        
-        #1.根据 task.repo_path 判断 repo map 缓存是否需要失效。
-        ##本质就是一个简单的 per-repository cache invalidation（按仓库粒度的缓存失效机制）。
-        #同一个 Agent 实例可能被用来跑不同仓库的任务（比如 chat 模式跨轮、或多次 run），而 repo_map 缓存必须跟着仓库走。
         self._current_repo_path = task.repo_path
         self._repo_map_query = task.description
-        # 按 repo_path 隔离 repo_map 缓存，换 repo 时自动重建
         cache_key = task.repo_path
-        #用getattr和hasattr：
-            #因为 repo_map_cache 和它的 key 都是运行时才挂上的属性，不在 __init__ 里声明。如果写 if self._repo_map_cache_key != cache_key，第一次调用就会 AttributeError
         if self._repo_map_cache_key != cache_key:
             self.invalidate_repo_map_cache()
-            self._repo_map_force_refresh = False  # 新 RepoMap 本身会做完整首扫
-            self._repo_map_cache_key = cache_key#删掉旧缓存，强迫重建
+            self._repo_map_force_refresh = False
+            self._repo_map_cache_key = cache_key
             self._repo_map_instance = RepoMap(task.repo_path)
         elif getattr(self, "_repo_map_cache_query", None) != task.description:
             if hasattr(self, "_repo_map_cache"):
                 del self._repo_map_cache
-        
-        #2.写入 TASK_START 事件
+
         log.log_task_start(task)
         logger.info("Agent starting task %s", task.task_id)
 
-        # chat/session 模式可以传入共享 history
-        #单次 run 新建。
-        #3.如果没有传入共享 ConversationHistory，则新建历史，并把任务 prompt 作为第一条 user 消息。
         if history is None:
             history = ConversationHistory(max_messages=self._cfg.history_max_messages)
-            # 单次模式：把任务描述作为第一条 user 消息
-            from agent.prompt import build_task_prompt
             history.add(LLMMessage(
                 role="user",
                 content=build_task_prompt(task.description, task.repo_path, task.issue_url),
             ))
-            
-        #4.创建 TokenBudget
-        #在上下文窗口装不下时，决定砍掉哪些内容 ；控制当前给LLM的上下文
+
         token_budget = TokenBudget(total=self._cfg.budget_tokens)
-        #把根路径 resolve() 存下来，扫描仓库生成一段给 LLM 看的目录+符号摘要
-        #5.创建 RepoMap。
         repo_map = getattr(self, "_repo_map_instance", RepoMap(task.repo_path))
 
         usage = SessionUsage()
         total_tokens = 0
         steps_without_edit = 0
-        loop_detector = LoopDetector(repeats=self._cfg.loop_detection_window, max_period=self._cfg.loop_detection_max_period,)
+        loop_detector = LoopDetector(
+            repeats=self._cfg.loop_detection_window,
+            max_period=self._cfg.loop_detection_max_period,
+        )
         test_attempted = False
         last_test_passed: bool | None = None
         last_successful_test_step: int | None = None
         successful_write = False
         last_write_step: int | None = None
-        initial_repo_state = ( self._get_repo_state(task.repo_path) if task.require_changes else None)
+        initial_repo_state = (
+            self._get_repo_state(task.repo_path) if task.require_changes else None
+        )
         fatal_error_key: str | None = None
         fatal_error_count = 0
 
-        #核心循环
         for step in range(1, task.max_steps + 1):
-            #检查用户是否取消请求
             if self._is_cancel_requested():
                 reason = "Canceled by external request"
                 logger.info("Agent task %s canceled before step %d", task.task_id, step)
@@ -247,15 +239,16 @@ class Agent:
                 )
 
             if step > 1:
-                prepare_result = self._prepare_next_turn(task, step, history, repo_map, token_budget, log, total_tokens, usage)
+                prepare_result = self._prepare_next_turn(
+                    task, step, history, repo_map, token_budget, log, total_tokens, usage
+                )
                 if prepare_result is not None:
                     return prepare_result
 
             logger.debug("Step %d/%d", step, task.max_steps)
 
-            # ── 1. 组装 messages，调用 LLM ──────────────────────────────
             messages = self._build_messages(history, token_budget, repo_map)
-            tools = self._registry.get_schemas()#得到概述
+            tools = self._registry.get_schemas()
             llm_started = time.perf_counter()
             llm_span = log.log_trace(
                 EventType.LLM_CALL_STARTED,
@@ -281,7 +274,6 @@ class Agent:
                 )
 
             try:
-                #调用、分类、等待、重试、抛异常
                 response = self._call_with_retry(messages, tools, on_retry=log_retry)
             except Exception as exc:
                 error = classify_llm_error(exc)
@@ -296,9 +288,6 @@ class Agent:
                     error_type=error.kind.value,
                     status_code=error.status_code,
                 )
-                #写任务失败日志
-                # → 构造 RunResult
-                # → 将任务状态设为 FAILED
                 logger.error("LLM call failed at step %d after retries: %s", step, exc)
                 log.log_task_failed(steps=step, reason=f"LLM error: {exc}")
                 return RunResult(
@@ -325,7 +314,6 @@ class Agent:
             total_tokens = usage.total_tokens
             action = response.action
 
-            # ── 2. 写入 Action event ────────────────────────────────────
             action_event_ref = log.log_action(
                 step=step,
                 action=action,
@@ -334,54 +322,50 @@ class Agent:
             )
             logger.info("Step %d: %r", step, action)
 
-            # ── 4. 终止 action ──────────────────────────────────────────
-            # LLM: 我做完了，FINISH
-            # Agent Core:
-            #     1. 有没有没解决的严重环境错误？
-            #     2. 如果要求改代码，真的写文件了吗？
-            #     3. 如果要求改代码，仓库最终真的发生变化了吗？
-            #     4. 如果要求测试，真的运行测试了吗？
-            #     5. 如果运行过测试，最后一次测试通过了吗？
-            #     6. 测试通过之后，有没有又修改代码？
-
-            # 全部通过：
-            #     SUCCESS
-
-            # 任何一个不通过：
-            #     FAILED
             if action.action_type == ActionType.FINISH:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
-                #如果修改的话，比较仓库是否有变化
                 final_repo_state = (
                     self._get_repo_state(task.repo_path)
                     if task.require_changes
                     else None
                 )
                 verification_error: str | None = None
-                if fatal_error_key is not None:#当前是否还有没有解决的严重基础设施错误。 docker git
+                if fatal_error_key is not None:
                     verification_error = (
                         f"Unresolved fatal infrastructure error: {fatal_error_key}"
                     )
-                elif task.require_changes and not successful_write:#要求改代码，但没有成功写文件
-                    verification_error = ( "Task requires repository changes, but no write tool completed successfully.")
-                    
-                elif task.require_changes and initial_repo_state is not None and final_repo_state == initial_repo_state:#要虽然执行过写工具，但仓库实际上有没有发生变化。
-                    verification_error = ("Task requires repository changes, but the repository state did not change.")
-                    
-                elif task.require_tests and not test_attempted:#要求测试，但没有执行过测试工具
-                    verification_error = ("Task requires test verification, but no test tool was run.")
-                    
-                elif test_attempted and last_test_passed is not True:#要求测试，但最后一次测试没有通过
-                    verification_error = ("Agent attempted verification, but the latest test did not pass.")
-                    
-                elif (test_attempted and last_write_step is not None
+                elif task.require_changes and not successful_write:
+                    verification_error = (
+                        "Task requires repository changes, but no write tool completed successfully."
+                    )
+                elif (
+                    task.require_changes
+                    and initial_repo_state is not None
+                    and final_repo_state == initial_repo_state
+                ):
+                    verification_error = (
+                        "Task requires repository changes, but the repository state did not change."
+                    )
+                elif task.require_tests and not test_attempted:
+                    verification_error = (
+                        "Task requires test verification, but no test tool was run."
+                    )
+                elif test_attempted and last_test_passed is not True:
+                    verification_error = (
+                        "Agent attempted verification, but the latest test did not pass."
+                    )
+                elif (
+                    test_attempted
+                    and last_write_step is not None
                     and (
                         last_successful_test_step is None
                         or last_successful_test_step < last_write_step
-                        )
-                    ):#要求测试，但最后一次测试通过之后，仓库又发生了修改
-                    verification_error = ("Files changed after the latest successful test; the final state is unverified.")
+                    )
+                ):
+                    verification_error = (
+                        "Files changed after the latest successful test; the final state is unverified."
+                    )
 
                 if verification_error is not None:
                     log.log_task_failed(steps=step, reason=verification_error)
@@ -395,7 +379,6 @@ class Agent:
                         patch=patch,
                         error=verification_error,
                     )
-                #只有这些检测都通过后，才会返回SUCCESS，FINISH只是LLM的判断
                 log.log_task_complete(steps=step, summary=summary)
                 return RunResult(
                     task_id=task.task_id,
@@ -419,7 +402,6 @@ class Agent:
                     usage=usage.snapshot(),
                 )
 
-            # ── 5. 执行工具 ─────────────────────────────────────────────
             if action.action_type == ActionType.TOOL_CALL and action.tool_call:
                 if self._is_cancel_requested():
                     reason = "Canceled by external request"
@@ -435,7 +417,6 @@ class Agent:
                     )
 
                 tc = action.tool_call
-                #TOOL_CALL 进入 ToolExecutor；ToolResult 转 Observation。
                 tool_started = time.perf_counter()
                 tool_span = log.log_trace(
                     EventType.TOOL_EXECUTION_STARTED,
@@ -473,7 +454,6 @@ class Agent:
                 )
                 observation = result.to_observation(tc.name)
 
-                # 追踪是否有文件写操作
                 if tc.name in ("file_write", "file_edit", "edit"):
                     steps_without_edit = 0
                     if observation.is_success():
@@ -482,8 +462,7 @@ class Agent:
                         self.invalidate_repo_map_cache(task.repo_path)
                 else:
                     steps_without_edit += 1
-                
-                #追踪测试
+
                 if tc.name in self._cfg.test_tool_names:
                     test_attempted = True
                     last_test_passed = observation.is_success()
@@ -495,9 +474,9 @@ class Agent:
                     observation=observation,
                 )
 
-                #追踪基础设施错误
-                infrastructure_error = self._detect_known_fatal_infrastructure_error(observation)
-
+                infrastructure_error = self._detect_known_fatal_infrastructure_error(
+                    observation
+                )
                 if infrastructure_error is not None:
                     if infrastructure_error == fatal_error_key:
                         fatal_error_count += 1
@@ -506,7 +485,10 @@ class Agent:
                         fatal_error_count = 1
 
                     if fatal_error_count >= max(1, self._cfg.fatal_tool_error_repeats):
-                        reason = ("Repeated fatal infrastructure error: "f"{infrastructure_error}")
+                        reason = (
+                            "Repeated fatal infrastructure error: "
+                            f"{infrastructure_error}"
+                        )
                         logger.error(reason)
                         log.log_task_failed(steps=step, reason=reason)
                         return RunResult(
@@ -520,12 +502,11 @@ class Agent:
                             error=reason,
                         )
                 else:
-                    # 只有 Runtime 相关工具成功，才认为基础设施恢复
                     runtime_tools = {"shell", "test", "pytest", "git"}
-                    if (observation.is_success() and tc.name in runtime_tools):
+                    if observation.is_success() and tc.name in runtime_tools:
                         fatal_error_key = None
                         fatal_error_count = 0
-                # 把 action 和 observation 加入对话历史
+
                 history.add(LLMMessage(
                     role="assistant",
                     content=self._format_action_for_history(action),
@@ -542,7 +523,6 @@ class Agent:
                     if tc.name in self._cfg.test_tool_names
                     else None
                 )
-                #每次工具执行完成后，LoopDetector 收到四类信息
                 loop_signal = loop_detector.observe(
                     action,
                     observation,
@@ -592,10 +572,7 @@ class Agent:
                     )
                     continue
 
-                # ── 6. Reflection 触发判断 ──────────────────────────────
-
-                # 触发条件 A：测试工具失败
-                if tc.name in self._cfg.test_tool_names  and  not observation.is_success():
+                if tc.name in self._cfg.test_tool_names and not observation.is_success():
                     reflect_prompt = reflection_test_failed()
                     log.log_reflection(
                         step=step,
@@ -604,8 +581,6 @@ class Agent:
                     )
                     history.add(LLMMessage(role="user", content=reflect_prompt))
                     logger.debug("Reflection triggered: test_failed at step %d", step)
-
-                # 触发条件 B：连续 N 步无编辑
                 elif steps_without_edit >= self._cfg.reflection_no_edit_steps:
                     reflect_prompt = reflection_no_edit(steps_without_edit)
                     log.log_reflection(
@@ -614,17 +589,15 @@ class Agent:
                         prompt=reflect_prompt,
                     )
                     history.add(LLMMessage(role="user", content=reflect_prompt))
-                    steps_without_edit = 0  # 重置计数，避免每步都触发
+                    steps_without_edit = 0
                     logger.debug("Reflection triggered: no_edit at step %d", step)
 
             elif action.action_type == ActionType.REFLECTION:
-                # LLM 主动要求 reflection（预留，当前 MockBackend 不产生）
                 history.add(LLMMessage(
                     role="assistant",
                     content=action.thought,
                 ))
 
-        # ── 7. 超出步数上限 ─────────────────────────────────────────────
         reason = f"Reached max_steps limit ({task.max_steps})"
         log.log_task_failed(steps=task.max_steps, reason=reason)
         return RunResult(
@@ -635,7 +608,7 @@ class Agent:
             total_tokens=total_tokens,
             usage=usage.snapshot(),
         )
-        
+
     @staticmethod
     def _detect_known_fatal_infrastructure_error(
         observation: Observation,
@@ -645,12 +618,12 @@ class Agent:
             return None
 
         runtime_tools = {"shell", "test", "pytest", "git"}
-
         if observation.tool_name not in runtime_tools:
             return None
 
-        text = "\n".join( part for part in (observation.output, observation.error) if part).lower()
-
+        text = "\n".join(
+            part for part in (observation.output, observation.error) if part
+        ).lower()
         markers = (
             "duplicate mount point",
             "invalid mount config",
@@ -659,23 +632,17 @@ class Agent:
             "failed to start container",
             "permission denied while trying to connect to the docker daemon",
         )
-
         for marker in markers:
             if marker in text:
                 return marker
-
         return None
 
     def _is_cancel_requested(self) -> bool:
-        """is_set 是取消对象提供的状态查询方法。
-        外部通过 cancel_event.set() 发出取消信号，Agent 使用 getattr() 安全取得 is_set 方法，
-        确认它可调用后执行 is_set()；返回 True 就表示已经收到取消请求。"""
+        """查询外部取消对象；支持 threading.Event-like 与布尔值。"""
         event = self._cfg.cancel_event
         if event is None:
             return False
-        #event.is_set()    # 查询当前状态
         is_set = getattr(event, "is_set", None)
-        #callable() 判断对象能不能像函数一样调用。
         if callable(is_set):
             return bool(is_set())
         return bool(event)
@@ -695,54 +662,83 @@ class Agent:
         if self._is_cancel_requested():
             reason = "Canceled by external request"
             log.log_task_failed(steps=step - 1, reason=reason)
-            return RunResult(task.task_id, RunStatus.CANCELED, reason, step - 1, total_tokens, usage.snapshot())
+            return RunResult(
+                task.task_id, RunStatus.CANCELED, reason, step - 1,
+                total_tokens, usage.snapshot()
+            )
 
+        system_content, repo_map_content, schemas = self._render_request_parts(
+            token_budget, repo_map
+        )
         prepare_started = time.perf_counter()
         prepare_span = log.log_trace(EventType.PREPARE_NEXT_TURN_STARTED, step)
-        context = PrepareNextTurnContext(task, step, history, repo_map, token_budget, self._cfg.cancel_event, log)
+        context = PrepareNextTurnContext(
+            task=task,
+            step=step,
+            history=history,
+            repo_map=repo_map,
+            token_budget=token_budget,
+            cancel_event=self._cfg.cancel_event,
+            event_log=log,
+            system_content=system_content,
+            repo_map_content=repo_map_content,
+            tool_schemas=schemas,
+        )
         try:
             prepared = callback(context)
         except Exception as exc:
             log.log_trace(
-                EventType.PREPARE_NEXT_TURN_FAILED, step, span_id=prepare_span,
-                duration_ms=(time.perf_counter() - prepare_started) * 1000, error_type=type(exc).__name__,
+                EventType.PREPARE_NEXT_TURN_FAILED,
+                step,
+                span_id=prepare_span,
+                duration_ms=(time.perf_counter() - prepare_started) * 1000,
+                error_type=type(exc).__name__,
             )
             reason = f"prepare_next_turn failed: {type(exc).__name__}: {exc}"
             logger.exception("prepare_next_turn failed before step %d", step)
             log.log_task_failed(steps=step - 1, reason=reason)
-            return RunResult(task.task_id, RunStatus.FAILED, reason, step - 1, total_tokens, usage.snapshot(), error=reason)
+            return RunResult(
+                task.task_id, RunStatus.FAILED, reason, step - 1,
+                total_tokens, usage.snapshot(), error=reason
+            )
 
         refreshed = bool(prepared and prepared.refresh_repo_map)
         if refreshed:
             self.invalidate_repo_map_cache(task.repo_path)
+        if prepared is not None and prepared.history_override is not None:
+            self._prepared_history_override = prepared.history_override
         log.log_trace(
-            EventType.PREPARE_NEXT_TURN_FINISHED, step, span_id=prepare_span,
+            EventType.PREPARE_NEXT_TURN_FINISHED,
+            step,
+            span_id=prepare_span,
             duration_ms=(time.perf_counter() - prepare_started) * 1000,
-            injected_messages=len(prepared.messages) if prepared else 0, repo_map_refreshed=refreshed,
+            injected_messages=len(prepared.messages) if prepared else 0,
+            history_override_messages=(
+                len(prepared.history_override)
+                if prepared and prepared.history_override is not None
+                else 0
+            ),
+            repo_map_refreshed=refreshed,
         )
         if self._is_cancel_requested():
             reason = "Canceled by external request"
             logger.info("Agent task %s canceled after prepare_next_turn", task.task_id)
             log.log_task_failed(steps=step - 1, reason=reason)
-            return RunResult(task.task_id, RunStatus.CANCELED, reason, step - 1, total_tokens, usage.snapshot())
-        if prepared is not None:
+            return RunResult(
+                task.task_id, RunStatus.CANCELED, reason, step - 1,
+                total_tokens, usage.snapshot()
+            )
+        if prepared is not None and prepared.messages:
             history.add_many(list(prepared.messages))
         return None
 
-    def _build_messages(
+    def _render_request_parts(
         self,
-        history: ConversationHistory,
         token_budget: TokenBudget,
         repo_map: RepoMap,
-    ) -> list[LLMMessage]:
-        """
-        组装发给 LLM 的完整 messages，含 token 裁剪。
-        """
-        schemas = self._registry.get_schemas()
-
-        # 生成 repo-map（带缓存：只在第一步生成，之后复用）
-        #repo_map.build() 要 rglob 扫整个仓库、给每个源码文件提取符号，预算是15%
-        #文件修改后不会实时扫描
+    ) -> tuple[str, str, tuple[LLMToolSchema, ...]]:
+        """统一生成下一请求固定部分，供 pressure 计算与最终消息组装复用。"""
+        schemas = tuple(self._registry.get_schemas())
         if not hasattr(self, "_repo_map_cache"):
             map_budget = token_budget.default_plan().repo_map
             if self._repo_map_force_refresh:
@@ -759,23 +755,49 @@ class Agent:
             self._repo_map_force_refresh = False
             self._repo_map_cache_query = getattr(self, "_repo_map_query", None)
 
-        #生成系统提示词
+        repo_map_content = self._repo_map_cache
         system_content = build_system_prompt(
             repo_path=getattr(self, "_current_repo_path", "."),
-            tools=schemas,
-            repo_summary=self._repo_map_cache,
+            tools=list(schemas),
+            repo_summary=repo_map_content,
         )
+        return system_content, repo_map_content, schemas
 
-        # 裁剪历史 #可以用fitall替代？
-        trimmed_history_dicts = token_budget.trim_history(
-            history.to_dicts(),
-            token_budget.default_plan().history,
+    def _build_messages(
+        self,
+        history: ConversationHistory,
+        token_budget: TokenBudget,
+        repo_map: RepoMap,
+    ) -> list[LLMMessage]:
+        """组装发给 LLM 的完整 messages；一次性 override 不写回 canonical history。"""
+        system_content, _, schemas = self._render_request_parts(token_budget, repo_map)
+        if self._prepared_history_override is not None:
+            visible_history = list(self._prepared_history_override)
+            self._prepared_history_override = None
+            raw_history = [
+                {
+                    "role": message.role,
+                    "content": message.content,
+                    **({"tool_call_id": message.tool_call_id} if message.tool_call_id else {}),
+                }
+                for message in visible_history
+            ]
+        else:
+            raw_history = history.to_dicts()
+
+        history_limit = token_budget.history_limit_for_request(
+            system_content,
+            schemas,
         )
+        trimmed_history_dicts = token_budget.trim_history(raw_history, history_limit)
 
-        # 组装：system + 裁剪后的 history
         messages = [LLMMessage(role="system", content=system_content)]
-        for d in trimmed_history_dicts:
-            messages.append(LLMMessage(role=d["role"], content=d["content"]))
+        for item in trimmed_history_dicts:
+            messages.append(LLMMessage(
+                role=item["role"],
+                content=item["content"],
+                tool_call_id=item.get("tool_call_id"),
+            ))
         return messages
 
     def _format_action_for_history(self, action: Action) -> str:
@@ -783,7 +805,9 @@ class Agent:
         parts = [f"Thought: {action.thought}"]
         if action.tool_call:
             parts.append(f"Action: {action.tool_call.name}")
-            parts.append(f"Params: {json.dumps(action.tool_call.params, ensure_ascii=False)}")
+            parts.append(
+                f"Params: {json.dumps(action.tool_call.params, ensure_ascii=False)}"
+            )
         elif action.message:
             parts.append(f"Message: {action.message}")
         return "\n".join(parts)
@@ -872,16 +896,17 @@ class Agent:
                 time.sleep(delay)
 
         raise AssertionError("retry loop exited unexpectedly")
+
     def _get_git_diff(self, repo_path: str) -> str | None:
         """抓取 git diff HEAD 作为 patch，失败时静默返回 None。"""
         import subprocess
         try:
-            #subprocess.run不经过终端，相当于
-            # 程序：git
-            # 参数：["diff", "HEAD"]
             proc = subprocess.run(
                 ["git", "diff", "HEAD"],
-                capture_output=True, text=True, timeout=10, cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=repo_path,
             )
             diff = proc.stdout.strip()
             return diff if diff else None
@@ -889,24 +914,29 @@ class Agent:
             return None
 
     def _get_repo_state(self, repo_path: str) -> str | None:
-        """Return a baseline-comparable snapshot of repository changes.
-        生成“当前 Git 仓库相对于 HEAD 的修改状态快照”，然后用这个字符串和之前保存的快照做比较，判断仓库到底有没有发生变化。
-        """
+        """Return a baseline-comparable snapshot of repository changes."""
         import subprocess
         try:
             status = subprocess.run(
                 ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-                capture_output=True, text=True, timeout=10, cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=repo_path,
             )
             diff = subprocess.run(
                 ["git", "diff", "--binary", "HEAD"],
-                capture_output=True, text=True, timeout=10, cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=repo_path,
             )
             if status.returncode != 0 or diff.returncode != 0:
                 return None
             return status.stdout + "\0--diff--\0" + diff.stdout
         except Exception:
             return None
+
 
 def _default_executor(
     registry: ToolRegistry,
