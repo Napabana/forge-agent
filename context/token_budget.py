@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 
@@ -62,6 +63,21 @@ def estimate_messages_tokens(messages: list[dict]) -> int:
     return sum(estimate_message_tokens(message) for message in messages)
 
 
+def estimate_tool_schemas_tokens(tools) -> int:
+    """Estimate provider-side tool schema payload without depending on a backend SDK."""
+    payload = [
+        {
+            "name": getattr(tool, "name", ""),
+            "description": getattr(tool, "description", ""),
+            "parameters": getattr(tool, "parameters", {}),
+        }
+        for tool in tools
+    ]
+    if not payload:
+        return 0
+    return estimate_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
 @dataclass
 class BudgetPlan:
     total: int
@@ -74,6 +90,26 @@ class BudgetPlan:
     @property
     def available(self) -> int:
         return self.total - self.reserve
+
+
+@dataclass(frozen=True)
+class ContextPressure:
+    """下一次模型请求的估算压力；repo_map_tokens 仅作诊断，不重复计入 projected_input。"""
+
+    total: int
+    reserve: int
+    available_input: int
+    system_tokens: int
+    tool_schema_tokens: int
+    repo_map_tokens: int
+    history_tokens: int
+    projected_input: int
+
+    @property
+    def ratio(self) -> float:
+        if self.available_input <= 0:
+            return 1.0
+        return self.projected_input / self.available_input
 
 
 @dataclass(frozen=True)
@@ -157,6 +193,40 @@ class TokenBudget:
             history=int(available * 0.50),
             observation=int(available * 0.25),
         )
+
+    def request_pressure(
+        self,
+        *,
+        system_text: str,
+        repo_map_text: str,
+        history: list[dict],
+        tools=(),
+    ) -> ContextPressure:
+        """Estimate the full next request rather than only the history sub-budget."""
+        plan = self.default_plan()
+        system_tokens = estimate_tokens(system_text)
+        tool_schema_tokens = estimate_tool_schemas_tokens(tools)
+        repo_map_tokens = estimate_tokens(repo_map_text) if repo_map_text else 0
+        history_tokens = estimate_messages_tokens(history)
+        # Repo Map 已嵌入 system prompt；这里单独记录它只为诊断，不能重复相加。
+        projected_input = system_tokens + tool_schema_tokens + history_tokens
+        return ContextPressure(
+            total=plan.total,
+            reserve=plan.reserve,
+            available_input=plan.available,
+            system_tokens=system_tokens,
+            tool_schema_tokens=tool_schema_tokens,
+            repo_map_tokens=repo_map_tokens,
+            history_tokens=history_tokens,
+            projected_input=projected_input,
+        )
+
+    def history_limit_for_request(self, system_text: str, tools=()) -> int:
+        """Return the history budget left after fixed request sections, capped by the legacy plan."""
+        plan = self.default_plan()
+        fixed_tokens = estimate_tokens(system_text) + estimate_tool_schemas_tokens(tools)
+        remaining = max(0, plan.available - fixed_tokens)
+        return min(plan.history, remaining)
 
     def trim_to(self, text: str, token_limit: int) -> str:
         """Return the longest binary-searched prefix that fits with its notice."""
