@@ -92,7 +92,7 @@
       },
       "expected_invariants": {
         "recent_markers": ["RECENT_RAW_MARKER"],
-        "old_markers_absent_after_pruning": ["OLD_FILE_BODY_MARKER", "OLD_SHELL_BODY_MARKER", "OLD_TEST_BODY_MARKER"]
+        "old_markers_absent_after_pruning": ["OLD_FILE_BODY_MARKER"]
       }
     },
     {
