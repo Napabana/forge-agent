@@ -24,17 +24,7 @@
 
 ## 1. `context/token_budget.py`
 
-新增 `ContextPressure`，统一记录：
-
-- total budget；
-- reserve；
-- available input；
-- system tokens；
-- tool schema tokens；
-- repo map tokens（诊断字段）；
-- history tokens；
-- projected input；
-- pressure ratio。
+新增 `ContextPressure`，统一记录：total budget、reserve、available input、system tokens、tool schema tokens、repo map tokens（诊断字段）、history tokens、projected input、pressure ratio。
 
 新增 `estimate_tool_schemas_tokens()`，使用 Forge 自己的 `LLMToolSchema` 字段序列化估算，不绑定具体 provider SDK。
 
@@ -51,8 +41,6 @@ Repo Map 已经嵌入 rendered system prompt，因此 `repo_map_tokens` 只单�
 
 新增 `history_limit_for_request()`：
 
-下一次真正 `_build_messages()` 时，History 可用预算不再只依赖固定 `plan.history`，还受 system + tool schemas 已占用 token 约束：
-
 ```text
 history_limit = min(
     legacy_history_budget,
@@ -60,7 +48,7 @@ history_limit = min(
 )
 ```
 
-这样 C2 的 request pressure 与最终 model-visible trim 使用同一预算语义。
+因此 C2 的 request pressure 与最终 model-visible trim 使用同一预算语义。
 
 ## 2. `context/compaction.py`
 
@@ -76,40 +64,20 @@ history_limit = min(
 - `keep_recent_tokens`
 - `retained_tail_tokens`
 
-`TraceableCompaction` 现在维护：
-
-```text
-entries: list[CompactionEntry]
-checkpoints: list[CompactionCheckpoint]
-```
+`TraceableCompaction` 维护 `entries` 与 `checkpoints` 两类证据。
 
 关键语义变化：
-
-### C1 / 旧实现
-
-```text
-compact
--> history.replace([task, summary, recent tail])
--> summary 永久进入 canonical ConversationHistory
-```
-
-### C2
 
 ```text
 canonical ConversationHistory 不修改
         |
         +-> 计算 full request pressure
-        |
         +-> 生成 CompactionEntry
-        |
         +-> PrepareNextTurnResult(history_override=...)
-        |
         +-> 只影响下一次 LLM model-visible view
 ```
 
-因此真实用户历史、Tool Action/Observation 仍保留在 canonical history；`[Compacted earlier context ...]` 不会混入真实会话事实源。
-
-Repeated compaction 通过 `previous_checkpoint_id` 显式关联前一个 checkpoint，并且每次摘要都基于 canonical raw history 重新生成，而不是 summary(summary(...))。
+Repeated compaction 通过 `previous_checkpoint_id` 显式关联前一个 checkpoint，并且每次摘要都基于 canonical raw history 重新生成，不再 summary(summary(...))。
 
 `CompactionCheckpoint` 新增：
 
@@ -119,65 +87,34 @@ Repeated compaction 通过 `previous_checkpoint_id` 显式关联前一个 checkp
 - `available_input_tokens`
 - `pressure_ratio`
 
-这些字段为后续 Context benchmark 直接提供原始证据。
-
-当前 summary 方法仍为 `extractive-v1`，这是刻意保留的 deterministic baseline；structured compaction 留到后续批次。
+当前 summary 方法仍为 `extractive-v1`，保留为 deterministic baseline；structured compaction 后置。
 
 ## 3. `agent/core.py`
 
 Core 只做薄接线，不承担 Compaction 策略。
 
-### `PrepareNextTurnContext`
+`PrepareNextTurnContext` 新增只读 request context：`system_content`、`repo_map_content`、`tool_schemas`。
 
-新增只读 request context：
-
-- `system_content`
-- `repo_map_content`
-- `tool_schemas`
-
-这样 `context/compaction.py` 可以基于真实下一请求组成计算 pressure，而不是重复实现 system prompt / Repo Map / Tool Registry。
-
-### `PrepareNextTurnResult`
-
-新增：
+`PrepareNextTurnResult` 新增：
 
 ```python
 history_override: tuple[LLMMessage, ...] | None
 ```
 
-语义：
+语义：只对下一次模型调用可见，不写回 canonical ConversationHistory。
 
-> 只对下一次模型调用可见，不写回 canonical ConversationHistory。
+`_render_request_parts()` 统一生成 Repo Map cache、rendered system prompt 和 tool schemas；`_prepare_next_turn()` 与 `_build_messages()` 复用同一套 request parts。
 
-### `_render_request_parts()`
-
-统一生成：
-
-- Repo Map cache；
-- rendered system prompt；
-- tool schemas。
-
-`_prepare_next_turn()` 与 `_build_messages()` 复用同一套 request parts，避免 pressure 计算和最终请求组装使用两套不同语义。
-
-### `_build_messages()`
-
-若存在 `history_override`：
-
-1. 仅本次使用 override；
-2. 使用后立即清空；
-3. 再按 `history_limit_for_request()` 做最终防御性 TokenBudget trim；
-4. canonical history 完全不修改。
-
-如果没有 override，保持使用 canonical `history.to_dicts()`。
+`_build_messages()` 若存在 `history_override`：仅本次使用、使用后清空、再按 `history_limit_for_request()` 做最终防御性 TokenBudget trim；canonical history 完全不修改。
 
 ## 4. `tests/test_compaction.py`
 
-新增/调整测试覆盖：
+覆盖：
 
-1. `ContextPressure` 同时计算 system / tool schema / history，并确认 Repo Map 不重复计入 projected total；
+1. ContextPressure 计算 system / tool schema / history，并确认 Repo Map 不重复计入 projected total；
 2. Compaction 后 canonical history 内容完全不变；
 3. token-based recent complete units 仍完整保留；
-4. History 较小时，只要 system/tool 等使完整 request 压力足够高，也可以触发 Compaction；
+4. History 较小时，只要完整 request 压力足够高，也可以触发 Compaction；
 5. repeated compaction 的 `previous_checkpoint_id` 正确连接；
 6. canonical history 中不会出现 `[Compacted earlier context ...]`；
 7. Agent turn-boundary 集成测试确认 compacted view 只出现在第二次真实 model call；
@@ -187,37 +124,27 @@ history_override: tuple[LLMMessage, ...] | None
 
 ## 当前提交范围
 
-C2 开始前基线：
+C2 开始前基线：`fbf1eee46479b39703f1bf87fea840ba7b0cbcb9`。
 
-`fbf1eee46479b39703f1bf87fea840ba7b0cbcb9`
+C2 代码与测试完成点：`ab96536358bda8985a8985e60d2579e36767f595`。
 
-C2 代码与测试当前 HEAD（创建本文档前）：
+GitHub compare 确认代码变化限定在用户确认的 4 个文件。`agent/core.py` 因 GitHub Contents API 重写时行尾/格式归一化，compare 显示的 additions/deletions 较大；验收以 pytest 行为和具体逻辑为准。
 
-`ab96536358bda8985a8985e60d2579e36767f595`
+## 验证结果
 
-GitHub compare 确认代码变化仍限定在已确认的 4 个文件。
-
-注意：`agent/core.py` 因 GitHub Contents API 重写时行尾/格式归一化，compare 显示的 additions/deletions 数较大；实际 C2 设计改动集中在 `PrepareNextTurnContext/Result`、request parts 组装、一次性 history override 和动态 history limit。验收应以 pytest 行为与具体逻辑 diff 为准，不以纯行数判断功能范围。
-
-## 验证状态
-
-当前 ChatGPT 环境无法访问用户本机 WSL Python/venv，也无法直接从公网 clone GitHub，因此本轮不能声称 pytest 已通过。
-
-用户 pull 后先运行：
+用户已在本地 WSL/项目虚拟环境完成两组 pytest，结果全部通过：
 
 ```bash
-cd /mnt/e/2806/forgeAgent/forge-agent
-source ~/.venvs/forge-agent/bin/activate
 python -m pytest -q tests/test_compaction.py
 ```
 
-因为 C2 改到了 `agent/core.py` 的 prepare/build message 接线，再补：
+以及：
 
 ```bash
 python -m pytest -q tests/test_chat.py tests/test_session_store.py tests/test_day2.py
 ```
 
-如果这些全部通过，再将 C2 标记完成并进入 C3 文件范围确认。
+因此 C2 于 2026-09-15 正式验收通过。
 
 ## C2 完成后的直接提升
 
@@ -233,7 +160,7 @@ python -m pytest -q tests/test_chat.py tests/test_session_store.py tests/test_da
 
 ## 仍未解决的边界
 
-C2 仍保留以下已知边界，后续批次处理：
+C2 之后仍有：
 
 1. `extractive-v1` 仍不是结构化语义摘要；
 2. 尚未先做 deterministic Tool-output pruning；
@@ -241,4 +168,4 @@ C2 仍保留以下已知边界，后续批次处理：
 4. Session resume / 新 round 的 step 1 尚无 Context preflight；
 5. `event_ref` 仍主要用于人工/Trace 审计，不是 Agent 自主 recall。
 
-这些不应在 C2 阶段顺带实现。
+下一步进入 C3 文件范围确认；在用户确认前不修改 C3 生产代码。
