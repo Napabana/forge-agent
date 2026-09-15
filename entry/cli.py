@@ -469,6 +469,7 @@ def chat(
     import logging
     from agent.session import ChatSessionConflict, ChatSessionError
     from agent.session_store import JsonChatSessionStore
+    from context.compaction import TraceableCompaction
     from entry.chat import ChatSession
 
     if continue_session and resume_session:
@@ -527,6 +528,7 @@ def chat(
         if no_session
         else JsonChatSessionStore(Path(config.agent.log_dir) / "chat")
     )
+    context_policy = TraceableCompaction()
     initial_session_id = resume_session
     continued_existing = False
     try:
@@ -545,6 +547,7 @@ def chat(
             stream=stream,
             session_store=session_store,
             session_id=initial_session_id,
+            prepare_next_turn=context_policy,
         )
     except (ChatSessionError, OSError) as exc:
         if runtime is not None:
