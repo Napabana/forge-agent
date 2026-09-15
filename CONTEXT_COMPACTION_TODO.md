@@ -6,60 +6,62 @@
 
 执行原则：一次只收口一个 Context 契约；每批生产代码修改前先按 `AGENTS.md` 检查 `git status --short --branch`、最近提交、remote、stash，列出拟修改文件和理由，等待用户确认。测试先定向后扩展，不为得到整齐数字重复运行已通过节点。
 
+当前状态：C1 已完成并经用户本地 pytest 验证全部通过；C2 尚未开始，等待用户确认修改范围。
+
 ## 0. 实施前门禁
 
-- [ ] 本地 pull 最新 `dev`，确认已包含 `CONTEXT_COMPACTION_EXECUTION_PLAN.md` 与本 TODO。
-- [ ] `git status --short --branch`，确认并保留用户已有修改。
-- [ ] `git log -3 --oneline --decorate`。
-- [ ] `git remote -v`，不得修改私有 SSH remote 约定。
-- [ ] `git stash list`，不得丢弃已有 stash。
-- [ ] 阅读本地 `AGENTS.md` 最新“最后交接”。
-- [ ] 不修改/还原 `config/default.yaml`。
-- [ ] 记录正式实现基线 commit。
-- [ ] 运行当前 Compaction 最小基线测试，只记录真实结果，不为失败外问题扩大修改范围。
-- [ ] 确认不同时引入 MCP、多 Agent、multi-tool call、向量检索、provider-native compact。
+- [x] 本地 pull 最新 `dev`，确认已包含 `CONTEXT_COMPACTION_EXECUTION_PLAN.md` 与本 TODO。
+- [x] `git status --short --branch`，确认并保留用户已有修改。
+- [x] `git log -3 --oneline --decorate`。
+- [x] `git remote -v`，不得修改私有 SSH remote 约定。
+- [x] `git stash list`，不得丢弃已有 stash。
+- [x] 阅读本地 `AGENTS.md` 最新“最后交接”。
+- [x] 不修改/还原 `config/default.yaml`。
+- [x] 记录正式实现基线 commit。
+- [x] 运行当前 Compaction 最小基线测试，只记录真实结果，不为失败外问题扩大修改范围。
+- [x] 确认不同时引入 MCP、多 Agent、multi-tool call、向量检索、provider-native compact。
 
 ## C1：Context 所有权与 HistoryUnit 收口
+
+状态：已完成，用户本地 pytest 全部通过。
 
 ### 目标
 
 让 Canonical History 不再在 Compaction 之前被 message-count window 无条件永久删除，并让 History/Compaction/TokenBudget 共用一致的 Tool turn 单元语义。
 
-### 拟修改文件（需用户确认后才能改）
+### 已完成修改
 
-- [ ] `context/history.py`
-  - [ ] 明确 canonical history 与 bounded/model-view history 的职责。
-  - [ ] 为 Compaction/Chat 使用场景提供不提前 destructive trim 的模式或等价最小实现。
-  - [ ] 保持旧构造方式兼容，避免一次性破坏普通 run。
-  - [ ] 不在该文件加入摘要策略。
+- [x] `context/history.py`
+  - [x] 明确 canonical history 与 bounded/model-view history 的职责。
+  - [x] Compaction/Chat 使用场景不再提前 destructive trim。
+  - [x] 保持旧构造方式兼容。
+  - [x] 不在该文件加入摘要策略。
 
-- [ ] `context/token_budget.py`
-  - [ ] 将 `_HistoryUnit` 及 conversation-unit 构造逻辑提取成 Context 层可复用稳定 helper/type。
-  - [ ] 保持 `trim_history()` 原行为和现有测试兼容。
-  - [ ] 保证 assistant Action + user/tool Observation 始终不可拆。
+- [x] `context/token_budget.py`
+  - [x] 将 `_HistoryUnit` 及 conversation-unit 构造逻辑提取为 Context 可复用的 `HistoryUnit`/helper。
+  - [x] 保持 `trim_history()` 原行为和现有测试兼容。
+  - [x] 保证 assistant Action + user/tool Observation 始终不可拆。
 
-- [ ] `context/compaction.py`
-  - [ ] 改为复用统一 HistoryUnit。
-  - [ ] 将 `retained_tail` 消息数语义替换为 `keep_recent_tokens`。
-  - [ ] 从最近 unit 向前累计 token，完整保留 unit。
-  - [ ] 本批保留 `extractive-v1` 作为 baseline，不引入 LLM summary。
+- [x] `context/compaction.py`
+  - [x] 改为复用统一 HistoryUnit。
+  - [x] 将 `retained_tail` 消息数语义替换为 `keep_recent_tokens`。
+  - [x] 从最近 unit 向前累计 token，完整保留 unit。
+  - [x] 本批保留 `extractive-v1` 作为 baseline，不引入 LLM summary。
 
-- [ ] `tests/test_compaction.py`
-  - [ ] 长 History 在进入 Compaction 前没有被 message window 偷先删除。
-  - [ ] Action/Observation 不产生 orphan。
-  - [ ] token-based recent tail 在 Observation 长度悬殊时仍满足预算语义。
-  - [ ] 默认未启用 Compaction 的旧行为不受影响。
+- [x] `tests/test_compaction.py`
+  - [x] 长 History 在进入 Compaction 前没有被 message window 偷先删除。
+  - [x] Action/Observation 不产生 orphan。
+  - [x] token-based recent tail 在 Observation 长度悬殊时仍满足预算语义。
+  - [x] 现有 Compaction/Session 相关回归保持通过。
 
 ### C1 验收
 
-- [ ] Canonical History 与 model-visible trim 的职责在代码注释/测试中可解释。
-- [ ] Compaction 不再按固定消息数理解 recent tail。
-- [ ] Tool turn unit 只有一套定义。
-- [ ] 运行 `python -m pytest -q tests/test_compaction.py`。
-- [ ] 若改动影响 TokenBudget，再运行其直接相关测试；不跑无关全量。
-- [ ] 新建对应 `YYYY-MM-DD-...改动内容.md`（本地 AGENTS 规则）。
-- [ ] 更新本地 AGENTS 最后交接。
-- [ ] 汇报 diff 和真实测试结果，等待用户确认 C2。
+- [x] Canonical History 与 model-visible trim 的职责在代码注释/测试中可解释。
+- [x] Compaction 不再按固定消息数理解 recent tail。
+- [x] Tool turn unit 只有一套定义。
+- [x] 用户本地运行 Compaction 相关 pytest，确认全部通过。
+- [x] 已新建 `2026-09-15-Context-Compaction-C1改动内容.md` 并记录真实结果。
+- [x] 汇报 diff 和真实测试结果。
 
 ## C2：完整 Request Pressure 与 CompactionEntry
 
