@@ -1,3 +1,5 @@
+import subprocess
+
 from agent.core import Agent, AgentConfig, PrepareNextTurnContext
 from agent.event_log import EventLog
 from agent.task import Action, ActionType, EventType, Task, ToolCall
@@ -6,12 +8,13 @@ from config.schema import AppConfig
 from context.compaction import TraceableCompaction
 from context.history import ConversationHistory
 from context.repo_map import RepoMap
+from context.repository_state import repository_fingerprint
 from context.token_budget import (
     TokenBudget,
     history_unit_tokens,
     history_units,
 )
-from entry.chat import ChatSession
+from entry.chat import ChatSession, _repository_revision
 from llm.base import LLMMessage, LLMToolSchema, MockBackend
 from tools.base import NoopTool, ToolRegistry
 
@@ -87,6 +90,56 @@ def _history_with_units(count: int = 5) -> ConversationHistory:
     return history
 
 
+def _init_git_repo(path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "forge-agent@example.invalid"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Forge Agent Tests"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+    (path / "tracked.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_repository_fingerprint_changes_when_head_is_same_but_worktree_changes(tmp_path):
+    _init_git_repo(tmp_path)
+    before = repository_fingerprint(tmp_path)
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    (tmp_path / "tracked.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    after = repository_fingerprint(tmp_path)
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head_after == head_before
+    assert after != before
+    assert _repository_revision(tmp_path) == after
+
+
 def test_compaction_keeps_canonical_history_and_returns_token_based_model_view(tmp_path):
     history = _history_with_units()
     canonical_before = history.to_dicts()
@@ -134,6 +187,7 @@ def test_compaction_keeps_canonical_history_and_returns_token_based_model_view(t
     assert checkpoint.retained_tail == 4
     assert checkpoint.keep_recent_tokens == keep_recent_tokens
     assert checkpoint.retained_tail_tokens == keep_recent_tokens
+    assert checkpoint.repo_revision == repository_fingerprint(tmp_path)
     assert strategy.entries[0].checkpoint_id == checkpoint.checkpoint_id
     log.close()
 
@@ -210,6 +264,23 @@ def test_repeated_compaction_links_previous_checkpoint_without_summary_in_histor
     log.close()
 
 
+def test_compaction_lineage_can_restore_and_reset_without_restoring_summary():
+    strategy = TraceableCompaction(
+        threshold=0.2,
+        target_ratio=0.1,
+        keep_recent_tokens=20,
+    )
+    strategy.restore_checkpoint_lineage("checkpoint-old")
+    assert strategy._lineage_checkpoint_id == "checkpoint-old"
+    assert strategy.entries == []
+    assert strategy.checkpoints == []
+
+    strategy.reset_checkpoint_lineage()
+    assert strategy._lineage_checkpoint_id is None
+    assert strategy.entries == []
+    assert strategy.checkpoints == []
+
+
 def test_compaction_runs_at_turn_boundary_and_only_changes_next_model_view(tmp_path):
     history = ConversationHistory(max_messages=40)
     history.add(LLMMessage("user", "original acceptance constraint"))
@@ -262,23 +333,103 @@ def test_compaction_runs_at_turn_boundary_and_only_changes_next_model_view(tmp_p
     assert compacted[0].payload["projected_input_tokens"] == checkpoint.projected_input_tokens
 
 
-def test_chat_persists_compaction_checkpoint(tmp_path):
+def _chat_config(tmp_path) -> AppConfig:
     config = AppConfig()
-    config.agent.max_steps = 2
+    config.agent.max_steps = 1
     config.agent.budget_tokens = 2_000
     config.agent.log_dir = str(tmp_path / "logs")
     config.context.history_window = 20
+    return config
+
+
+def _seed_long_chat_history(session: ChatSession, count: int = 6) -> None:
+    for index in range(count):
+        session._shared_history.add(
+            LLMMessage("assistant", f"old action {index} " + "x" * 120)
+        )
+        session._shared_history.add(
+            LLMMessage("user", f"old result {index} " + "y" * 120)
+        )
+
+
+def test_fresh_chat_round_one_does_not_run_round_boundary_compaction(tmp_path):
+    config = _chat_config(tmp_path)
+    strategy = TraceableCompaction(
+        threshold=0.2,
+        target_ratio=0.1,
+        keep_recent_tokens=20,
+    )
+    backend = MockBackend([
+        Action(ActionType.FINISH, "done", message="Done."),
+    ])
+    session = ChatSession(
+        backend=backend,
+        registry=ToolRegistry().register(NoopTool("noop")),
+        config=config,
+        repo_path=str(tmp_path),
+        log_dir=config.agent.log_dir,
+        prepare_next_turn=strategy,
+        stream=False,
+    )
+
+    assert session.run_round("fresh request")
+
+    assert strategy.checkpoints == []
+    assert "[Compacted earlier context" not in "\n".join(
+        message.content for message in backend.received_messages[0]
+    )
+
+
+def test_existing_chat_history_compacts_before_first_model_call(tmp_path):
+    config = _chat_config(tmp_path)
+    strategy = TraceableCompaction(
+        threshold=0.2,
+        target_ratio=0.1,
+        keep_recent_tokens=20,
+    )
+    backend = MockBackend([
+        Action(ActionType.FINISH, "done", message="Done."),
+    ])
+    session = ChatSession(
+        backend=backend,
+        registry=ToolRegistry().register(NoopTool("noop")),
+        config=config,
+        repo_path=str(tmp_path),
+        log_dir=config.agent.log_dir,
+        prepare_next_turn=strategy,
+        stream=False,
+    )
+    _seed_long_chat_history(session)
+
+    assert session.run_round("continue")
+
+    first_call_contents = "\n".join(
+        message.content for message in backend.received_messages[0]
+    )
+    assert "[Compacted earlier context" in first_call_contents
+    assert sum(
+        message.content == "continue"
+        for message in session._shared_history.to_list()
+    ) == 1
+    assert not any(
+        "[Compacted earlier context" in message.content
+        for message in session._shared_history.to_list()
+    )
+
+
+def test_chat_persists_round_boundary_checkpoint_and_resume_links_lineage(tmp_path):
+    config = _chat_config(tmp_path)
     store = JsonChatSessionStore(tmp_path / "sessions")
     strategy = TraceableCompaction(
         threshold=0.2,
         target_ratio=0.1,
         keep_recent_tokens=20,
     )
+    first_backend = MockBackend([
+        Action(ActionType.FINISH, "done", message="Done."),
+    ])
     session = ChatSession(
-        backend=MockBackend([
-            Action(ActionType.TOOL_CALL, "run", ToolCall("noop", {})),
-            Action(ActionType.FINISH, "done", message="Done."),
-        ]),
+        backend=first_backend,
         registry=ToolRegistry().register(NoopTool("noop")),
         config=config,
         repo_path=str(tmp_path),
@@ -287,18 +438,39 @@ def test_chat_persists_compaction_checkpoint(tmp_path):
         prepare_next_turn=strategy,
         stream=False,
     )
-    for index in range(6):
-        session._shared_history.add(
-            LLMMessage("assistant", f"old action {index} " + "x" * 80)
-        )
-        session._shared_history.add(
-            LLMMessage("user", f"old result {index} " + "y" * 80)
-        )
+    _seed_long_chat_history(session)
 
     assert session.run_round("continue")
 
-    restored = store.load(session.session_id)
-    checkpoint = restored.compaction_checkpoints[0]
-    assert checkpoint["checkpoint_id"] == strategy.checkpoints[0].checkpoint_id
-    assert checkpoint["keep_recent_tokens"] == 20
-    assert checkpoint["previous_checkpoint_id"] is None
+    session_id = session.session_id
+    first_checkpoint_id = strategy.checkpoints[0].checkpoint_id
+    restored_state = store.load(session_id)
+    assert restored_state.compaction_checkpoints[-1]["checkpoint_id"] == first_checkpoint_id
+
+    resumed_strategy = TraceableCompaction(
+        threshold=0.2,
+        target_ratio=0.1,
+        keep_recent_tokens=20,
+    )
+    resumed_backend = MockBackend([
+        Action(ActionType.FINISH, "done", message="Resumed."),
+    ])
+    resumed = ChatSession(
+        backend=resumed_backend,
+        registry=ToolRegistry().register(NoopTool("noop")),
+        config=config,
+        repo_path=str(tmp_path),
+        log_dir=config.agent.log_dir,
+        session_store=store,
+        session_id=session_id,
+        prepare_next_turn=resumed_strategy,
+        stream=False,
+    )
+
+    assert resumed.run_round("resume continue")
+
+    assert resumed_strategy.checkpoints
+    assert resumed_strategy.checkpoints[0].previous_checkpoint_id == first_checkpoint_id
+    assert "[Compacted earlier context" in "\n".join(
+        message.content for message in resumed_backend.received_messages[0]
+    )
