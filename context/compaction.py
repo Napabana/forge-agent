@@ -268,22 +268,33 @@ class TraceableCompaction:
                     if active_messages is not None:
                         return PrepareNextTurnResult(history_override=tuple(active_messages))
 
-        fallback_excerpts = ()
-        summary_method = "structured-hybrid-v1"
-        if semantic_fields is None:
-            summary_method = "structured-fallback-v1"
-            fallback_excerpts = fallback_user_excerpts(dropped)
+        if not semantic_called:
+            # 兼容 C1-C4 的程序化用法：没有 semantic summarizer 时继续使用旧 extractive-v1，
+            # 避免固定结构 heading 在小历史上反而造成 token 膨胀。
+            history_budget = context.token_budget.default_plan().history
+            summary_method = "extractive-v1"
+            summary = _extractive_summary(
+                dropped,
+                min(self.max_summary_chars, int(history_budget * self.target_ratio * 4)),
+            )
+        else:
+            fallback_excerpts = ()
+            summary_method = "structured-hybrid-v1"
+            if semantic_fields is None:
+                summary_method = "structured-fallback-v1"
+                fallback_excerpts = fallback_user_excerpts(dropped)
 
-        state = build_structured_state(
-            goal=context.task.description,
-            semantic=semantic_fields,
-            evidence=evidence,
-            fallback_excerpts=fallback_excerpts,
-        )
-        summary = render_structured_context(
-            state,
-            max_chars=max(900, self.max_summary_chars),
-        )
+            state = build_structured_state(
+                goal=context.task.description,
+                semantic=semantic_fields,
+                evidence=evidence,
+                fallback_excerpts=fallback_excerpts,
+            )
+            summary = render_structured_context(
+                state,
+                max_chars=max(900, self.max_summary_chars),
+            )
+
         compacted = [
             pruned_messages[0],
             _summary_message(summary),
@@ -492,6 +503,12 @@ class TraceableCompaction:
             semantic_error=checkpoint.semantic_error,
             semantic_duration_ms=checkpoint.semantic_duration_ms,
         )
+
+
+def _extractive_summary(messages: list[LLMMessage], limit: int) -> str:
+    """C4 兼容摘要：仅在没有 semantic summarizer 的程序化路径使用。"""
+    lines = [f"- {message.role}: {' '.join(message.content.split())}" for message in messages]
+    return "\n".join(lines)[:limit]
 
 
 def _summary_message(summary: str) -> LLMMessage:
