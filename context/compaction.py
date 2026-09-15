@@ -1,8 +1,9 @@
-"""Deterministic, traceable history compaction for prepare_next_turn."""
+"""Traceable context policy: pruning first, hybrid structured compaction second."""
 
 from __future__ import annotations
 
 import hashlib
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -10,6 +11,13 @@ from datetime import datetime, timezone
 from agent.core import PrepareNextTurnContext, PrepareNextTurnResult
 from agent.task import EventType
 from context.repository_state import repository_fingerprint
+from context.structured_compaction import (
+    SemanticSummarizer,
+    build_deterministic_evidence,
+    build_structured_state,
+    fallback_user_excerpts,
+    render_structured_context,
+)
 from context.token_budget import (
     estimate_messages_tokens,
     history_unit_tokens,
@@ -17,6 +25,7 @@ from context.token_budget import (
 )
 from context.tool_pruning import DeterministicToolPruner, PruningResult
 from llm.base import LLMMessage
+from llm.usage import TokenUsage
 
 
 @dataclass(frozen=True)
@@ -35,6 +44,16 @@ class CompactionEntry:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ActiveCompactedView:
+    """进程内可复用的 summary + canonical delta 视图，不作为事实源持久化。"""
+
+    summary_text: str
+    source_end_index: int
+    source_prefix_hash: str
+    checkpoint_id: str
 
 
 @dataclass(frozen=True)
@@ -60,13 +79,16 @@ class CompactionCheckpoint:
     pruned_before_tokens: int
     pruned_after_tokens: int
     pruned_units: int
+    summary_usage: dict
+    semantic_packet_truncated: bool
+    semantic_error: str | None
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 class TraceableCompaction:
-    """先做 deterministic pruning，仍高压时再压缩旧 History。"""
+    """先做 deterministic pruning；仍高压时做 Hybrid structured compaction。"""
 
     def __init__(
         self,
@@ -76,6 +98,7 @@ class TraceableCompaction:
         keep_recent_tokens: int = 8_000,
         max_summary_chars: int = 2_000,
         pruner: DeterministicToolPruner | None = None,
+        semantic_summarizer: SemanticSummarizer | None = None,
     ) -> None:
         if not 0 < target_ratio < threshold <= 1:
             raise ValueError("require 0 < target_ratio < threshold <= 1")
@@ -86,24 +109,35 @@ class TraceableCompaction:
         self.keep_recent_tokens = keep_recent_tokens
         self.max_summary_chars = max_summary_chars
         self.pruner = pruner or DeterministicToolPruner()
+        self.semantic_summarizer = semantic_summarizer
         self.entries: list[CompactionEntry] = []
         self.checkpoints: list[CompactionCheckpoint] = []
         self._lineage_checkpoint_id: str | None = None
+        self._active_view: ActiveCompactedView | None = None
 
     def restore_checkpoint_lineage(self, checkpoint_id: str | None) -> None:
-        """恢复持久化 Session 的 lineage cursor，不把旧 summary 恢复成事实。"""
+        """恢复 lineage cursor；V1 不恢复旧 summary，首次高压时重新 compact。"""
         self.entries.clear()
         self.checkpoints.clear()
         self._lineage_checkpoint_id = checkpoint_id
+        self._active_view = None
 
     def reset_checkpoint_lineage(self) -> None:
-        """新上下文从新的 checkpoint 链开始，同时清空待持久化的旧 checkpoint。"""
+        """新上下文从新的 checkpoint 链开始，并清掉进程内 active summary。"""
         self.entries.clear()
         self.checkpoints.clear()
         self._lineage_checkpoint_id = None
+        self._active_view = None
 
     def __call__(self, context: PrepareNextTurnContext):
         messages = context.history.to_list()
+        if len(messages) <= 1:
+            return None
+
+        active = self._reuse_active_view(context, messages)
+        if active is not None:
+            return active
+
         raw = context.history.to_dicts()
         before_tokens = estimate_messages_tokens(raw)
         pressure = context.token_budget.request_pressure(
@@ -112,10 +146,10 @@ class TraceableCompaction:
             history=raw,
             tools=context.tool_schemas,
         )
-        if len(messages) <= 1 or pressure.ratio < self.threshold:
+        if pressure.ratio < self.threshold:
             return None
 
-        # recent raw tail 只按 canonical history 计算一次，Stage A 不得改变这条边界。
+        # recent raw tail 只按 canonical history 计算一次，Stage A/C5 不改变这条边界。
         recent_units = recent_history_units(raw, self.keep_recent_tokens)
         if not recent_units:
             return None
@@ -124,10 +158,7 @@ class TraceableCompaction:
             history_unit_tokens(raw, unit) for unit in recent_units
         )
 
-        pruning = self.pruner.prune(
-            messages,
-            protected_from_index=tail_start,
-        )
+        pruning = self.pruner.prune(messages, protected_from_index=tail_start)
         pruned_messages = list(pruning.messages)
         pruned_raw = _message_dicts(pruned_messages)
         pruned_pressure = context.token_budget.request_pressure(
@@ -137,7 +168,7 @@ class TraceableCompaction:
             tools=context.tool_schemas,
         )
 
-        # Stage A 已经把完整 request 拉回 threshold 以下时，不再制造 summary。
+        # Stage A 已经把完整 request 拉回 threshold 以下时，不制造 semantic summary。
         if pruning.pruned_units and pruned_pressure.ratio < self.threshold:
             checkpoint = self._make_checkpoint(
                 context=context,
@@ -157,7 +188,6 @@ class TraceableCompaction:
 
         dropped = pruned_messages[1:tail_start]
         if not dropped:
-            # 没有可进一步 summary 的旧历史；若 Stage A 有收益仍返回 pruning view。
             if pruning.pruned_units:
                 checkpoint = self._make_checkpoint(
                     context=context,
@@ -176,17 +206,70 @@ class TraceableCompaction:
                 return PrepareNextTurnResult(history_override=tuple(pruned_messages))
             return None
 
-        history_budget = context.token_budget.default_plan().history
-        summary = self._summary(
-            dropped,
-            min(self.max_summary_chars, int(history_budget * self.target_ratio * 4)),
+        evidence = build_deterministic_evidence(messages, old_end_index=tail_start)
+        semantic_fields = None
+        semantic_usage = TokenUsage()
+        semantic_error: str | None = None
+        packet_truncated = False
+        semantic_called = self.semantic_summarizer is not None
+
+        if semantic_called:
+            started_at = time.perf_counter()
+            context.event_log.log_trace(
+                EventType.CONTEXT_COMPACTION_STARTED,
+                context.step,
+                mode="semantic",
+                pressure_ratio=pruned_pressure.ratio,
+                projected_input_tokens=pruned_pressure.projected_input,
+            )
+            result = self.semantic_summarizer.summarize(
+                task_description=context.task.description,
+                old_messages=dropped,
+                recent_messages=messages[tail_start:],
+                evidence=evidence,
+            )
+            semantic_fields = result.fields
+            semantic_usage = result.usage
+            semantic_error = result.error
+            packet_truncated = result.packet_truncated
+            if semantic_fields is None:
+                context.event_log.log_trace(
+                    EventType.CONTEXT_COMPACTION_FAILED,
+                    context.step,
+                    mode="semantic",
+                    duration_ms=(time.perf_counter() - started_at) * 1000,
+                    error=semantic_error or "semantic summary returned no fields",
+                    packet_truncated=packet_truncated,
+                    summary_usage=semantic_usage.to_dict(),
+                )
+                # 已有 active summary 时优先保留它，让最终 TokenBudget trim 做硬兜底。
+                if self._active_view is not None:
+                    active_messages = self._active_messages(messages)
+                    if active_messages is not None:
+                        return PrepareNextTurnResult(
+                            history_override=tuple(active_messages),
+                            additional_usage=(semantic_usage,),
+                        )
+
+        fallback_excerpts = ()
+        summary_method = "structured-hybrid-v1"
+        if semantic_fields is None:
+            summary_method = "structured-fallback-v1"
+            fallback_excerpts = fallback_user_excerpts(dropped)
+
+        state = build_structured_state(
+            goal=context.task.description,
+            semantic=semantic_fields,
+            evidence=evidence,
+            fallback_excerpts=fallback_excerpts,
+        )
+        summary = render_structured_context(
+            state,
+            max_chars=max(900, self.max_summary_chars),
         )
         compacted = [
             pruned_messages[0],
-            LLMMessage(
-                role="user",
-                content="[Compacted earlier context; full tool results remain in EventLog]\n" + summary,
-            ),
+            _summary_message(summary),
             *pruned_messages[tail_start:],
         ]
         compacted_raw = _message_dicts(compacted)
@@ -209,7 +292,7 @@ class TraceableCompaction:
         entry = CompactionEntry(
             checkpoint_id=checkpoint_id,
             created_at=created_at,
-            summary_method="extractive-v1",
+            summary_method=summary_method,
             summary_hash=summary_hash,
             summary_text=summary,
             source_event_ids=source_event_ids,
@@ -239,10 +322,77 @@ class TraceableCompaction:
             pruned_before_tokens=pruning.before_tokens,
             pruned_after_tokens=pruning.after_tokens,
             pruned_units=pruning.pruned_units,
+            summary_usage=semantic_usage.to_dict() if semantic_called else {},
+            semantic_packet_truncated=packet_truncated,
+            semantic_error=semantic_error,
         )
         self.entries.append(entry)
         self._record_checkpoint(context, checkpoint)
-        return PrepareNextTurnResult(history_override=tuple(compacted))
+        self._active_view = ActiveCompactedView(
+            summary_text=summary,
+            source_end_index=tail_start,
+            source_prefix_hash=_prefix_hash(messages, tail_start),
+            checkpoint_id=checkpoint_id,
+        )
+        additional_usage = (semantic_usage,) if semantic_called else ()
+        return PrepareNextTurnResult(
+            history_override=tuple(compacted),
+            additional_usage=additional_usage,
+        )
+
+    def _reuse_active_view(
+        self,
+        context: PrepareNextTurnContext,
+        messages: list[LLMMessage],
+    ) -> PrepareNextTurnResult | None:
+        """复用 active summary；仅当 summary + raw delta 再次高压时才重新 semantic compact。"""
+        active_messages = self._active_messages(messages)
+        if active_messages is None:
+            return None
+        active_raw = _message_dicts(active_messages)
+        active_pressure = context.token_budget.request_pressure(
+            system_text=context.system_content,
+            repo_map_text=context.repo_map_content,
+            history=active_raw,
+            tools=context.tool_schemas,
+        )
+        if active_pressure.ratio < self.threshold:
+            return PrepareNextTurnResult(history_override=tuple(active_messages))
+
+        recent_units = recent_history_units(active_raw, self.keep_recent_tokens)
+        if not recent_units:
+            return None
+        protected_from = recent_units[0].indices[0]
+        pruning = self.pruner.prune(active_messages, protected_from_index=protected_from)
+        if not pruning.pruned_units:
+            return None
+        pruned_messages = list(pruning.messages)
+        pruned_pressure = context.token_budget.request_pressure(
+            system_text=context.system_content,
+            repo_map_text=context.repo_map_content,
+            history=_message_dicts(pruned_messages),
+            tools=context.tool_schemas,
+        )
+        if pruned_pressure.ratio < self.threshold:
+            # active summary 已有 checkpoint；delta pruning 是便宜的临时 model view，不重复落 checkpoint。
+            return PrepareNextTurnResult(history_override=tuple(pruned_messages))
+        return None
+
+    def _active_messages(self, messages: list[LLMMessage]) -> list[LLMMessage] | None:
+        active = self._active_view
+        if active is None:
+            return None
+        if active.source_end_index > len(messages):
+            self._active_view = None
+            return None
+        if _prefix_hash(messages, active.source_end_index) != active.source_prefix_hash:
+            self._active_view = None
+            return None
+        return [
+            messages[0],
+            _summary_message(active.summary_text),
+            *messages[active.source_end_index:],
+        ]
 
     def _make_checkpoint(
         self,
@@ -281,6 +431,9 @@ class TraceableCompaction:
             pruned_before_tokens=pruning.before_tokens,
             pruned_after_tokens=pruning.after_tokens,
             pruned_units=pruning.pruned_units,
+            summary_usage={},
+            semantic_packet_truncated=False,
+            semantic_error=None,
         )
 
     def _record_checkpoint(
@@ -313,11 +466,29 @@ class TraceableCompaction:
             pruned_before_tokens=checkpoint.pruned_before_tokens,
             pruned_after_tokens=checkpoint.pruned_after_tokens,
             pruned_units=checkpoint.pruned_units,
+            summary_usage=checkpoint.summary_usage,
+            semantic_packet_truncated=checkpoint.semantic_packet_truncated,
+            semantic_error=checkpoint.semantic_error,
         )
 
-    def _summary(self, messages: list[LLMMessage], limit: int) -> str:
-        lines = [f"- {message.role}: {' '.join(message.content.split())}" for message in messages]
-        return "\n".join(lines)[:limit]
+
+def _summary_message(summary: str) -> LLMMessage:
+    return LLMMessage(
+        role="user",
+        content="[Compacted earlier context; full tool results remain in EventLog]\n" + summary,
+    )
+
+
+def _prefix_hash(messages: list[LLMMessage], end_index: int) -> str:
+    digest = hashlib.sha256()
+    for message in messages[:end_index]:
+        digest.update(message.role.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(message.content.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((message.event_ref or "").encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 def _message_dicts(messages: list[LLMMessage]) -> list[dict]:
