@@ -1,18 +1,8 @@
-"""
-context/history.py
+"""Canonical conversation history storage.
 
-对话历史滑动窗口管理。
-
-职责：
-- 维护 LLMMessage 列表
-- 超过窗口大小时自动从最旧（非首条）开始丢弃
-- 与 TokenBudget 协作：先按条数限制，再按 token 限制
-- 提供给 core.py 使用的干净接口
-
-设计：
-- 第一条消息（任务描述）永不丢弃
-- Reflection prompt 和普通 observation 同等对待，都是历史的一部分
-- to_dicts() 给 TokenBudget.trim_history() 使用
+ConversationHistory now keeps the logical conversation intact. Prompt-size control belongs
+to TokenBudget and compaction policies, so message-count limits no longer delete evidence
+before those policies can inspect it.
 """
 
 from __future__ import annotations
@@ -21,41 +11,31 @@ from llm.base import LLMMessage
 
 
 class ConversationHistory:
-    """
-    对话历史管理器，带滑动窗口。
+    """维护完整逻辑历史；模型可见窗口由 Context/TokenBudget 单独构造。"""
 
-    用法：
-        history = ConversationHistory(max_messages=20)
-        history.add(LLMMessage(role="user", content="Fix the bug"))
-        history.add(LLMMessage(role="assistant", content="..."))
-        msgs = history.to_list()   # 给 LLMBackend 用
-    """
-
-    def __init__(self, max_messages: int = 40) -> None:
+    def __init__(self, max_messages: int | None = 40) -> None:
         """
         Args:
-            max_messages: 最多保留的消息条数（含首条任务描述）。
-                          实际发给 LLM 的 token 数还会经过 TokenBudget 二次裁剪。
+            max_messages: 兼容旧配置的消息窗口提示。C1 起不再据此永久删除历史；
+                          真正发给模型的内容由 TokenBudget/Compaction 控制。
         """
         self._messages: list[LLMMessage] = []
         self._max = max_messages
 
     def add(self, message: LLMMessage) -> None:
-        """添加一条消息，超出窗口时丢弃最旧的非首条消息。"""
+        """追加一条逻辑历史，不在事实存储层按消息数销毁旧内容。"""
         self._messages.append(message)
-        self._trim()
 
     def add_many(self, messages: list[LLMMessage]) -> None:
-        """批量添加，添加完成后统一裁剪一次。"""
+        """批量追加逻辑历史，不在事实存储层做 destructive trim。"""
         self._messages.extend(messages)
-        self._trim()
 
     def to_list(self) -> list[LLMMessage]:
-        """返回完整历史列表（浅拷贝）。"""
+        """返回完整逻辑历史列表（浅拷贝）。"""
         return list(self._messages)
 
     def to_dicts(self) -> list[dict]:
-        """转为 dict 列表，供 TokenBudget.trim_history() 使用。"""
+        """转为 dict 列表，供 TokenBudget/Compaction 构造模型可见上下文。"""
         return [
             {
                 "role": message.role,
@@ -66,10 +46,10 @@ class ConversationHistory:
         ]
 
     @classmethod
-    def from_dicts(cls, dicts: list[dict], max_messages: int = 40) -> "ConversationHistory":
-        """从 dict 列表恢复（断点续跑时用）。"""
-        h = cls(max_messages=max_messages)
-        h._messages = [
+    def from_dicts(cls, dicts: list[dict], max_messages: int | None = 40) -> "ConversationHistory":
+        """从持久化数据恢复完整逻辑历史。"""
+        history = cls(max_messages=max_messages)
+        history._messages = [
             LLMMessage(
                 role=item["role"],
                 content=item["content"],
@@ -77,7 +57,7 @@ class ConversationHistory:
             )
             for item in dicts
         ]
-        return h
+        return history
 
     @property
     def message_count(self) -> int:
@@ -97,21 +77,11 @@ class ConversationHistory:
         self._messages.clear()
 
     def replace(self, messages: list[LLMMessage]) -> None:
-        """Atomically replace the model-visible history."""
+        """原子替换逻辑历史；Compaction 后续会迁移为独立 Context State。"""
         self._messages = list(messages)
-        self._trim()
-
-    def _trim(self) -> None:
-        """超出 max_messages 时，从索引 1 开始丢弃最旧的消息。"""
-        while len(self._messages) > self._max:
-            # 保留 index 0（任务描述），从 index 1 开始丢
-            if len(self._messages) > 1:
-                self._messages.pop(1)
-            else:
-                break
 
     def __len__(self) -> int:
         return len(self._messages)
 
     def __repr__(self) -> str:
-        return f"ConversationHistory(messages={len(self._messages)}, max={self._max})"
+        return f"ConversationHistory(messages={len(self._messages)}, max_hint={self._max})"
