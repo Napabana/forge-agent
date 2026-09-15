@@ -154,6 +154,12 @@ def _print_event_live(event) -> None:
         else:
             click.echo(red(f"  ✗ {error or output[:120]}"))
 
+    elif etype == EventType.CONTEXT_COMPACTION_STARTED:
+        click.echo(dim("\n  [压缩上下文]\n"))
+
+    elif etype == EventType.CONTEXT_COMPACTION_FAILED:
+        click.echo(yellow("\n  [压缩上下文失败，使用安全回退]\n"))
+
     elif etype == EventType.REFLECTION:
         reason = p.get("reason", "")
         click.echo(yellow(f"\n  ⟳ Reflection ({reason}) — reconsidering approach...\n"))
@@ -220,6 +226,9 @@ class ChatSession:
         self._confirm_callback = confirm_callback
         self._session_store = session_store
         self._prepare_next_turn = prepare_next_turn
+        bind_backend = getattr(self._prepare_next_turn, "bind_backend", None)
+        if callable(bind_backend):
+            bind_backend(backend)
         self._state = None
         self.recovery_warning: str | None = None
         self._history_max_messages = config.context.history_window * 2
@@ -365,7 +374,9 @@ class ChatSession:
                 # 实时打印只观察 EventLog；共享记忆由 Agent.run(history=...) 传入。
                 try:
                     result = self._run_with_live_print(task, log)
+                    self._merge_context_policy_usage(result)
                 except BaseException as exc:
+                    self._merge_interrupted_context_usage()
                     if self._state is not None:
                         self._shared_history.add(LLMMessage(
                             role="assistant",
@@ -615,6 +626,28 @@ class ChatSession:
             if checkpoint.checkpoint_id not in known
         )
         self._session_store.save(self._state)
+
+    def _merge_context_policy_usage(self, result) -> None:
+        """把 semantic compaction side-call 的 token 计入本轮 RunResult。"""
+        consume = getattr(self._prepare_next_turn, "consume_usage", None)
+        if not callable(consume):
+            return
+        side_usage = consume()
+        if not side_usage.llm_calls and not side_usage.total_tokens:
+            return
+        result.usage.add(side_usage)
+        result.total_tokens = result.usage.total_tokens
+
+    def _merge_interrupted_context_usage(self) -> None:
+        """中断时也保存已发生的 semantic side-call usage，避免统计泄漏。"""
+        consume = getattr(self._prepare_next_turn, "consume_usage", None)
+        if not callable(consume):
+            return
+        side_usage = consume()
+        if not side_usage.llm_calls and not side_usage.total_tokens:
+            return
+        self.usage.add(side_usage)
+        self.total_tokens = self.usage.total_tokens
 
     def _run_with_live_print(self, task, log):
         """
