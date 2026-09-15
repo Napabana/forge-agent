@@ -54,6 +54,8 @@ class EventType(str, Enum):
     TOOL_EXECUTION_STARTED = "tool_execution_started"
     TOOL_EXECUTION_FINISHED = "tool_execution_finished"
     TOOL_EXECUTION_FAILED = "tool_execution_failed"
+    CONTEXT_COMPACTION_STARTED = "context_compaction_started"
+    CONTEXT_COMPACTION_FAILED = "context_compaction_failed"
     CONTEXT_COMPACTED = "context_compacted"
 
 
@@ -240,7 +242,7 @@ class Event:
     - WORKTREE_REMOVED:  {"name": str, "path": str, "reason": str}
         reason ∈ {"normal", "exception", "preflight_failed"}
     - PERMISSION_DECISION: {"tool": str, "decision": str, "reason": str, "params": dict}
-        decision ∈ {"allow", "deny", "confirm"}
+        decision ∈ {"allow","deny","confirm"}
     """
     event_type: EventType
     task_id: str
