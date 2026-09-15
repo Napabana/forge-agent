@@ -12,6 +12,7 @@ from agent.core import PrepareNextTurnContext, PrepareNextTurnResult
 from agent.task import EventType
 from context.repository_state import repository_fingerprint
 from context.structured_compaction import (
+    LLMSemanticSummarizer,
     SemanticSummarizer,
     build_deterministic_evidence,
     build_structured_state,
@@ -24,8 +25,8 @@ from context.token_budget import (
     recent_history_units,
 )
 from context.tool_pruning import DeterministicToolPruner, PruningResult
-from llm.base import LLMMessage
-from llm.usage import TokenUsage
+from llm.base import LLMBackend, LLMMessage
+from llm.usage import SessionUsage, TokenUsage
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,18 @@ class TraceableCompaction:
         self.checkpoints: list[CompactionCheckpoint] = []
         self._lineage_checkpoint_id: str | None = None
         self._active_view: ActiveCompactedView | None = None
+        self._pending_usage = SessionUsage()
+
+    def bind_backend(self, backend: LLMBackend) -> None:
+        """Chat composition root 可在 policy 未显式注入 summarizer 时绑定当前 backend。"""
+        if self.semantic_summarizer is None:
+            self.semantic_summarizer = LLMSemanticSummarizer(backend)
+
+    def consume_usage(self) -> SessionUsage:
+        """取走本轮 semantic side-call usage，供 Chat 合并到最终 RunResult。"""
+        snapshot = self._pending_usage.snapshot()
+        self._pending_usage = SessionUsage()
+        return snapshot
 
     def restore_checkpoint_lineage(self, checkpoint_id: str | None) -> None:
         """恢复 lineage cursor；V1 不恢复旧 summary，首次高压时重新 compact。"""
@@ -121,6 +134,7 @@ class TraceableCompaction:
         self.checkpoints.clear()
         self._lineage_checkpoint_id = checkpoint_id
         self._active_view = None
+        self._pending_usage = SessionUsage()
 
     def reset_checkpoint_lineage(self) -> None:
         """新上下文从新的 checkpoint 链开始，并清掉进程内 active summary。"""
@@ -128,6 +142,7 @@ class TraceableCompaction:
         self.checkpoints.clear()
         self._lineage_checkpoint_id = None
         self._active_view = None
+        self._pending_usage = SessionUsage()
 
     def __call__(self, context: PrepareNextTurnContext):
         messages = context.history.to_list()
@@ -232,6 +247,7 @@ class TraceableCompaction:
             semantic_usage = result.usage
             semantic_error = result.error
             packet_truncated = result.packet_truncated
+            self._pending_usage.record(semantic_usage)
             if semantic_fields is None:
                 context.event_log.log_trace(
                     EventType.CONTEXT_COMPACTION_FAILED,
@@ -246,10 +262,7 @@ class TraceableCompaction:
                 if self._active_view is not None:
                     active_messages = self._active_messages(messages)
                     if active_messages is not None:
-                        return PrepareNextTurnResult(
-                            history_override=tuple(active_messages),
-                            additional_usage=(semantic_usage,),
-                        )
+                        return PrepareNextTurnResult(history_override=tuple(active_messages))
 
         fallback_excerpts = ()
         summary_method = "structured-hybrid-v1"
@@ -334,11 +347,7 @@ class TraceableCompaction:
             source_prefix_hash=_prefix_hash(messages, tail_start),
             checkpoint_id=checkpoint_id,
         )
-        additional_usage = (semantic_usage,) if semantic_called else ()
-        return PrepareNextTurnResult(
-            history_override=tuple(compacted),
-            additional_usage=additional_usage,
-        )
+        return PrepareNextTurnResult(history_override=tuple(compacted))
 
     def _reuse_active_view(
         self,
@@ -374,7 +383,7 @@ class TraceableCompaction:
             tools=context.tool_schemas,
         )
         if pruned_pressure.ratio < self.threshold:
-            # active summary 已有 checkpoint；delta pruning 是便宜的临时 model view，不重复落 checkpoint。
+            # active summary 已有 checkpoint；delta pruning 是便宜临时视图，不重复落 checkpoint。
             return PrepareNextTurnResult(history_override=tuple(pruned_messages))
         return None
 
