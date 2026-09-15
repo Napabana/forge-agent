@@ -142,19 +142,19 @@ C3 代码与测试完成点（创建本文档前）：
 
 `12d758401e86321d55187d1de9ce20920d72cf3a`
 
+C3 交接文档提交点：
+
+`2e92eb579a2bf3409a121e13ed48d83ad9e2ea49`
+
 ## 验证状态
 
-当前 ChatGPT 执行环境仍无法访问用户 WSL venv，且 sandbox 无法解析 github.com，因此不能声称 pytest 已通过。
-
-用户 pull 后先运行：
+用户已在本地 WSL 环境运行并确认以下两组测试全部通过：
 
 ```bash
-cd /mnt/e/2806/forgeAgent/forge-agent
-source ~/.venvs/forge-agent/bin/activate
 python -m pytest -q tests/test_compaction.py
 ```
 
-如果通过，再跑受 Runner / Chat lifecycle 影响的回归：
+以及：
 
 ```bash
 python -m pytest -q \
@@ -163,7 +163,19 @@ python -m pytest -q \
   tests/test_day2.py
 ```
 
-只有两组都真实通过后，C3 才标记完成。
+因此 C3 已实现的 repository fingerprint、Runner shared-history boundary preflight、checkpoint lineage 与既有 Chat/Session 回归均已通过本地 pytest 验证。
+
+## 生产入口核对发现的剩余缺口
+
+在进入 C4 前重新核对真实 CLI 入口时发现：`entry/cli.py` 创建 `ChatSession` 时当前没有传入 `prepare_next_turn`，因此普通用户直接执行 `agent chat` 时，`ChatSession._prepare_next_turn` 仍为 `None`。
+
+这意味着：
+
+- C1~C3 的 Context policy 代码与定向集成测试均已通过；
+- 但真实 `agent chat` CLI 入口尚未实例化/注入 `TraceableCompaction`；
+- 因而 production Chat 目前不会实际触发 C3 round-boundary preflight。
+
+该问题属于 C3 production wiring 漏项，不应被 C4 的 pruning 逻辑掩盖。进入 C4 生产实现前应先单独补 `entry/cli.py` 的一处策略注入，并做 CLI/Chat 回归。
 
 ## 已知边界
 
