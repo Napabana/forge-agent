@@ -25,7 +25,7 @@ from context.token_budget import (
     recent_history_units,
 )
 from context.tool_pruning import DeterministicToolPruner, PruningResult
-from llm.base import LLMBackend, LLMMessage
+from llm.base import LLMBackend, LLMMessage, MockBackend
 from llm.usage import SessionUsage, TokenUsage
 
 
@@ -118,8 +118,8 @@ class TraceableCompaction:
         self._pending_usage = SessionUsage()
 
     def bind_backend(self, backend: LLMBackend) -> None:
-        """Chat composition root 可在 policy 未显式注入 summarizer 时绑定当前 backend。"""
-        if self.semantic_summarizer is None:
+        """真实 Chat backend 自动绑定 semantic summarizer；脚本 Mock 必须显式注入。"""
+        if self.semantic_summarizer is None and not isinstance(backend, MockBackend):
             self.semantic_summarizer = LLMSemanticSummarizer(backend)
 
     def consume_usage(self) -> SessionUsage:
