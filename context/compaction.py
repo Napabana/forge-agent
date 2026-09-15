@@ -49,12 +49,13 @@ class CompactionEntry:
 
 @dataclass(frozen=True)
 class ActiveCompactedView:
-    """进程内可复用的 summary + canonical delta 视图，不作为事实源持久化。"""
+    """同一 Task 内可复用的 summary + canonical delta 视图，不作为事实源持久化。"""
 
     summary_text: str
     source_end_index: int
     source_prefix_hash: str
     checkpoint_id: str
+    task_description: str
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,7 @@ class CompactionCheckpoint:
     summary_usage: dict
     semantic_packet_truncated: bool
     semantic_error: str | None
+    semantic_duration_ms: float | None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -225,6 +227,7 @@ class TraceableCompaction:
         semantic_fields = None
         semantic_usage = TokenUsage()
         semantic_error: str | None = None
+        semantic_duration_ms: float | None = None
         packet_truncated = False
         semantic_called = self.semantic_summarizer is not None
 
@@ -243,6 +246,7 @@ class TraceableCompaction:
                 recent_messages=messages[tail_start:],
                 evidence=evidence,
             )
+            semantic_duration_ms = (time.perf_counter() - started_at) * 1000
             semantic_fields = result.fields
             semantic_usage = result.usage
             semantic_error = result.error
@@ -253,12 +257,12 @@ class TraceableCompaction:
                     EventType.CONTEXT_COMPACTION_FAILED,
                     context.step,
                     mode="semantic",
-                    duration_ms=(time.perf_counter() - started_at) * 1000,
+                    duration_ms=semantic_duration_ms,
                     error=semantic_error or "semantic summary returned no fields",
                     packet_truncated=packet_truncated,
                     summary_usage=semantic_usage.to_dict(),
                 )
-                # 已有 active summary 时优先保留它，让最终 TokenBudget trim 做硬兜底。
+                # 同一 Task 内已有 active summary 时优先保留，让最终 TokenBudget trim 做硬兜底。
                 if self._active_view is not None:
                     active_messages = self._active_messages(messages)
                     if active_messages is not None:
@@ -338,6 +342,7 @@ class TraceableCompaction:
             summary_usage=semantic_usage.to_dict() if semantic_called else {},
             semantic_packet_truncated=packet_truncated,
             semantic_error=semantic_error,
+            semantic_duration_ms=semantic_duration_ms,
         )
         self.entries.append(entry)
         self._record_checkpoint(context, checkpoint)
@@ -346,6 +351,7 @@ class TraceableCompaction:
             source_end_index=tail_start,
             source_prefix_hash=_prefix_hash(messages, tail_start),
             checkpoint_id=checkpoint_id,
+            task_description=context.task.description,
         )
         return PrepareNextTurnResult(history_override=tuple(compacted))
 
@@ -354,7 +360,12 @@ class TraceableCompaction:
         context: PrepareNextTurnContext,
         messages: list[LLMMessage],
     ) -> PrepareNextTurnResult | None:
-        """复用 active summary；仅当 summary + raw delta 再次高压时才重新 semantic compact。"""
+        """仅在同一 Task 内复用 active summary；新 Chat round 的 Goal 变化时立即失效。"""
+        active = self._active_view
+        if active is not None and active.task_description != context.task.description:
+            self._active_view = None
+            return None
+
         active_messages = self._active_messages(messages)
         if active_messages is None:
             return None
@@ -443,6 +454,7 @@ class TraceableCompaction:
             summary_usage={},
             semantic_packet_truncated=False,
             semantic_error=None,
+            semantic_duration_ms=None,
         )
 
     def _record_checkpoint(
@@ -478,6 +490,7 @@ class TraceableCompaction:
             summary_usage=checkpoint.summary_usage,
             semantic_packet_truncated=checkpoint.semantic_packet_truncated,
             semantic_error=checkpoint.semantic_error,
+            semantic_duration_ms=checkpoint.semantic_duration_ms,
         )
 
 
