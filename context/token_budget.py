@@ -26,7 +26,6 @@ def _init_tiktoken() -> None:
 
 def estimate_tokens(text: str) -> int:
     """Estimate text tokens with tiktoken and a conservative fallback."""
-
     if not _tiktoken_available:
         _init_tiktoken()
     if _tiktoken_available and _tiktoken_enc is not None:
@@ -48,7 +47,6 @@ def is_tiktoken_available() -> bool:
 
 def estimate_message_tokens(message: dict) -> int:
     """Estimate content plus role/metadata and chat protocol framing."""
-
     total = _MESSAGE_PROTOCOL_TOKENS
     total += estimate_tokens(str(message.get("role", "")))
     total += estimate_tokens(str(message.get("content", "")))
@@ -61,7 +59,6 @@ def estimate_message_tokens(message: dict) -> int:
 
 def estimate_messages_tokens(messages: list[dict]) -> int:
     """Estimate a full message list, including per-message framing."""
-
     return sum(estimate_message_tokens(message) for message in messages)
 
 
@@ -80,8 +77,8 @@ class BudgetPlan:
 
 
 @dataclass(frozen=True)
-class _HistoryUnit:
-    """An indivisible assistant/action + user/observation exchange."""
+class HistoryUnit:
+    """不可拆分的历史单元；优先把 assistant Action 与随后 Observation 成对处理。"""
 
     indices: tuple[int, ...]
 
@@ -92,6 +89,57 @@ class _HistoryUnit:
     @property
     def recency(self) -> int:
         return sum(self.indices)
+
+
+# 兼容本模块旧的私有类型名，避免内部/测试代码因重命名立即失效。
+_HistoryUnit = HistoryUnit
+
+
+def history_units(messages: list[dict], start_index: int = 1) -> list[HistoryUnit]:
+    """按统一语义切分历史，保证 Action/Observation 不被 Context 策略拆开。"""
+    units: list[HistoryUnit] = []
+    index = max(0, start_index)
+    while index < len(messages):
+        role = messages[index].get("role")
+        if (
+            role == "assistant"
+            and index + 1 < len(messages)
+            and messages[index + 1].get("role") in {"user", "tool"}
+        ):
+            units.append(HistoryUnit((index, index + 1)))
+            index += 2
+        else:
+            units.append(HistoryUnit((index,)))
+            index += 1
+    return units
+
+
+def history_unit_tokens(messages: list[dict], unit: HistoryUnit) -> int:
+    """返回一个不可拆历史单元的估算 token 成本。"""
+    return sum(estimate_message_tokens(messages[index]) for index in unit.indices)
+
+
+def recent_history_units(
+    messages: list[dict],
+    token_limit: int,
+    *,
+    start_index: int = 1,
+) -> tuple[HistoryUnit, ...]:
+    """从最新历史向前保留完整单元；最新单元即使超预算也保持完整。"""
+    if token_limit <= 0:
+        return ()
+
+    selected: list[HistoryUnit] = []
+    used = 0
+    for unit in reversed(history_units(messages, start_index=start_index)):
+        cost = history_unit_tokens(messages, unit)
+        if selected and used + cost > token_limit:
+            break
+        selected.append(unit)
+        used += cost
+        if used >= token_limit:
+            break
+    return tuple(reversed(selected))
 
 
 class TokenBudget:
@@ -112,7 +160,6 @@ class TokenBudget:
 
     def trim_to(self, text: str, token_limit: int) -> str:
         """Return the longest binary-searched prefix that fits with its notice."""
-
         if token_limit <= 0:
             return ""
         if estimate_tokens(text) <= token_limit:
@@ -130,15 +177,12 @@ class TokenBudget:
             else:
                 high = midpoint - 1
         result = text[:low] + _TRUNCATION_SUFFIX
-        # The final aggregate is checked because tokenizer boundaries can differ
-        # from the sum of independently estimated body and suffix tokens.
         if estimate_tokens(result) > token_limit:
             return self._trim_prefix(text, token_limit)
         return result
 
     def trim_history(self, messages: list[dict], token_limit: int) -> list[dict]:
         """Select whole dialogue units globally with a dynamic program."""
-
         if not messages or token_limit <= 0:
             return []
         if estimate_messages_tokens(messages) <= token_limit:
@@ -159,8 +203,6 @@ class TokenBudget:
         result = self._build_trimmed_history(messages, selected_indices, first)
         if estimate_messages_tokens(result) <= token_limit:
             return result
-        # Defensive fallback: the DP uses the same estimator, so this should only
-        # be reachable if a caller mutates a message while selection is running.
         return [first]
 
     def _trim_first_message(self, first: dict, token_limit: int) -> dict | None:
@@ -185,16 +227,12 @@ class TokenBudget:
             trimmed["content"] = content[:low] + _TRUNCATION_SUFFIX
         else:
             trimmed["content"] = self._trim_prefix(content, max(1, token_limit - 5))
-        while (
-            trimmed["content"]
-            and estimate_message_tokens(trimmed) > token_limit
-        ):
+        while trimmed["content"] and estimate_message_tokens(trimmed) > token_limit:
             trimmed["content"] = trimmed["content"][:-1]
         return trimmed if estimate_message_tokens(trimmed) <= token_limit else None
 
     def _trim_prefix(self, text: str, token_limit: int) -> str:
         """Binary-search the longest prefix accepted by the active estimator."""
-
         if token_limit <= 0:
             return ""
         low = 0
@@ -210,42 +248,25 @@ class TokenBudget:
             candidate = candidate[:-1]
         return candidate
 
-    def _conversation_units(self, messages: list[dict]) -> list[_HistoryUnit]:
-        """Group action/observation pairs so trimming never leaves half a turn."""
-
-        units: list[_HistoryUnit] = []
-        index = 1
-        while index < len(messages):
-            role = messages[index].get("role")
-            if (
-                role == "assistant"
-                and index + 1 < len(messages)
-                and messages[index + 1].get("role") in {"user", "tool"}
-            ):
-                units.append(_HistoryUnit((index, index + 1)))
-                index += 2
-            else:
-                units.append(_HistoryUnit((index,)))
-                index += 1
-        return units
+    def _conversation_units(self, messages: list[dict]) -> list[HistoryUnit]:
+        """复用 Context 层统一单元语义，避免 TokenBudget 自己维护另一套配对规则。"""
+        return history_units(messages)
 
     def _select_units_dp(
         self,
         messages: list[dict],
-        units: list[_HistoryUnit],
+        units: list[HistoryUnit],
         token_limit: int,
         first: dict,
     ) -> set[int]:
         """Optimize kept message count, then recency, under the exact budget."""
-
         first_cost = estimate_message_tokens(first)
-        # (used tokens, open-gap message count) -> (utility, selected indices)
         states: dict[tuple[int, int], tuple[int, tuple[int, ...]]] = {
             (first_cost, 0): (0, ()),
         }
         for unit in units:
             next_states: dict[tuple[int, int], tuple[int, tuple[int, ...]]] = {}
-            unit_cost = sum(estimate_message_tokens(messages[i]) for i in unit.indices)
+            unit_cost = history_unit_tokens(messages, unit)
             for (used, gap_count), (utility, selected) in states.items():
                 self._store_state(
                     next_states,
@@ -289,7 +310,6 @@ class TokenBudget:
     @staticmethod
     def _prune_states(states):
         """Remove higher-cost states that cannot beat a cheaper equivalent gap."""
-
         pruned = {}
         by_gap: dict[int, list[tuple[int, int, tuple[int, ...]]]] = {}
         for (used, gap), (utility, selected) in states.items():
