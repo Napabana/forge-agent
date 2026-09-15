@@ -228,13 +228,17 @@ def build_semantic_packet(
     evidence: DeterministicEvidence,
     max_chars: int,
 ) -> tuple[str, bool]:
-    """构造多语言 semantic packet；优先保留当前 Goal、recent user 和 evidence。"""
+    """构造 semantic packet；只总结将被压掉的旧历史，recent raw tail 保持原样。"""
+    # recent_messages 已由 model-visible tail 原样保留；再次送入 semantic summary 会造成当前输入重复。
+    _ = recent_messages
     fixed = (
         "CURRENT GOAL (authoritative for this compaction):\n"
         f"{_compact_text(task_description, 4_000)}\n\n"
         "DETERMINISTIC EVIDENCE (do not contradict or rewrite as current truth):\n"
         f"{_render_evidence_for_packet(evidence)}\n\n"
-        "Extract only natural-language constraints/decisions/progress/next actions from the user evidence below."
+        "Extract only natural-language constraints/decisions/progress/next actions from the historical "
+        "user evidence below. Recent raw messages are intentionally excluded and remain verbatim outside "
+        "this summary."
     )
     if len(fixed) >= max_chars:
         return fixed[:max_chars], True
@@ -249,34 +253,20 @@ def build_semantic_packet(
         for message in old_messages
         if message.role == "assistant" and message.content.startswith("[Round ")
     )
-    recent_blocks = [
-        f"RECENT USER MESSAGE:\n{message.content}"
-        for message in recent_messages
-        if is_user_authored_message(message)
-    ]
 
     budget = max_chars - len(fixed) - 2
-    chosen_recent: list[str] = []
-    for block in reversed(recent_blocks):
-        if len(block) + 2 <= budget:
-            chosen_recent.append(block)
-            budget -= len(block) + 2
-    chosen_recent.reverse()
-
     chosen_old: list[str] = []
     for block in old_blocks:
         if len(block) + 2 <= budget:
             chosen_old.append(block)
             budget -= len(block) + 2
 
-    truncated = len(chosen_recent) != len(recent_blocks) or len(chosen_old) != len(old_blocks)
+    truncated = len(chosen_old) != len(old_blocks)
     parts = [fixed]
     if chosen_old:
         parts.append("\n\n".join(chosen_old))
-    if chosen_recent:
-        parts.append("\n\n".join(chosen_recent))
     if truncated:
-        parts.append("[Some user-authored history was omitted deterministically to fit the summary input budget.]")
+        parts.append("[Some historical user-authored messages were omitted deterministically to fit the summary input budget.]")
     packet = "\n\n".join(parts)
     return packet[:max_chars], truncated or len(packet) > max_chars
 
