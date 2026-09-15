@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import time
 import sys
-import subprocess
 from pathlib import Path
 from typing import Callable
 
@@ -67,29 +66,10 @@ def _format_usage(usage) -> str:
 
 
 def _repository_revision(repo_path: str | Path) -> str:
-    """返回用于 Repo Map 缓存失效的轻量仓库指纹。
+    """复用 Context 层统一的 HEAD + working-tree fingerprint。"""
+    from context.repository_state import repository_fingerprint
 
-    HEAD 覆盖“提交后工作区重新变干净”的情况；snapshot_repository 覆盖
-    暂存、未暂存、未跟踪文件以及非 Git 目录中的文件变化。
-    """
-    from agent.loop_detector import snapshot_repository
-
-    root = Path(repo_path)
-    head = "no-head"
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            head = proc.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return f"{head}:{snapshot_repository(root)}"
+    return repository_fingerprint(repo_path)
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +291,15 @@ class ChatSession:
         self.total_steps = 0
         self.round_count = 0
 
+        if session_id is None:
+            reset_lineage = getattr(
+                self._prepare_next_turn,
+                "reset_checkpoint_lineage",
+                None,
+            )
+            if callable(reset_lineage):
+                reset_lineage()
+
         if self._session_store is not None:
             if session_id:
                 self._restore_session(session_id)
@@ -469,12 +458,26 @@ class ChatSession:
     def clear_history(self) -> None:
         """清空当前会话的有效 LLM 上下文并立即保存。"""
         self._shared_history.clear()
+        reset_lineage = getattr(
+            self._prepare_next_turn,
+            "reset_checkpoint_lineage",
+            None,
+        )
+        if callable(reset_lineage):
+            reset_lineage()
         self._checkpoint()
 
     def start_new_session(self) -> str | None:
         """结束当前上下文并创建一个全新的 Chat 会话。"""
         from context.history import ConversationHistory
 
+        reset_lineage = getattr(
+            self._prepare_next_turn,
+            "reset_checkpoint_lineage",
+            None,
+        )
+        if callable(reset_lineage):
+            reset_lineage()
         self._shared_history = ConversationHistory(
             max_messages=self._history_max_messages
         )
@@ -549,6 +552,19 @@ class ChatSession:
         self.round_count = state.round_count
         self._repo_revision = state.repo_revision or _repository_revision(self.repo_path)
         self.recovery_warning = None
+
+        restore_lineage = getattr(
+            self._prepare_next_turn,
+            "restore_checkpoint_lineage",
+            None,
+        )
+        if callable(restore_lineage):
+            previous_checkpoint_id = None
+            if state.compaction_checkpoints:
+                previous_checkpoint_id = state.compaction_checkpoints[-1].get(
+                    "checkpoint_id"
+                )
+            restore_lineage(previous_checkpoint_id)
 
         pending = state.pending_round
         if pending is not None:
