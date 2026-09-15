@@ -8,26 +8,29 @@ from dataclasses import dataclass
 
 _tiktoken_enc = None
 _tiktoken_available = False
+_tiktoken_initialized = False  # 记录是否已尝试初始化，失败后也不重复 import。
 _MESSAGE_PROTOCOL_TOKENS = 4
 _TRUNCATION_SUFFIX = "\n... [tokens truncated]"
 
 
 def _init_tiktoken() -> None:
-    global _tiktoken_enc, _tiktoken_available
-    if _tiktoken_available or _tiktoken_enc is not None:
+    global _tiktoken_enc, _tiktoken_available, _tiktoken_initialized
+    if _tiktoken_initialized:
         return
+    _tiktoken_initialized = True
     try:
         import tiktoken
 
         _tiktoken_enc = tiktoken.get_encoding("cl100k_base")
         _tiktoken_available = True
     except Exception:
+        _tiktoken_enc = None
         _tiktoken_available = False
 
 
 def estimate_tokens(text: str) -> int:
     """Estimate text tokens with tiktoken and a conservative fallback."""
-    if not _tiktoken_available:
+    if not _tiktoken_initialized:
         _init_tiktoken()
     if _tiktoken_available and _tiktoken_enc is not None:
         try:
