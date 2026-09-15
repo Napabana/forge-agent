@@ -2,6 +2,8 @@
 
 日期：2026-09-15
 
+状态：已完成，用户本地 pytest 验证全部通过。
+
 ## 本轮目标
 
 按已确认的 C1 范围先收口 Context 的三个基础矛盾：
@@ -64,28 +66,21 @@ GitHub compare 显示这 4 个 commit 只修改：
 
 ## 验证
 
-当前 ChatGPT 执行环境没有用户 WSL 工作树；尝试从 sandbox clone GitHub 时因无法解析 `github.com` 未能建立完整 pytest 运行环境，因此本轮不能声称 pytest 已通过。
+用户在本地 Forge/WSL 环境完成 pytest 验证，并确认相关测试全部通过。
 
-已完成的本地静态/逻辑检查：
+因此 C1 可以正式验收：
 
-- 4 个本轮 Python 文件内容均通过 Python `ast.parse` 语法检查；
-- 对更新后的 `history_units()` / `recent_history_units()` / `TraceableCompaction` 做轻量隔离逻辑检查：最近两个完整 unit 被保留，前 3 个 unit 的 event refs 进入 checkpoint，`retained_tail_tokens == keep_recent_tokens` 在精确两-unit 预算样例中成立。
+- canonical history 不再被 message-count window 抢先破坏；
+- TokenBudget 与 Compaction 共用 HistoryUnit；
+- recent tail 已切换为 token-based unit retention；
+- 现有 Compaction/Session 相关回归未被该批修改破坏。
 
-用户 pull 后应在 WSL 运行：
+此前 ChatGPT 环境中的补充静态检查同样通过：
 
-```bash
-cd /mnt/e/2806/forgeAgent/forge-agent
-source ~/.venvs/forge-agent/bin/activate
-python -m pytest -q tests/test_compaction.py
-```
+- 本轮 Python 文件通过 `ast.parse` 语法检查；
+- `history_units()` / `recent_history_units()` / `TraceableCompaction` 的轻量隔离逻辑检查符合预期。
 
-由于 `ConversationHistory` 从 destructive window 改为 canonical store，若定向节点全部通过，再建议补一组受影响回归：
-
-```bash
-python -m pytest -q tests/test_session_store.py tests/test_chat.py
-```
-
-不要在未运行这些命令前把 C1 表述为“pytest 已通过”。
+本批不声称任何 Token 降幅或任务成功率收益；这些 Claim 必须等待固定 benchmark。
 
 ## 当前提高
 
@@ -105,4 +100,4 @@ C1 仍保留三个明确边界：
 
 这些属于 C2/C3，不在本轮顺带修改。
 
-下一步只有在 C1 的 WSL 定向测试真实通过后，才进入 C2。C2 开工前仍需按 `AGENTS.md` 列出拟修改文件和理由并等待用户确认。
+下一步进入 C2 前，仍需按 `AGENTS.md` 列出拟修改文件和理由并等待用户确认。
