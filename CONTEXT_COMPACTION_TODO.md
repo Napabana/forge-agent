@@ -4,7 +4,7 @@
 
 执行原则：一次只收口一个 Context 契约；每批生产代码修改前按 `AGENTS.md` 检查工作树/分支/remote/stash，列出拟修改文件和理由，等待用户确认。测试先定向后扩展，不为得到整齐数字重复运行已通过节点。
 
-当前状态：C1、C2 已完成，并经用户本地 pytest 验证全部通过；C3 已完成源码核对，等待用户确认修改范围。
+当前状态：C1、C2 已完成，并经用户本地 pytest 验证全部通过；C3 设计已重新收敛为 **Chat round-boundary preflight**，等待用户确认实施范围。
 
 ## 0. 实施门禁
 
@@ -44,73 +44,125 @@
 - [x] 用户本地运行：`tests/test_chat.py tests/test_session_store.py tests/test_day2.py` 全部通过。
 - [x] 交接：`2026-09-15-Context-Compaction-C2改动内容.md`。
 
-## C3：统一 RepositoryState 与 Session Preflight
+## C3：统一 RepositoryState 与 Chat Round-Boundary Preflight
 
-状态：源码核对完成，等待用户确认文件范围。
+状态：设计收敛完成，等待用户确认实施范围。
 
 ### 目标
 
-解决两个剩余基础矛盾：
+只解决两个基础契约，不把普通单次 Agent 首请求纳入 Compaction 生命周期：
 
-1. Compaction checkpoint 当前只记录 HEAD，而 Chat Repo Map 刷新已经看 HEAD + working tree；
-2. `prepare_next_turn` 仍只在 `step > 1` 执行，恢复长 Session / 新 Chat round 的第一次 model call 没有 Compaction preflight。
+1. Compaction checkpoint 当前只记录 HEAD，而 Chat Repo Map 刷新已经看 `HEAD + working tree`；
+2. 对已有共享历史的 Chat 新 round（尤其 `/resume`）而言，该 round 的第一次 model call 发生在 `prepare_next_turn(step>1)` 之前，目前只能依赖 TokenBudget trim。
 
-### 设计任务
+关键澄清：
 
-- [ ] 新增共享 repository fingerprint helper，统一语义为 `HEAD + working-tree snapshot`。
-- [ ] Chat Repo Map invalidation 与 Compaction checkpoint 共用该 helper。
-- [ ] 不改 Session state schema；现有 `repo_revision: str` 和 `compaction_checkpoints` 足以承载新语义。
-- [ ] 增加独立 Chat/session preflight，发生在 Runner 进入 Agent step 1 之前。
-- [ ] preflight 只构造/应用 model-visible context，不重复写用户消息。
-- [ ] 保持现有 `prepare_next_turn` 生命周期不变：Agent.run 内仍只在完整 Tool turn 后、`step > 1` 调用。
-- [ ] `/resume` 后第一次 model call 与普通新 round 第一次 model call 使用同一 preflight 语义。
+- 全新单次 Agent task：不做 round-boundary preflight；
+- 全新 Chat 第一轮：没有历史压力，不做 round-boundary preflight；
+- Chat 第 2+ 轮 / resume 后新一轮：若存在既有历史，则在本轮第一次 LLM call 前检查 ContextPressure；低压时完全 no-op，高压时才生成一次性 compacted model view。
+
+### 生命周期设计
+
+- [ ] `RunRequest.round_boundary_preflight: bool = False`，默认关闭。
+- [ ] `ExecutionRunner` 只把该显式标志传给 `Agent.run()`，不实现 Context 策略。
+- [ ] `Agent.run(..., round_boundary_preflight=False)` 在初始化 history/token budget/repo map 后、进入 step loop 前执行可选 round-boundary context policy。
+- [ ] 现有 in-run `step > 1 -> prepare_next_turn` 分支保持不变。
+- [ ] round-boundary 与 turn-boundary 复用同一个 policy callback 和同一套 request parts，不新增第二套 compaction 算法。
+- [ ] `PrepareNextTurnContext` 增加 boundary/phase 标记（例如 `"round" | "turn"`），便于 Trace 和策略区分来源。
+- [ ] 每次 `Agent.run()` 开始时清空旧的一次性 history override，避免上一次中断残留到新 run。
+
+### Chat 触发时机
+
+- [ ] `ChatSession.run_round()` 在追加本轮 user message 之前记录 `had_prior_context`。
+- [ ] 先将本轮 user message 追加到 canonical history，再启动 Runner。
+- [ ] 只有 `had_prior_context=True` 时，把 `round_boundary_preflight=True` 传入 RunRequest。
+- [ ] 因此压力估算和 compacted tail 必须包含最新 user message，但该消息只能出现一次。
+- [ ] resume 与普通第 2+ 轮共用同一路径，不写两套逻辑。
+
+### Repository fingerprint
+
+- [ ] 新增共享 `context/repository_state.py`。
+- [ ] 提供 `repository_fingerprint(repo_path)`，语义统一为 `HEAD + working-tree snapshot`。
+- [ ] 复用现有 `agent.loop_detector.snapshot_repository()`，不复制 working-tree 扫描逻辑。
+- [ ] `entry/chat.py` 删除本地 `_repository_revision()`，改用共享 helper。
+- [ ] `context/compaction.py` checkpoint 改用同一 helper。
+- [ ] Session 中现有字段名 `repo_revision` 保持兼容，但值语义升级为共享 fingerprint；不做 schema/version bump。
+
+### Resume / checkpoint lineage
+
+- [ ] canonical history 仍是恢复事实源；resume 后 model view 重新从 canonical history 计算，不恢复旧 summary 作为事实。
+- [ ] `TraceableCompaction` 增加轻量 runtime lineage cursor，用于 continuation 的 `previous_checkpoint_id`。
+- [ ] Chat `_restore_session()` 从已保存 `compaction_checkpoints` 的最后一项恢复 lineage cursor。
+- [ ] `start_new_session()` 重置 active lineage，防止新 Session 连接到旧 Session checkpoint。
+- [ ] `clear_history()` 重置 active lineage；历史 checkpoint 可继续作为审计记录保留，但后续新 checkpoint 不再把旧 context 当 previous active state。
+- [ ] 不要求持久化/恢复旧 `summary_text`；当前 C2 设计始终从 canonical history 重新生成 model view。
+
+### 失败与取消语义
+
+- [ ] round-boundary preflight 使用与现有 prepare policy 一致的保守失败语义：callback 异常时本轮在任何 LLM/tool 调用前失败，不静默退回另一套未知 Context 行为。
+- [ ] preflight 不修改 canonical history，因此失败/取消不能留下半写 summary。
+- [ ] `CONTEXT_COMPACTED` Trace 增加 boundary/phase 字段；低压 no-op 不制造无意义 checkpoint。
 
 ### C3 预计修改范围（待确认）
 
 - [ ] 新增 `context/repository_state.py`
-  - [ ] 提供共享 `repository_revision(repo_path)`。
-  - [ ] 复用现有 `agent.loop_detector.snapshot_repository()`，不复制 working-tree 扫描逻辑。
+  - 统一 repository fingerprint。
 
 - [ ] `context/compaction.py`
-  - [ ] checkpoint repo revision 改为共享 fingerprint。
-  - [ ] 提供可被 Chat preflight 复用的同一 compaction/context-view 逻辑；不新增第二套策略。
+  - checkpoint 使用共享 fingerprint；
+  - 支持 boundary 字段；
+  - 支持恢复/重置 checkpoint lineage；
+  - 不改变 `extractive-v1`，不做 C4/C5。
 
 - [ ] `agent/core.py`
-  - [ ] 增加最薄的 preflight 接线/Context 构造入口，使 Chat 能在正式 `Agent.run()` 前生成一次性 model-view override。
-  - [ ] 不改变 `Agent.run()` 内 `step > 1 -> prepare_next_turn` 的既有契约。
+  - `PrepareNextTurnContext` 增加 boundary；
+  - `Agent.run()` 增加默认关闭的 `round_boundary_preflight`；
+  - 抽取 round/turn 共用的 context-policy 调用薄层；
+  - 保持现有 `step > 1` turn-boundary 调用契约。
+
+- [ ] `agent/runner.py`
+  - `RunRequest` 增加 `round_boundary_preflight=False`；
+  - 只透传给 `Agent.run()`，不承载策略。
+  - 这是为了避免 Chat 直接修改 Agent 私有 override 或依赖 Runner 是否重建 Agent 的隐藏实现细节。
 
 - [ ] `entry/chat.py`
-  - [ ] 删除本地 `_repository_revision()` 重复实现，改用共享 helper。
-  - [ ] 在每轮 user message 已进入 canonical history、正式 Runner 调用前执行 Context preflight。
-  - [ ] resume 与普通 round 共用这一入口。
+  - 使用共享 repository fingerprint；
+  - 只有存在 prior shared history 的 round 才开启 preflight；
+  - resume/new round 共用同一路径；
+  - restore/new/clear 时维护 active checkpoint lineage。
 
 - [ ] `tests/test_compaction.py`
-  - [ ] HEAD 不变但 working tree 改变时 fingerprint 改变。
-  - [ ] checkpoint repo revision 与 Chat 使用同一 fingerprint。
-  - [ ] step 1 preflight 可生成 compacted model view，canonical history 不变。
-  - [ ] preflight 不重复用户消息。
-  - [ ] `prepare_next_turn` step>1 集成测试继续通过。
+  - dirty working-tree fingerprint；
+  - round/turn boundary Trace；
+  - canonical history 不变；
+  - latest user message 不重复；
+  - previous checkpoint lineage 恢复/重置。
 
 - [ ] `tests/test_chat.py`
-  - [ ] 普通新 round 第一次 model call 已经过 preflight。
-  - [ ] resume 长 Session 后第一次 model call 已经过 preflight。
-  - [ ] Repo Map dirty working-tree invalidation 行为继续通过。
+  - fresh first round 不 preflight；
+  - round 2 首次 model call 可直接看到 compacted view；
+  - resume 长 Session 首次 model call 可直接看到 compacted view；
+  - Repo Map dirty worktree invalidation 继续通过。
 
 ### 明确不改
 
 - [ ] `agent/session.py`：现有 schema 足够，C3 不做 version bump。
-- [ ] `agent/runner.py`：优先不改；如果实际接线证明 Runner 必须新增字段/入口，立即停下重新确认范围。
 - [ ] `config/default.yaml`。
 - [ ] structured summary、deterministic pruning、context recall、benchmark。
+- [ ] 普通单次 Agent 默认行为。
 
 ### C3 验收
 
-- [ ] HEAD 不变、working tree 变化时统一 repo fingerprint 变化。
-- [ ] Compaction checkpoint 与 Chat Repo Map 使用一致 repo revision 语义。
-- [ ] 普通 round 和 resume round 的第一次 model call 都可在 step 1 前完成 preflight。
+- [ ] HEAD 不变、working tree 变化时共享 fingerprint 变化。
+- [ ] Compaction checkpoint 与 Chat Repo Map 使用一致 repo state 语义。
+- [ ] fresh Chat 第一轮不触发 round-boundary preflight。
+- [ ] Chat 第 2+ 轮在高 pressure 时，第一次 model call 直接使用 compacted view。
+- [ ] resume 长 Session 在高 pressure 时，第一次 model call 直接使用 compacted view。
+- [ ] low pressure round-boundary preflight no-op，不产生 checkpoint。
+- [ ] latest user message 在 canonical history 与 model-visible view 中语义正确且不重复。
 - [ ] canonical history 不被 preflight summary 污染。
-- [ ] user message 只追加一次。
-- [ ] Agent.run 内 prepare_next_turn 的 step>1 契约不变。
+- [ ] Agent.run 内现有 `step > 1 -> prepare_next_turn` turn-boundary 契约继续通过。
+- [ ] resume 后 `previous_checkpoint_id` 能连接到保存的最后 checkpoint；new/clear session 后 lineage 重置。
 - [ ] 定向 pytest 通过后再进入 C4。
 
 ## C4：Deterministic Tool-output Pruning
