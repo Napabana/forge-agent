@@ -1,0 +1,307 @@
+{
+  "schema_version": 1,
+  "defaults": {
+    "budget_tokens": 4096,
+    "threshold": 0.8,
+    "target_ratio": 0.5,
+    "keep_recent_tokens": 640,
+    "max_summary_chars": 1600,
+    "system_text": "You are Forge Agent. Preserve user constraints, tool evidence, and current task state.",
+    "repo_map_text": ""
+  },
+  "cases": [
+    {
+      "id": "early-hard-constraint",
+      "current_goal": "继续完善 Context Policy，但只修改 context/evals 范围。",
+      "history_spec": [
+        {
+          "kind": "user",
+          "content": "不要修改 agent/core.py；必须保持 public API 稳定。"
+        },
+        {
+          "kind": "user_repeat",
+          "count": 58,
+          "template": "历史讨论 {i}: 这里是用于制造长会话压力的普通背景信息，不应覆盖最早的硬约束。当前仍在分析 context policy 的边界、token budget、trace evidence 与兼容性。"
+        },
+        {
+          "kind": "user",
+          "content": "RECENT_CONSTRAINT_TAIL：继续当前任务，最近上下文里不再重复早期硬约束。"
+        }
+      ],
+      "expected_semantic_fields": {
+        "hard_constraints": [
+          "不要修改 agent/core.py",
+          "必须保持 public API 稳定"
+        ],
+        "decisions": [],
+        "completed": [],
+        "in_progress": ["继续完善 Context Policy"],
+        "blocked": [],
+        "next_actions": []
+      },
+      "expected_invariants": {
+        "constraint_markers": [["agent/core.py"], ["public API"]],
+        "recent_markers": ["RECENT_CONSTRAINT_TAIL"]
+      }
+    },
+    {
+      "id": "huge-tool-output",
+      "current_goal": "保留最近工作状态，同时压掉旧的大工具输出。",
+      "history_spec": [
+        {
+          "kind": "tool",
+          "tool": "file_read",
+          "params": {"path": "src/large.py"},
+          "status": "SUCCESS",
+          "output": {"template": "OLD_FILE_BODY_MARKER line payload for historical file body {j}", "repeat": 150}
+        },
+        {
+          "kind": "tool",
+          "tool": "shell",
+          "params": {"command": "python old_script.py"},
+          "status": "SUCCESS",
+          "output": {"template": "OLD_SHELL_BODY_MARKER historical stdout payload {j}", "repeat": 150}
+        },
+        {
+          "kind": "tool",
+          "tool": "test",
+          "params": {"path": "tests/old_suite.py"},
+          "status": "SUCCESS",
+          "output": {"template": "OLD_TEST_BODY_MARKER passed historical test log {j}", "repeat": 120}
+        },
+        {
+          "kind": "user_repeat",
+          "count": 18,
+          "template": "过渡消息 {i}: 这些信息用于把旧 Tool 输出推出 recent tail。"
+        },
+        {
+          "kind": "tool",
+          "tool": "file_view",
+          "params": {"path": "src/current.py"},
+          "status": "SUCCESS",
+          "output": "RECENT_RAW_MARKER current file view must remain verbatim."
+        }
+      ],
+      "expected_semantic_fields": {
+        "hard_constraints": [],
+        "decisions": [],
+        "completed": [],
+        "in_progress": [],
+        "blocked": [],
+        "next_actions": []
+      },
+      "expected_invariants": {
+        "recent_markers": ["RECENT_RAW_MARKER"],
+        "old_markers_absent_after_pruning": ["OLD_FILE_BODY_MARKER", "OLD_SHELL_BODY_MARKER", "OLD_TEST_BODY_MARKER"]
+      }
+    },
+    {
+      "id": "action-observation-pair",
+      "current_goal": "验证 HistoryUnit 在极限预算下不拆 Action/Observation。",
+      "history_spec": [
+        {
+          "kind": "tool_repeat",
+          "count": 24,
+          "tool": "shell",
+          "params": {"command": "echo pair-{i}"},
+          "status": "SUCCESS",
+          "output": {"template": "pair {i} observation payload {j} with enough text to pressure final history trimming", "repeat": 8}
+        },
+        {
+          "kind": "user",
+          "content": "RECENT_PAIR_TAIL keep the latest pair context intact."
+        }
+      ],
+      "expected_semantic_fields": {
+        "hard_constraints": [],
+        "decisions": [],
+        "completed": [],
+        "in_progress": [],
+        "blocked": [],
+        "next_actions": []
+      },
+      "expected_invariants": {
+        "recent_markers": ["RECENT_PAIR_TAIL"],
+        "require_zero_orphans": true
+      }
+    },
+    {
+      "id": "superseded-state",
+      "current_goal": "继续修复实现，并以最新测试结果作为历史验证状态。",
+      "history_spec": [
+        {
+          "kind": "tool",
+          "tool": "file_read",
+          "params": {"path": "src/old.py"},
+          "status": "SUCCESS",
+          "output": "read old implementation"
+        },
+        {
+          "kind": "tool",
+          "tool": "file_write",
+          "params": {"path": "src/fixed.py", "content": "fixed"},
+          "status": "SUCCESS",
+          "output": "wrote src/fixed.py"
+        },
+        {
+          "kind": "tool",
+          "tool": "test",
+          "params": {"path": "tests/test_fix.py"},
+          "status": "ERROR",
+          "output": "OLD_TEST_FAILURE_MARKER assertion failed",
+          "error": "OLD_TEST_FAILURE_MARKER assertion failed"
+        },
+        {
+          "kind": "user_repeat",
+          "count": 42,
+          "template": "中间分析 {i}: 继续定位测试失败，保留仓库事实与工具证据。"
+        },
+        {
+          "kind": "tool",
+          "tool": "test",
+          "params": {"path": "tests/test_fix.py"},
+          "status": "SUCCESS",
+          "output": "LATEST_TEST_SUCCESS all tests passed"
+        },
+        {
+          "kind": "user_repeat",
+          "count": 22,
+          "template": "后续讨论 {i}: 最新测试已经成功，旧失败不应继续阻塞。"
+        }
+      ],
+      "expected_semantic_fields": {
+        "hard_constraints": [],
+        "decisions": ["以最新测试结果作为验证状态"],
+        "completed": ["修复实现"],
+        "in_progress": [],
+        "blocked": [],
+        "next_actions": []
+      },
+      "expected_invariants": {
+        "verification_status": "PASS",
+        "stale_failure_markers": ["OLD_TEST_FAILURE_MARKER"],
+        "expected_read_paths": ["src/old.py"],
+        "expected_modified_paths": ["src/fixed.py"]
+      }
+    },
+    {
+      "id": "repeated-compaction",
+      "current_goal": "验证 active compacted view 复用和再次压缩。",
+      "history_spec": [
+        {
+          "kind": "user",
+          "content": "保持接口兼容，不要把旧 summary 当成新的事实源。"
+        },
+        {
+          "kind": "user_repeat",
+          "count": 62,
+          "template": "初始长历史 {i}: 用于触发第一次 semantic compaction，并验证 canonical history 保持完整。"
+        }
+      ],
+      "phases": [
+        {
+          "append": [
+            {"kind": "user", "content": "RECENT_PHASE_ONE small delta should reuse active compacted view."}
+          ]
+        },
+        {
+          "append": [
+            {
+              "kind": "user_repeat",
+              "count": 72,
+              "template": "第二阶段新增历史 {i}: 继续增长 active view，直到再次达到 pressure threshold。"
+            },
+            {"kind": "user", "content": "RECENT_PHASE_TWO final delta after repeated compaction."}
+          ]
+        }
+      ],
+      "expected_semantic_fields": {
+        "hard_constraints": ["保持接口兼容", "不要把旧 summary 当成新的事实源"],
+        "decisions": [],
+        "completed": [],
+        "in_progress": ["验证 active compacted view"],
+        "blocked": [],
+        "next_actions": []
+      },
+      "expected_invariants": {
+        "recent_markers": ["RECENT_PHASE_TWO"],
+        "expected_summary_calls": 2,
+        "expected_policy_calls": 3,
+        "require_lineage": true,
+        "require_active_reuse": true
+      }
+    },
+    {
+      "id": "resume-long-session",
+      "current_goal": "恢复长 Session 后继续当前任务，首轮就执行 Context preflight。",
+      "restore_checkpoint_id": "resume-parent-checkpoint",
+      "history_spec": [
+        {
+          "kind": "user",
+          "content": "恢复后仍然必须保留早期会话约束。"
+        },
+        {
+          "kind": "user_repeat",
+          "count": 66,
+          "template": "恢复前历史 {i}: 这是持久化 Session 中积累的旧上下文。"
+        },
+        {
+          "kind": "user",
+          "content": "RESUME_CURRENT_USER 这是恢复后本轮唯一的新用户输入。"
+        }
+      ],
+      "expected_semantic_fields": {
+        "hard_constraints": ["恢复后仍然必须保留早期会话约束"],
+        "decisions": [],
+        "completed": [],
+        "in_progress": ["恢复长 Session 后继续当前任务"],
+        "blocked": [],
+        "next_actions": []
+      },
+      "expected_invariants": {
+        "constraint_markers": [["早期会话约束"]],
+        "recent_markers": ["RESUME_CURRENT_USER"],
+        "expected_previous_checkpoint_id": "resume-parent-checkpoint",
+        "current_user_marker": "RESUME_CURRENT_USER"
+      }
+    },
+    {
+      "id": "dirty-repo-revision",
+      "current_goal": "验证 HEAD 不变但 working tree 变化时 checkpoint repo revision 会变化。",
+      "history_spec": [
+        {
+          "kind": "user_repeat",
+          "count": 62,
+          "template": "仓库状态历史 {i}: 第一次压缩前的上下文，用于生成第一个 checkpoint。"
+        }
+      ],
+      "phases": [
+        {
+          "repo_write": {"path": "state.txt", "content": "dirty working tree state"},
+          "append": [
+            {
+              "kind": "user_repeat",
+              "count": 74,
+              "template": "仓库变脏后的新增历史 {i}: 迫使 active view 再次达到 threshold 并产生第二个 checkpoint。"
+            },
+            {"kind": "user", "content": "DIRTY_REPO_TAIL working tree changed without committing."}
+          ]
+        }
+      ],
+      "expected_semantic_fields": {
+        "hard_constraints": [],
+        "decisions": [],
+        "completed": [],
+        "in_progress": [],
+        "blocked": [],
+        "next_actions": []
+      },
+      "expected_invariants": {
+        "recent_markers": ["DIRTY_REPO_TAIL"],
+        "expected_summary_calls": 2,
+        "require_repo_revision_change": true,
+        "require_lineage": true
+      }
+    }
+  ]
+}
