@@ -1,0 +1,48 @@
+{
+  "metadata": {
+    "generated_at": "2026-09-15T06:38:03.570875+00:00",
+    "runner_revision": "b74cba4b62a296cfdae4ff2db1f224c713a5b9f3",
+    "working_tree_dirty": false,
+    "python": "3.11.0rc1",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.35"
+  },
+  "retrieval": {
+    "static": {
+      "cases": 12,
+      "recall_at_1": 0.0,
+      "recall_at_3": 0.0,
+      "recall_at_5": 0.0,
+      "mrr": 0.0969540782040782,
+      "mean_target_rank": 30.2921626984127,
+      "budget_target_recall": 0.36491402116402116,
+      "mean_map_tokens": 10098
+    },
+    "query_aware": {
+      "cases": 12,
+      "recall_at_1": 0.0,
+      "recall_at_3": 0.0,
+      "recall_at_5": 0.0,
+      "mrr": 0.10348124098124098,
+      "mean_target_rank": 29.08730158730159,
+      "budget_target_recall": 0.36491402116402116,
+      "mean_map_tokens": 10149.25
+    }
+  },
+  "skipped_cases": [],
+  "performance": {
+    "baseline": {
+      "implementation_commit": "cdb02caa92046da906c148e470bebff00d151106",
+      "runs": 5,
+      "median_seconds": 33.10253047699916,
+      "p95_seconds": 36.92180570100027
+    },
+    "optimized": {
+      "implementation_commit": "08ea5f5fc22a67fc58da70786ee439ea255a3189",
+      "runs": 5,
+      "median_seconds": 0.4414685150004516,
+      "p95_seconds": 0.4793633059998683
+    },
+    "semantic_equivalent": true,
+    "speedup": 74.98276627261924
+  }
+}
