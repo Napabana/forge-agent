@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from evals.context_policy_benchmark import load_manifest, run_benchmark
+from evals.context_policy_benchmark import (
+    FixtureSemanticSummarizer,
+    _evaluate_case_variant,
+    load_manifest,
+    run_benchmark,
+)
 
 
 EXPECTED_CASES = {
@@ -20,11 +25,29 @@ EXPECTED_CASES = {
 
 
 @pytest.fixture(scope="module")
-def context_policy_replay(tmp_path_factory: pytest.TempPathFactory):
-    """完整 7×3 replay 在本测试模块只执行一次，后续断言共享结果。"""
-    output = tmp_path_factory.mktemp("context-policy-b1") / "results"
+def context_policy_smoke(tmp_path_factory: pytest.TempPathFactory):
+    """pytest 只跑代表性 smoke；完整 7×3 benchmark 由 CLI 显式执行。"""
+    manifest = load_manifest()
+    cases = {case["id"]: case for case in manifest["cases"]}
+    defaults = manifest["defaults"]
+    root = Path(__file__).resolve().parents[1]
+    tmp = tmp_path_factory.mktemp("context-policy-b1-smoke")
+
+    # 代表性三 variant：huge-tool-output 同时覆盖 baseline / Stage A / Hybrid。
+    smoke_manifest = {
+        "schema_version": manifest["schema_version"],
+        "defaults": defaults,
+        "cases": [cases["huge-tool-output"]],
+    }
+    smoke_manifest_path = tmp / "manifest.json"
+    smoke_manifest_path.write_text(
+        json.dumps(smoke_manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    output = tmp / "results"
     report = run_benchmark(
-        repo=Path(__file__).resolve().parents[1],
+        repo=root,
+        manifest=smoke_manifest_path,
         output=output,
         semantic_mode="fixture",
         allow_dirty=True,
@@ -34,7 +57,25 @@ def context_policy_replay(tmp_path_factory: pytest.TempPathFactory):
         for line in (output / "raw.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    return output, report, rows
+
+    # 其余只挑 C5/C3 最关键 lifecycle 契约跑 Hybrid，避免把正式 benchmark 塞进 pytest。
+    targeted: dict[str, dict] = {}
+    for case_id in (
+        "early-hard-constraint",
+        "superseded-state",
+        "repeated-compaction",
+        "resume-long-session",
+    ):
+        targeted[case_id] = _evaluate_case_variant(
+            case=cases[case_id],
+            defaults=defaults,
+            variant="hybrid_compaction",
+            workspace=tmp / "targeted" / case_id,
+            semantic_mode="fixture",
+            live_backend=None,
+        )
+
+    return output, report, rows, targeted
 
 
 def test_context_policy_manifest_has_frozen_cases() -> None:
@@ -45,10 +86,10 @@ def test_context_policy_manifest_has_frozen_cases() -> None:
     assert manifest["defaults"]["keep_recent_tokens"] == 640
 
 
-def test_context_policy_fixture_replay_contracts(context_policy_replay) -> None:
-    output, report, rows = context_policy_replay
-    assert len(rows) == len(EXPECTED_CASES) * 3
-    assert report["rows"] == len(rows)
+def test_context_policy_fixture_replay_contracts(context_policy_smoke) -> None:
+    output, report, rows, targeted = context_policy_smoke
+    assert len(rows) == 3
+    assert report["rows"] == 3
     assert (output / "metadata.json").exists()
     assert (output / "report.json").exists()
     assert (output / "report.md").exists()
@@ -60,24 +101,21 @@ def test_context_policy_fixture_replay_contracts(context_policy_replay) -> None:
     assert all(row["raw_event_traceable"] for row in rows)
     assert all(row["source_event_coverage"] == 1.0 for row in rows)
 
-    by_key = {(row["case_id"], row["variant"]): row for row in rows}
+    by_variant = {row["variant"]: row for row in rows}
+    assert by_variant["deterministic_pruning"]["final_tokens"] < by_variant["budget_trim_only"]["raw_history_tokens"]
+    assert by_variant["hybrid_compaction"]["final_tokens"] < by_variant["budget_trim_only"]["raw_history_tokens"]
 
-    early = by_key[("early-hard-constraint", "hybrid_compaction")]
+    early = targeted["early-hard-constraint"]
     assert early["hard_constraint_recall"] == 1.0
     assert early["passed"] is True
 
-    huge_pruning = by_key[("huge-tool-output", "deterministic_pruning")]
-    huge_hybrid = by_key[("huge-tool-output", "hybrid_compaction")]
-    assert huge_pruning["final_tokens"] < by_key[("huge-tool-output", "budget_trim_only")]["raw_history_tokens"]
-    assert huge_hybrid["final_tokens"] < by_key[("huge-tool-output", "budget_trim_only")]["raw_history_tokens"]
-
-    superseded = by_key[("superseded-state", "hybrid_compaction")]
+    superseded = targeted["superseded-state"]
     assert superseded["latest_test_status"] == "PASS"
     assert superseded["stale_failure_violations"] == 0
     assert superseded["working_set_recall"] == 1.0
     assert superseded["passed"] is True
 
-    repeated = by_key[("repeated-compaction", "hybrid_compaction")]
+    repeated = targeted["repeated-compaction"]
     assert repeated["policy_calls"] == 3
     assert repeated["summary_call_count"] == 2
     assert repeated["active_view_reused"] is True
@@ -85,20 +123,14 @@ def test_context_policy_fixture_replay_contracts(context_policy_replay) -> None:
     assert repeated["checkpoint_atomic"] is True
     assert repeated["passed"] is True
 
-    resumed = by_key[("resume-long-session", "hybrid_compaction")]
+    resumed = targeted["resume-long-session"]
     assert resumed["lineage_correct"] is True
     assert resumed["current_user_count"] == 1
     assert resumed["passed"] is True
 
-    dirty = by_key[("dirty-repo-revision", "hybrid_compaction")]
-    assert dirty["summary_call_count"] == 2
-    assert dirty["repo_revision_changed"] is True
-    assert dirty["lineage_correct"] is True
-    assert dirty["passed"] is True
 
-
-def test_context_policy_report_contains_three_variants(context_policy_replay) -> None:
-    output, report, _ = context_policy_replay
+def test_context_policy_report_contains_three_variants(context_policy_smoke) -> None:
+    output, report, _, _ = context_policy_smoke
     assert set(report["aggregate"]) == {
         "budget_trim_only",
         "deterministic_pruning",
@@ -106,5 +138,5 @@ def test_context_policy_report_contains_three_variants(context_policy_replay) ->
     }
     metadata = json.loads((output / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["semantic"]["mode"] == "fixture"
-    assert metadata["case_count"] == 7
+    assert metadata["case_count"] == 1
     assert len(metadata["fixture_sha256"]) == 64
