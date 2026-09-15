@@ -4,7 +4,7 @@
 
 执行原则：一次只收口一个 Context 契约；每批生产代码修改前按 `AGENTS.md` 检查工作树/分支/remote/stash，列出拟修改文件和理由，等待用户确认。测试先定向后扩展，不把未执行测试写成通过。
 
-当前状态：C1、C2、C3、C4、C5 已完成，并经用户本地 pytest 验证通过。Context Compaction 主实现已收口；下一阶段进入 B1 Context Policy 离线 Benchmark。C6 `context_recall(event_ref)` 继续数据驱动后置。
+当前状态：C1、C2、C3、C4、C5 已完成，并经用户本地 pytest 验证通过。Context Compaction 主实现已收口；B1 Context Policy 离线 Benchmark 设计已收口，等待实施范围确认。C6 `context_recall(event_ref)` 继续数据驱动后置。
 
 ## 0. 实施门禁
 
@@ -162,21 +162,63 @@
 
 ## B1：Context Policy 离线 Benchmark
 
-状态：下一阶段，待设计与实施范围确认。
+状态：设计已收口，等待实施范围确认。
 
-目标：固定 prerecorded histories，不调用真实模型生成 Agent 历史；Hybrid variant 的 semantic summary call 成本单独记录。
+设计：`2026-09-15-Context-Policy-B1设计收口.md`。
 
-Cases：
+目标：固定 history replay，不运行真实 Coding Agent；Context policy correctness 与 semantic model 随机性分层评估。
 
-- [ ] `early-hard-constraint`
-- [ ] `huge-tool-output`
-- [ ] `action-observation-pair`
-- [ ] `superseded-state`
-- [ ] `repeated-compaction`
-- [ ] `resume-long-session`
-- [ ] `dirty-repo-revision`
+### Variant
 
-指标：before/after tokens、compaction ratio、projected input、context pressure、hard constraints preserved、orphan units、source event coverage、recent tokens kept、repo state changed、checkpoint atomic、raw event traceable、summary-call count/usage、semantic duration。
+- [ ] `budget_trim_only`：只执行 final `TokenBudget.trim_history()`。
+- [ ] `deterministic_pruning`：高 pressure 时只执行 C4 Stage A，再 final trim；不进入 Stage B。
+- [ ] `hybrid_compaction`：直接执行生产 `TraceableCompaction`，然后 final trim。
+
+### 两种模式
+
+- [ ] `semantic-mode=fixture`：完全确定性，Hybrid 使用 fixture summarizer，不调用网络。
+- [ ] `semantic-mode=live`：只让 C5 summary call 使用固定 provider/model；Agent 不运行；正式 spot-check 每 case 3 repeats。
+
+### Cases
+
+- [ ] `early-hard-constraint`：早期中文/英文硬约束离开 recent tail 后仍可见。
+- [ ] `huge-tool-output`：大 file/shell/test output 被 pruning，recent raw 与 EventLog 原文可追溯。
+- [ ] `action-observation-pair`：任何 variant 最终 view 不产生 orphan unit。
+- [ ] `superseded-state`：旧 test failure 被 later PASS 覆盖，不误报当前 unresolved failure。
+- [ ] `repeated-compaction`：active view 复用、第二次 compaction、checkpoint lineage、禁止 summary-of-summary。
+- [ ] `resume-long-session`：step=1 preflight、恢复 lineage、当前 user 只出现一次、当前 Goal 正确。
+- [ ] `dirty-repo-revision`：same HEAD 下 working-tree 变化导致 checkpoint repo revision 改变。
+
+### Hard gates
+
+- [ ] 所有 variant：`orphan_actions == 0`、`orphan_observations == 0`。
+- [ ] pruning/hybrid：recent raw required marker 100% 保留。
+- [ ] hybrid：early hard constraint recall = 1.0。
+- [ ] hybrid：superseded-state 最新验证状态正确，无 stale failure。
+- [ ] repeated：active reuse / lineage / canonical-source re-compaction 全通过。
+- [ ] resume：current user exactly once，previous checkpoint lineage 正确。
+- [ ] dirty repo：HEAD 不变而 fingerprint 必须变化。
+- [ ] 所有 policy variant：canonical history hash 不变。
+- [ ] final model-visible view 在 fixture 配置下必须 fit available input。
+
+### 指标
+
+- [ ] canonical/policy/final tokens 与 compaction ratio。
+- [ ] projected input / available input / pressure before-after。
+- [ ] hard constraint recall / recent raw recall。
+- [ ] orphan units / latest test correctness / stale-state violations。
+- [ ] working-set precision/recall / source event coverage / raw event traceable。
+- [ ] checkpoint count / atomic / lineage / active reuse。
+- [ ] summary calls / input-output-cached tokens / semantic duration / failure / packet truncation。
+
+### 预计实施范围
+
+- [ ] 新增 `evals/context_policy_benchmark.py`。
+- [ ] 新增 `evals/fixtures/context_policy_benchmark.json`。
+- [ ] 新增 `tests/test_context_policy_benchmark.py`。
+- [ ] 不修改 Context / Agent / provider 生产代码；benchmark 若发现 bug，先保留失败证据再单独提出生产修复范围。
+
+默认结果目录：`evals/results/context_policy_benchmark/`，产物为 `raw.jsonl`、`report.json`、`report.md`、`metadata.json`。
 
 ## B2：真实 Agent 消融
 
