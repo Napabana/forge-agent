@@ -5,12 +5,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.core import Agent
+from agent.event_log import EventLog
+from agent.task import Action, ActionType, Task, ToolCall
 from context import repo_map
 from context.history import ConversationHistory
 from context.repo_map import FileInfo, RepoMap, Symbol
 from context.token_budget import TokenBudget
 from llm.base import LLMMessage, MockBackend
 from tools.base import ToolRegistry
+from tools.file_tool import FileWriteTool
 
 
 def test_language_load_failure_is_not_negative_cached(monkeypatch):
@@ -186,3 +189,25 @@ def test_agent_invalidation_forces_refresh_on_live_repo_map(tmp_path):
     assert "second.py" in agent._repo_map_cache
     assert live_map.last_report is not None
     assert live_map.last_report.force_refresh
+
+
+def test_successful_file_write_refreshes_repo_map_before_next_step(tmp_path):
+    (tmp_path / "existing.py").write_text("def existing(): pass\n")
+    task = Task("write a new module", str(tmp_path), task_id="repo-map-write")
+    backend = MockBackend([
+        Action(
+            ActionType.TOOL_CALL,
+            "write module",
+            ToolCall("file_write", {"path": "created.py", "content": "def created(): pass\n"}),
+        ),
+        Action(ActionType.FINISH, "done", message="done"),
+    ])
+    agent = Agent(
+        backend,
+        ToolRegistry().register(FileWriteTool(workspace=tmp_path)),
+    )
+
+    with EventLog.create(task, log_dir=str(tmp_path / "logs")) as log:
+        agent.run(task, log)
+
+    assert "created.py" in backend.received_messages[1][0].content

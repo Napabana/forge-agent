@@ -36,6 +36,11 @@ class EvalResult:
     latency_seconds: float
     tool_calls: int = 0
     human_intervention: bool = False
+    task_prompt: str = ""                  # 固定的原始任务描述
+    trace_path: str | None = None           # Agent 原始事件日志
+    patch: str = ""                        # fixture 基线到运行结果的统一 diff
+    agent_status: str = ""                 # Agent 自身终态
+    verifier_status: str = ""              # History 外隐藏验收终态
 
 
 def load_cases(path: str | Path = _MANIFEST) -> list[EvalCase]:

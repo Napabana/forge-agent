@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from agent.core import Agent, AgentConfig, PrepareNextTurn
@@ -23,6 +24,9 @@ from tools.base import ToolRegistry
 class AcceptanceContract:
     require_changes: bool = False
     require_tests: bool = False
+    required_paths: tuple[str, ...] = ()
+    forbidden_paths: tuple[str, ...] = ()
+    verifier: Callable[[Path], bool] | None = None  # Runner 持有，不写入 Agent History
 
     @classmethod
     def from_task(cls, task: Task) -> "AcceptanceContract":
@@ -34,6 +38,9 @@ class AcceptanceContract:
             require_changes=self.require_changes,
             require_tests=self.require_tests,
         )
+
+    def has_independent_checks(self) -> bool:
+        return bool(self.required_paths or self.forbidden_paths or self.verifier)
 
 
 @dataclass
@@ -95,9 +102,11 @@ class ExecutionRunner:
         on_event=None,
         on_log_created=None,
     ) -> RunResult:
-        task = (request.acceptance or AcceptanceContract.from_task(request.task)).apply(
-            request.task
-        )
+        acceptance = request.acceptance or AcceptanceContract.from_task(request.task)
+        task = acceptance.apply(request.task)
+        contract_paths, path_error = _normalize_contract_paths(acceptance.required_paths + acceptance.forbidden_paths)
+        path_baseline, snapshot_error = (None, None) if request.isolate or path_error else _snapshot_paths(Path(task.repo_path), contract_paths)
+        acceptance_setup_error = path_error or snapshot_error
         config = dataclasses.replace(
             self.config,
             hooks=request.hooks if request.hooks is not None else self.config.hooks,
@@ -140,6 +149,7 @@ class ExecutionRunner:
                 on_log_created=log_created,
             ))
             result.trace_path = trace_path
+            _apply_independent_acceptance(acceptance, task, result, contract_paths, path_baseline, acceptance_setup_error)
             return result
 
         executor = ToolExecutor(
@@ -171,9 +181,96 @@ class ExecutionRunner:
         try:
             result = self.agent.run(task, log, history=request.history)
             result.trace_path = str(log.path)
+            _apply_independent_acceptance(acceptance, task, result, contract_paths, path_baseline, acceptance_setup_error)
             return result
         finally:
             if on_event is not None:
                 log.on_append(None)
             if own_log:
                 log.close()
+
+
+def _apply_independent_acceptance(
+    contract: AcceptanceContract, task: Task, result: RunResult, contract_paths: set[str],
+    path_baseline: dict[str, str] | None, setup_error: str | None,
+) -> None:
+    """在 Agent 返回后执行路径约束和隐藏 verifier，并保留两层独立状态。"""
+    if not contract.has_independent_checks():
+        return
+    if not result.is_success():
+        result.acceptance_status = "skipped"
+        result.acceptance_error = f"agent status is {result.status.value}"
+        return
+    if setup_error:
+        result.acceptance_status, result.acceptance_error = "failed", setup_error
+        return
+
+    workspace = Path(result.worktree.path) if result.worktree and result.worktree.path else Path(task.repo_path)
+    if result.worktree and result.worktree.path is None:
+        result.acceptance_status, result.acceptance_error = "failed", "worktree is unavailable for independent acceptance"
+        return
+
+    if contract.required_paths or contract.forbidden_paths:
+        changed_paths, error = _changed_paths(result, workspace, contract_paths, path_baseline)
+        if error:
+            result.acceptance_status, result.acceptance_error = "failed", error
+            return
+        required_paths = {path.replace("\\", "/") for path in contract.required_paths}
+        forbidden_paths = {path.replace("\\", "/") for path in contract.forbidden_paths}
+        missing = sorted(required_paths - changed_paths)
+        forbidden = sorted(forbidden_paths & changed_paths)
+        if missing or forbidden:
+            reasons = ([f"required paths not changed: {', '.join(missing)}"] if missing else []) + ([f"forbidden paths changed: {', '.join(forbidden)}"] if forbidden else [])
+            result.acceptance_status, result.acceptance_error = "failed", "; ".join(reasons)
+            return
+
+    if contract.verifier is not None:
+        try:
+            verified = bool(contract.verifier(workspace))
+        except Exception as exc:
+            result.acceptance_status, result.acceptance_error = "failed", f"hidden verifier raised {type(exc).__name__}: {exc}"
+            return
+        if not verified:
+            result.acceptance_status, result.acceptance_error = "failed", "hidden verifier returned false"
+            return
+    result.acceptance_status = "passed"
+
+
+def _changed_paths(
+    result: RunResult, workspace: Path, contract_paths: set[str], path_baseline: dict[str, str] | None,
+) -> tuple[set[str], str | None]:
+    """隔离运行读取产物，普通运行只比较契约文件的前后内容指纹。"""
+    if result.worktree is not None:
+        return {path.replace("\\", "/") for path in result.worktree.changed_files}, None
+    current, error = _snapshot_paths(workspace, contract_paths)
+    if error:
+        return set(), error
+    return {path for path in contract_paths if path_baseline and path_baseline[path] != current[path]}, None
+
+
+def _normalize_contract_paths(paths: tuple[str, ...]) -> tuple[set[str], str | None]:
+    """把契约路径统一为安全的 POSIX 相对路径。"""
+    normalized = set()
+    for raw in paths:
+        path = PurePosixPath(raw.replace("\\", "/"))
+        if not raw or path.is_absolute() or ".." in path.parts:
+            return set(), f"invalid acceptance path: {raw!r}"
+        normalized.add(path.as_posix())
+    return normalized, None
+
+
+def _snapshot_paths(root: Path, paths: set[str]) -> tuple[dict[str, str], str | None]:
+    """只读取契约指定文件，避免把运行前已有的用户修改计入本轮结果。"""
+    root = root.resolve()
+    states = {}
+    for relative in paths:
+        target = (root / relative).resolve()
+        if target != root and root not in target.parents:
+            return {}, f"acceptance path escapes repository: {relative}"
+        if target.is_dir():
+            return {}, f"acceptance path must be a file: {relative}"
+        try:
+            states[relative] = hashlib.sha256(target.read_bytes()).hexdigest() if target.exists() else "missing"
+        except OSError as exc:
+            return {}, f"cannot inspect acceptance path {relative}: {exc}"
+    return states, None

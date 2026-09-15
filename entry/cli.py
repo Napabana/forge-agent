@@ -467,7 +467,7 @@ def chat(
 ) -> None:
     """Interactive chat mode — continuous conversation with the agent."""
     import logging
-    from agent.session import ChatSessionError
+    from agent.session import ChatSessionConflict, ChatSessionError
     from agent.session_store import JsonChatSessionStore
     from entry.chat import ChatSession
 
@@ -679,6 +679,10 @@ def chat(
                 session.run_round(user_input)
             except KeyboardInterrupt:
                 click.echo(yellow("\n  Interrupted. Type /exit to quit or continue with a new task."))
+            except ChatSessionConflict:
+                # 冲突时保持 fail-closed，不覆盖另一进程已经写入的新状态。
+                click.echo(red("\n  Session conflict: another process saved a newer state; this round was not saved."))
+                click.echo(yellow(f"  Tool side effects may be partial. Use /resume {session.session_id} to reload, or /new to start separately."))
             except Exception as e:
                 click.echo(red(f"\n  Error: {e}"))
                 if verbose:

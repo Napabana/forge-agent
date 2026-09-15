@@ -122,6 +122,26 @@ def test_prepare_next_turn_injects_message_before_second_llm_call(tmp_path):
     assert any(message.content == injected_text for message in second_request)
 
 
+def test_prepare_next_turn_refreshes_repo_map_before_second_llm_call(tmp_path):
+    (tmp_path / "first.py").write_text("def first(): pass\n")
+
+    def prepare_next_turn(_context):
+        # 模拟完整 turn 之间发生仓库变化，再由结果对象显式请求刷新。
+        (tmp_path / "second.py").write_text("def second(): pass\n")
+        return PrepareNextTurnResult(refresh_repo_map=True)
+
+    task = _task(tmp_path, "prepare-refresh")
+    backend = _two_turn_backend()
+    result = Agent(
+        backend, ToolRegistry().register(NoopTool("noop")),
+        AgentConfig(prepare_next_turn=prepare_next_turn),
+    ).run(task, EventLog.create(task, log_dir=str(tmp_path / "refresh")))
+
+    assert result.status is RunStatus.SUCCESS
+    assert "second.py" not in backend.received_messages[0][0].content
+    assert "second.py" in backend.received_messages[1][0].content
+
+
 def test_prepare_next_turn_default_none_preserves_messages(tmp_path):
     task = _task(tmp_path, "prepare-default")
     backends = [_two_turn_backend(), _two_turn_backend()]

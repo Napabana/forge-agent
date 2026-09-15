@@ -21,8 +21,10 @@ GitHub Issue 自动修复入口。
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -109,7 +111,7 @@ def create_pull_request(
 # Git 操作
 # ---------------------------------------------------------------------------
 
-def _run_git(args: list[str], cwd: str) -> tuple[bool, str]:
+def _run_git(args: list[str], cwd: str, env: dict[str, str] | None = None) -> tuple[bool, str]:
     """运行 git 命令，返回 (success, output)。"""
     try:
         proc = subprocess.run(
@@ -118,11 +120,27 @@ def _run_git(args: list[str], cwd: str) -> tuple[bool, str]:
             text=True,
             timeout=60,
             cwd=cwd,
+            env=env,
         )
         output = (proc.stdout + proc.stderr).strip()
         return proc.returncode == 0, output
     except Exception as e:
         return False, str(e)
+
+
+def _github_git_env() -> dict[str, str] | None:
+    """通过临时 Git 配置传递 GitHub 凭据，不把 Token 写入参数或 remote。"""
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        return None
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    env = os.environ.copy()
+    env.pop("GITHUB_TOKEN", None)
+    # 禁用可能打印 HTTP 头的 Git 调试开关，认证配置仅对子进程生效。
+    for key in tuple(env):
+        if key.startswith("GIT_TRACE") or key == "GIT_CURL_VERBOSE": env.pop(key)
+    env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.https://github.com/.extraHeader", "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {encoded}"})
+    return env
 
 
 def clone_repo(repo_name: str, local_path: str) -> None:
@@ -132,14 +150,9 @@ def clone_repo(repo_name: str, local_path: str) -> None:
         logger.info("Repo already exists at %s, skipping clone", local_path)
         return
 
-    token = os.environ.get("GITHUB_TOKEN", "")
-    if token:
-        url = f"https://{token}@github.com/{repo_name}.git"
-    else:
-        url = f"https://github.com/{repo_name}.git"
-
+    url = f"https://github.com/{repo_name}.git"
     click.echo(f"Cloning {repo_name} → {local_path} ...")
-    ok, out = _run_git(["clone", url, local_path], cwd="/tmp")
+    ok, out = _run_git(["clone", url, local_path], cwd="/tmp", env=_github_git_env())
     if not ok:
         raise RuntimeError(f"git clone failed: {out}")
 
@@ -149,7 +162,9 @@ def create_branch(local_path: str, branch: str) -> None:
     ok, out = _run_git(["checkout", "-b", branch], cwd=local_path)
     if not ok:
         # 分支已存在，切换过去
-        _run_git(["checkout", branch], cwd=local_path)
+        switched, switch_out = _run_git(["checkout", branch], cwd=local_path)
+        if not switched:
+            raise RuntimeError(f"git branch checkout failed: {out}; {switch_out}")
 
 
 def push_branch(local_path: str, branch: str) -> None:
@@ -157,9 +172,82 @@ def push_branch(local_path: str, branch: str) -> None:
     ok, out = _run_git(
         ["push", "--set-upstream", "origin", branch],
         cwd=local_path,
+        env=_github_git_env(),
     )
     if not ok:
         raise RuntimeError(f"git push failed: {out}")
+
+
+def _command_verifier(command: str):
+    """把用户显式提供的验收命令转换为不经过 shell 的隐藏 verifier。"""
+    argv = shlex.split(command, posix=os.name != "nt")
+    if not argv:
+        raise ValueError("verification command cannot be empty")
+
+    def verify(repo: Path) -> bool:
+        proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True, timeout=600, check=False)
+        logger.info("Independent verifier exited with %d", proc.returncode)
+        return proc.returncode == 0
+
+    return verify
+
+
+def _branch_is_pushed(local_path: str, branch: str) -> bool:
+    """比较本地 HEAD 和远端分支 SHA，避免 PR 重试时重复 push。"""
+    head_ok, head = _run_git(["rev-parse", "HEAD"], cwd=local_path)
+    remote_ok, remote = _run_git(["ls-remote", "--heads", "origin", f"refs/heads/{branch}"], cwd=local_path, env=_github_git_env())
+    return head_ok and remote_ok and bool(remote) and remote.split()[0] == head.strip()
+
+
+def deliver_pull_request(
+    result, local_path: str, branch: str, commit_message: str, repo_name: str,
+    pr_title: str, pr_body: str, base_branch: str = "main", pr_creator=create_pull_request,
+) -> str | None:
+    """通过验收后确定性执行 commit、push 和 PR；失败时保留本地成果。"""
+    if not result.is_success():
+        result.delivery_status = "blocked_agent"
+        return None
+    if result.acceptance_status != "passed":
+        result.delivery_status = "blocked_acceptance"
+        return None
+
+    branch_ok, current_branch = _run_git(["branch", "--show-current"], cwd=local_path)
+    if not branch_ok or current_branch.strip() != branch:
+        result.delivery_status = "commit_failed"
+        return None
+    status_ok, status = _run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=local_path)
+    if not status_ok:
+        result.delivery_status = "commit_failed"
+        return None
+
+    if status:
+        added, _ = _run_git(["add", "--all"], cwd=local_path)
+        committed, _ = _run_git(["commit", "-m", commit_message], cwd=local_path) if added else (False, "")
+        if not committed:
+            result.delivery_status = "commit_failed"
+            return None
+    else:
+        subject_ok, subject = _run_git(["log", "-1", "--format=%s"], cwd=local_path)
+        if not subject_ok or subject.strip() != commit_message:
+            result.delivery_status = "no_changes"
+            return None
+
+    if not _branch_is_pushed(local_path, branch):
+        try:
+            push_branch(local_path, branch)
+        except RuntimeError as exc:
+            logger.warning("Push failed; local commit retained: %s", exc)
+            result.delivery_status = "push_failed"
+            return None
+
+    try:
+        pr_url = pr_creator(repo_name=repo_name, branch=branch, title=pr_title, body=pr_body, base=base_branch)
+    except Exception as exc:
+        logger.warning("PR creation failed; pushed branch retained: %s", exc)
+        result.delivery_status = "pr_failed"
+        return None
+    result.delivery_status = "delivered"
+    return pr_url
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +261,7 @@ def run_on_issue(
     config_path: str | None = None,
     create_pr: bool = True,
     base_branch: str = "main",
+    verify_command: str | None = None,
 ) -> int:
     """
     拉取 Issue，运行 agent，创建 PR。
@@ -182,11 +271,19 @@ def run_on_issue(
     """
     from config.schema import load_config
     from agent.core import AgentConfig
-    from agent.runner import ExecutionRunner, RunRequest
+    from agent.runner import AcceptanceContract, ExecutionRunner, RunRequest
     from agent.task import Task, infer_completion_requirements
     from llm.router import create_backend_from_config
 
     config = load_config(config_path)
+    if create_pr and not verify_command:
+        click.echo("Error: automatic PR requires --verify-command for independent acceptance.", err=True)
+        return 1
+    try:
+        verifier = _command_verifier(verify_command) if create_pr else None
+    except ValueError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        return 1
 
     # 1. 拉取 Issue
     click.echo(f"\nFetching issue #{issue_number} from {repo_name} ...")
@@ -206,9 +303,20 @@ def run_on_issue(
         click.echo(f"Error: {e}", err=True)
         return 1
 
+    if create_pr:
+        # 自动交付只接受干净基线，防止把用户运行前的修改一并提交。
+        clean_ok, dirty = _run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=local_path)
+        if not clean_ok or dirty:
+            click.echo("Error: repository must be clean before automatic issue delivery.", err=True)
+            return 1
+
     # 3. 创建工作分支
     branch = f"agent/fix-issue-{issue_number}-{int(time.time())}"
-    create_branch(local_path, branch)
+    try:
+        create_branch(local_path, branch)
+    except RuntimeError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        return 1
     click.echo(f"  Branch: {branch}")
 
     # 4. 构建 agent
@@ -226,7 +334,12 @@ def run_on_issue(
         return 1
 
     from entry.cli import _build_registry
-    registry = _build_registry(config)
+    # GitHub Issue 的所有仓库工具默认在目标仓库执行，避免误用 Forge 进程目录。
+    registry = _build_registry(config, worktree_path=local_path, workspace=local_path)
+    if create_pr:
+        # 自动交付层统一负责提交，Agent 不得在独立验收前改变 Git 基线。
+        registry._tools.pop("git_add", None)
+        registry._tools.pop("git_commit", None)
 
     agent_config = AgentConfig(
         max_steps=config.agent.max_steps,
@@ -246,15 +359,17 @@ def run_on_issue(
     # 5. 运行 agent
     click.echo(f"\nRunning agent on issue #{issue_number} ...")
     t0 = time.time()
+    acceptance = AcceptanceContract(require_changes=require_changes, require_tests=require_tests, verifier=verifier)
     result = ExecutionRunner(
         backend=backend,
         registry=registry,
         config=agent_config,
         log_dir=config.agent.log_dir,
-    ).run(RunRequest(task=task))
+    ).run(RunRequest(task=task, acceptance=acceptance))
 
     elapsed = time.time() - t0
     click.echo(f"  Status : {result.status.value}")
+    click.echo(f"  Acceptance: {result.acceptance_status}")
     click.echo(f"  Steps  : {result.steps_taken}")
     click.echo(f"  Tokens : {result.total_tokens:,}")
     click.echo(f"  Time   : {elapsed:.1f}s")
@@ -263,17 +378,8 @@ def run_on_issue(
         click.echo(f"  Agent did not complete the task.", err=True)
         return 1
 
-    # 6. Push 分支
+    # 6. 独立验收通过后才进入确定性交付
     if create_pr:
-        click.echo("\nPushing branch ...")
-        try:
-            push_branch(local_path, branch)
-        except RuntimeError as e:
-            click.echo(f"Warning: push failed: {e}", err=True)
-            click.echo("Changes are committed locally. Push manually to create a PR.")
-            return 0
-
-        # 7. 创建 PR
         pr_title = f"[Agent] Fix issue #{issue_number}: {title}"
         pr_body = (
             f"Fixes #{issue_number}\n\n"
@@ -281,18 +387,15 @@ def run_on_issue(
             f"## Summary\n{result.summary}\n\n"
             f"## Task\n{description[:500]}"
         )
-        try:
-            pr_url = create_pull_request(
-                repo_name=repo_name,
-                branch=branch,
-                title=pr_title,
-                body=pr_body,
-                base=base_branch,
-            )
+        pr_url = deliver_pull_request(
+            result, local_path, branch, f"fix: resolve issue #{issue_number}", repo_name,
+            pr_title, pr_body, base_branch,
+        )
+        if pr_url:
             click.echo(f"\n✓ PR created: {pr_url}\n")
-        except Exception as e:
-            click.echo(f"Warning: PR creation failed: {e}", err=True)
-            click.echo(f"Branch pushed. Create PR manually from branch: {branch}")
+        else:
+            click.echo(f"Delivery stopped: {result.delivery_status}. Local artifact: {local_path}", err=True)
+            return 1
 
     return 0
 
@@ -311,6 +414,7 @@ def run_on_issue(
 @click.option("--config", "-c", default=None, help="Config YAML path")
 @click.option("--no-pr", is_flag=True, help="Skip PR creation")
 @click.option("--base-branch", default="main", help="Base branch for PR (default: main)")
+@click.option("--verify-command", default=None, help="Independent acceptance command required for automatic PR")
 @click.option("--verbose", "-v", is_flag=True)
 def main(
     repo: str,
@@ -319,6 +423,7 @@ def main(
     config: str | None,
     no_pr: bool,
     base_branch: str,
+    verify_command: str | None,
     verbose: bool,
 ) -> None:
     """Run the coding agent on a GitHub issue and create a PR."""
@@ -333,6 +438,7 @@ def main(
         config_path=config,
         create_pr=not no_pr,
         base_branch=base_branch,
+        verify_command=verify_command,
     ))
 
 

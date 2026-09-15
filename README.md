@@ -57,6 +57,14 @@ CLI / Chat / HTTP API / GitHub Issue
 生命周期绑定；路径和命令权限在执行器边界统一收口。EventLog 是审计事实来源，
 隔离模式可将新增事件转发到 AgentBus，供 CLI、SSE 或其它订阅者消费。
 
+### 下一轮准备边界
+
+`prepare_next_turn` 是同步 `Agent.run()` 的 turn 间策略插槽。第一次模型调用前不执行；
+只有当前 turn 已完成且仍需继续时，才在下一次 `_build_messages()` 前同步执行。此时本轮
+工具 Observation 已进入 History，回调可以注入下一轮消息或通过
+`PrepareNextTurnResult(refresh_repo_map=True)` 请求全量刷新 Repo Map。FINISH、GIVE_UP、
+取消和最大步数结束后不会额外执行；回调异常会终止当前 Run 并写入失败 Trace。
+
 ## 项目结构
 
 下面的结构来自当前仓库的 `tree -a` 输出。省略 `.git/` 和 `tests/` 内部文件，

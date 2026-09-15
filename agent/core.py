@@ -68,9 +68,10 @@ class PrepareNextTurnContext:
 
 @dataclass(frozen=True)
 class PrepareNextTurnResult:
-    """允许 prepare_next_turn 注入下一轮可见的消息。"""
+    """允许 prepare_next_turn 注入消息或请求刷新下一轮 Repo Map。"""
 
     messages: tuple[LLMMessage, ...] = ()
+    refresh_repo_map: bool = False  # True 时让下一次消息组装重新扫描当前仓库
 
 PrepareNextTurn = Callable[
     [PrepareNextTurnContext],
@@ -245,71 +246,10 @@ class Agent:
                     usage=usage.snapshot(),
                 )
 
-            if step > 1 and self._cfg.prepare_next_turn is not None:
-                prepare_started = time.perf_counter()
-                prepare_span = log.log_trace(
-                    EventType.PREPARE_NEXT_TURN_STARTED,
-                    step,
-                )
-                context = PrepareNextTurnContext(
-                    task=task,
-                    step=step,
-                    history=history,
-                    repo_map=repo_map,
-                    token_budget=token_budget,
-                    cancel_event=self._cfg.cancel_event,
-                    event_log=log,
-                )
-
-                try:
-                    prepared = self._cfg.prepare_next_turn(context)
-                except Exception as exc:
-                    log.log_trace(
-                        EventType.PREPARE_NEXT_TURN_FAILED,
-                        step,
-                        span_id=prepare_span,
-                        duration_ms=(time.perf_counter() - prepare_started) * 1000,
-                        error_type=type(exc).__name__,
-                    )
-                    reason = f"prepare_next_turn failed: {type(exc).__name__}: {exc}"
-                    logger.exception("prepare_next_turn failed before step %d", step)
-                    log.log_task_failed(steps=step - 1, reason=reason)
-                    return RunResult(
-                        task_id=task.task_id,
-                        status=RunStatus.FAILED,
-                        summary=reason,
-                        steps_taken=step - 1,
-                        total_tokens=total_tokens,
-                        usage=usage.snapshot(),
-                        error=reason,
-                    )
-
-                log.log_trace(
-                    EventType.PREPARE_NEXT_TURN_FINISHED,
-                    step,
-                    span_id=prepare_span,
-                    duration_ms=(time.perf_counter() - prepare_started) * 1000,
-                    injected_messages=len(prepared.messages) if prepared else 0,
-                )
-
-                if self._is_cancel_requested():
-                    reason = "Canceled by external request"
-                    logger.info(
-                        "Agent task %s canceled after prepare_next_turn",
-                        task.task_id,
-                    )
-                    log.log_task_failed(steps=step - 1, reason=reason)
-                    return RunResult(
-                        task_id=task.task_id,
-                        status=RunStatus.CANCELED,
-                        summary=reason,
-                        steps_taken=step - 1,
-                        total_tokens=total_tokens,
-                        usage=usage.snapshot(),
-                    )
-
-                if prepared is not None:
-                    history.add_many(list(prepared.messages))
+            if step > 1:
+                prepare_result = self._prepare_next_turn(task, step, history, repo_map, token_budget, log, total_tokens, usage)
+                if prepare_result is not None:
+                    return prepare_result
 
             logger.debug("Step %d/%d", step, task.max_steps)
 
@@ -539,6 +479,7 @@ class Agent:
                     if observation.is_success():
                         successful_write = True
                         last_write_step = step
+                        self.invalidate_repo_map_cache(task.repo_path)
                 else:
                     steps_without_edit += 1
                 
@@ -742,6 +683,51 @@ class Agent:
     # ------------------------------------------------------------------
     # 内部辅助
     # ------------------------------------------------------------------
+
+    def _prepare_next_turn(
+        self, task: Task, step: int, history: ConversationHistory, repo_map: RepoMap,
+        token_budget: TokenBudget, log: EventLog, total_tokens: int, usage: SessionUsage,
+    ) -> RunResult | None:
+        """在完整 turn 后集中处理下一轮准备、取消、Trace 和失败语义。"""
+        callback = self._cfg.prepare_next_turn
+        if callback is None:
+            return None
+        if self._is_cancel_requested():
+            reason = "Canceled by external request"
+            log.log_task_failed(steps=step - 1, reason=reason)
+            return RunResult(task.task_id, RunStatus.CANCELED, reason, step - 1, total_tokens, usage.snapshot())
+
+        prepare_started = time.perf_counter()
+        prepare_span = log.log_trace(EventType.PREPARE_NEXT_TURN_STARTED, step)
+        context = PrepareNextTurnContext(task, step, history, repo_map, token_budget, self._cfg.cancel_event, log)
+        try:
+            prepared = callback(context)
+        except Exception as exc:
+            log.log_trace(
+                EventType.PREPARE_NEXT_TURN_FAILED, step, span_id=prepare_span,
+                duration_ms=(time.perf_counter() - prepare_started) * 1000, error_type=type(exc).__name__,
+            )
+            reason = f"prepare_next_turn failed: {type(exc).__name__}: {exc}"
+            logger.exception("prepare_next_turn failed before step %d", step)
+            log.log_task_failed(steps=step - 1, reason=reason)
+            return RunResult(task.task_id, RunStatus.FAILED, reason, step - 1, total_tokens, usage.snapshot(), error=reason)
+
+        refreshed = bool(prepared and prepared.refresh_repo_map)
+        if refreshed:
+            self.invalidate_repo_map_cache(task.repo_path)
+        log.log_trace(
+            EventType.PREPARE_NEXT_TURN_FINISHED, step, span_id=prepare_span,
+            duration_ms=(time.perf_counter() - prepare_started) * 1000,
+            injected_messages=len(prepared.messages) if prepared else 0, repo_map_refreshed=refreshed,
+        )
+        if self._is_cancel_requested():
+            reason = "Canceled by external request"
+            logger.info("Agent task %s canceled after prepare_next_turn", task.task_id)
+            log.log_task_failed(steps=step - 1, reason=reason)
+            return RunResult(task.task_id, RunStatus.CANCELED, reason, step - 1, total_tokens, usage.snapshot())
+        if prepared is not None:
+            history.add_many(list(prepared.messages))
+        return None
 
     def _build_messages(
         self,

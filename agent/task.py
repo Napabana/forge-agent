@@ -280,7 +280,9 @@ class RunResult:
     error: str | None = None            # status == FAILED 时的原因
     worktree: "WorktreeArtifact | None" = None
     trace_path: str | None = None
-    delivery_status: str = "not_requested"
+    acceptance_status: str = "not_requested"  # Runner 独立验收状态，与 Agent 终态分开
+    acceptance_error: str | None = None         # 独立验收失败原因
+    delivery_status: str = "not_requested"     # commit/push/PR 交付状态
 
     def __post_init__(self) -> None:
         if self.usage.total_tokens:

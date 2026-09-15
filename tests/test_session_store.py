@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from multiprocessing import get_context
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,20 @@ def _session(
     )
 
 
+def _save_session_in_process(root, session_id, title, ready, release, outcomes):
+    """独立进程先加载相同 revision，收到统一信号后再竞争保存。"""
+    store = JsonChatSessionStore(root)
+    state = store.load(session_id)
+    state.title = title
+    ready.put(title)
+    release.wait()
+    try:
+        store.save(state)
+        outcomes.put("saved")
+    except ChatSessionConflict:
+        outcomes.put("conflict")
+
+
 def test_json_store_round_trip_and_latest(tmp_path):
     store = JsonChatSessionStore(tmp_path / "logs" / "chat")
     state = store.create(tmp_path)
@@ -81,6 +96,25 @@ def test_stale_session_save_is_rejected(tmp_path):
         store.save(stale)
 
     assert store.load(state.session_id).title == "first writer"
+
+
+def test_two_processes_cannot_overwrite_the_same_session_revision(tmp_path):
+    store = JsonChatSessionStore(tmp_path / "logs" / "chat")
+    state = store.create(tmp_path)
+    context = get_context("spawn")
+    ready, outcomes, release = context.Queue(), context.Queue(), context.Event()
+    processes = [context.Process(target=_save_session_in_process, args=(str(store.root), state.session_id, title, ready, release, outcomes)) for title in ("first process", "second process")]
+
+    for process in processes:
+        process.start()
+    assert {ready.get(timeout=10), ready.get(timeout=10)} == {"first process", "second process"}
+    release.set()
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+
+    assert sorted((outcomes.get(timeout=10), outcomes.get(timeout=10))) == ["conflict", "saved"]
+    assert store.load(state.session_id).title in {"first process", "second process"}
 
 
 def test_v1_session_is_migrated_on_read(tmp_path):
