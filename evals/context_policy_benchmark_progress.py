@@ -14,7 +14,46 @@ from evals import context_policy_benchmark as benchmark
 
 _ORIGINAL_EVALUATE = benchmark._evaluate_case_variant
 _ORIGINAL_TRIM_HISTORY = TokenBudget.trim_history
+_ORIGINAL_LOAD_MANIFEST = benchmark.load_manifest
 _HEARTBEAT_SECONDS = 10.0
+_PLAN: list[tuple[str, str]] = []
+_CASE_FILTER: tuple[str, ...] = ()
+_VARIANT_FILTER: tuple[str, ...] = ()
+_STATE: dict[str, Any] = {
+    "index": 0,
+    "current": None,
+    "current_started": None,
+    "trim_calls": 0,
+}
+
+
+def _extract_filter_args() -> None:
+    """提取 progress CLI 自己的筛选参数，并从 argv 中移除后再交给原 benchmark CLI。"""
+    global _CASE_FILTER, _VARIANT_FILTER
+    cases: list[str] = []
+    variants: list[str] = []
+    forwarded = [sys.argv[0]]
+    index = 1
+    while index < len(sys.argv):
+        arg = sys.argv[index]
+        if arg in {"--case", "--variant"}:
+            if index + 1 >= len(sys.argv):
+                raise SystemExit(f"{arg} requires a value")
+            value = sys.argv[index + 1]
+            if arg == "--case":
+                cases.append(value)
+            else:
+                variants.append(value)
+            index += 2
+            continue
+        forwarded.append(arg)
+        index += 1
+    unknown_variants = sorted(set(variants) - set(benchmark._VARIANTS))
+    if unknown_variants:
+        raise SystemExit(f"unknown --variant: {', '.join(unknown_variants)}")
+    _CASE_FILTER = tuple(dict.fromkeys(cases))
+    _VARIANT_FILTER = tuple(dict.fromkeys(variants))
+    sys.argv[:] = forwarded
 
 
 def _manifest_path_from_argv() -> Path:
@@ -25,22 +64,40 @@ def _manifest_path_from_argv() -> Path:
     return benchmark._MANIFEST
 
 
+def _filtered_manifest(path: str | Path = benchmark._MANIFEST) -> dict[str, Any]:
+    """按 case/variant 过滤 manifest；fixture 本身不修改，便于做低成本 pilot。"""
+    data = _ORIGINAL_LOAD_MANIFEST(path)
+    available_cases = {str(case["id"]) for case in data["cases"]}
+    unknown_cases = sorted(set(_CASE_FILTER) - available_cases)
+    if unknown_cases:
+        raise ValueError(f"unknown benchmark case: {', '.join(unknown_cases)}")
+
+    selected_cases: list[dict[str, Any]] = []
+    for original in data["cases"]:
+        case_id = str(original["id"])
+        if _CASE_FILTER and case_id not in _CASE_FILTER:
+            continue
+        case = dict(original)
+        variants = tuple(case.get("applicable_variants", benchmark._VARIANTS))
+        if _VARIANT_FILTER:
+            variants = tuple(variant for variant in variants if variant in _VARIANT_FILTER)
+        if not variants:
+            continue
+        case["applicable_variants"] = list(variants)
+        selected_cases.append(case)
+
+    if not selected_cases:
+        raise ValueError("benchmark filters selected no case-variant runs")
+    return {**data, "cases": selected_cases}
+
+
 def _build_plan() -> list[tuple[str, str]]:
-    data = benchmark.load_manifest(_manifest_path_from_argv())
+    data = _filtered_manifest(_manifest_path_from_argv())
     plan: list[tuple[str, str]] = []
     for case in data["cases"]:
         for variant in case.get("applicable_variants", benchmark._VARIANTS):
             plan.append((str(case["id"]), str(variant)))
     return plan
-
-
-_PLAN = _build_plan()
-_STATE: dict[str, Any] = {
-    "index": 0,
-    "current": None,
-    "current_started": None,
-    "trim_calls": 0,
-}
 
 
 def _print(message: str = "") -> None:
@@ -162,15 +219,25 @@ def _evaluate_with_progress(
 
 
 def main() -> None:
+    global _PLAN
+    _extract_filter_args()
+    _PLAN = _build_plan()
+    _STATE["index"] = 0
     _print("Context Policy B1 benchmark（可观察模式）")
     _print(f"共 {len(_PLAN)} 个 case-variant replay；semantic mode/输出参数沿用原 benchmark CLI。")
+    if _CASE_FILTER:
+        _print(f"case 筛选: {', '.join(_CASE_FILTER)}")
+    if _VARIANT_FILTER:
+        _print(f"variant 筛选: {', '.join(_VARIANT_FILTER)}")
     _print("每项会显示当前阶段、耗时、关键 token 指标、已完成和下一项。")
     _print(f"final trim 超过 {_HEARTBEAT_SECONDS:.0f}s 时，每 {_HEARTBEAT_SECONDS:.0f}s 输出一次心跳。")
+    benchmark.load_manifest = _filtered_manifest
     benchmark._evaluate_case_variant = _evaluate_with_progress
     TokenBudget.trim_history = _trim_history_with_progress
     try:
         benchmark.main()
     finally:
+        benchmark.load_manifest = _ORIGINAL_LOAD_MANIFEST
         benchmark._evaluate_case_variant = _ORIGINAL_EVALUATE
         TokenBudget.trim_history = _ORIGINAL_TRIM_HISTORY
 
