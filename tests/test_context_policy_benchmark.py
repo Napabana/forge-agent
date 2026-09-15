@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from evals.context_policy_benchmark import load_manifest, run_benchmark
 
 
@@ -17,6 +19,24 @@ EXPECTED_CASES = {
 }
 
 
+@pytest.fixture(scope="module")
+def context_policy_replay(tmp_path_factory: pytest.TempPathFactory):
+    """完整 7×3 replay 在本测试模块只执行一次，后续断言共享结果。"""
+    output = tmp_path_factory.mktemp("context-policy-b1") / "results"
+    report = run_benchmark(
+        repo=Path(__file__).resolve().parents[1],
+        output=output,
+        semantic_mode="fixture",
+        allow_dirty=True,
+    )
+    rows = [
+        json.loads(line)
+        for line in (output / "raw.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    return output, report, rows
+
+
 def test_context_policy_manifest_has_frozen_cases() -> None:
     manifest = load_manifest()
     assert {case["id"] for case in manifest["cases"]} == EXPECTED_CASES
@@ -25,20 +45,8 @@ def test_context_policy_manifest_has_frozen_cases() -> None:
     assert manifest["defaults"]["keep_recent_tokens"] == 640
 
 
-def test_context_policy_fixture_replay_contracts(tmp_path: Path) -> None:
-    output = tmp_path / "results"
-    report = run_benchmark(
-        repo=Path(__file__).resolve().parents[1],
-        output=output,
-        semantic_mode="fixture",
-        allow_dirty=True,
-    )
-
-    rows = [
-        json.loads(line)
-        for line in (output / "raw.jsonl").read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+def test_context_policy_fixture_replay_contracts(context_policy_replay) -> None:
+    output, report, rows = context_policy_replay
     assert len(rows) == len(EXPECTED_CASES) * 3
     assert report["rows"] == len(rows)
     assert (output / "metadata.json").exists()
@@ -89,14 +97,8 @@ def test_context_policy_fixture_replay_contracts(tmp_path: Path) -> None:
     assert dirty["passed"] is True
 
 
-def test_context_policy_report_contains_three_variants(tmp_path: Path) -> None:
-    output = tmp_path / "results"
-    report = run_benchmark(
-        repo=Path(__file__).resolve().parents[1],
-        output=output,
-        semantic_mode="fixture",
-        allow_dirty=True,
-    )
+def test_context_policy_report_contains_three_variants(context_policy_replay) -> None:
+    output, report, _ = context_policy_replay
     assert set(report["aggregate"]) == {
         "budget_trim_only",
         "deterministic_pruning",
