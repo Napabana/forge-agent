@@ -97,7 +97,7 @@ def test_query_aware_ranking_improves_content_only_history_case(tmp_path):
         encoding="utf-8",
     )
     (repo / "core.py").write_text(
-        "\n".join(f"class Service{i}: pass" for i in range(12)) + "\n",
+        "\n".join(f"class Service{i}: pass" for i in range(8)) + "\n",
         encoding="utf-8",
     )
     _commit(repo, "base")
