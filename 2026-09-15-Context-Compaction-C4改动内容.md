@@ -163,9 +163,9 @@ C4 review 修复完成点：
 
 ## 验证状态
 
-当前 ChatGPT 执行环境无法运行用户 WSL venv；GitHub 当前 commit 也没有 CI status，因此不能声称 pytest 已通过。
+C4 已由用户本地 WSL 环境验收通过。
 
-用户 pull 后先运行：
+已通过：
 
 ```bash
 python -m pytest -q \
@@ -173,7 +173,7 @@ python -m pytest -q \
   tests/test_compaction.py
 ```
 
-再跑受真实 Chat wiring / Session lifecycle 影响的回归：
+以及：
 
 ```bash
 python -m pytest -q \
@@ -182,7 +182,7 @@ python -m pytest -q \
   tests/test_day2.py
 ```
 
-只有两组都真实通过后，C4 才标记完成。
+两组均通过，C4 正式完成，可以进入 C5 Structured Compaction。
 
 ## 已知边界
 
