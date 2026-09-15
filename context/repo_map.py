@@ -33,6 +33,15 @@ _FUNC_NODES = frozenset({
 })
 
 _IDENTIFIER_RE = re.compile(r"\b\w+\b")
+_CAMEL_BOUNDARY_RE = re.compile(
+    r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
+)
+_QUERY_STOPWORDS = frozenset({
+    "a", "an", "and", "or", "the", "to", "of", "in", "on", "for", "with",
+    "by", "from", "into", "via", "feat", "fix", "fixed", "chore", "refactor",
+    "update", "updated", "add", "added", "complete", "completed", "change",
+    "changes",
+})
 _CLASS_NODES = frozenset({
     "class_definition", "class_declaration", "struct_item", "impl_item",
     "interface_declaration",
@@ -385,38 +394,84 @@ def _apply_reference_scores(files: list[FileInfo]) -> None:
                 files_by_path[defining_path].reference_count += occurrences
 
 
+def _stem_term(term: str) -> str:
+    """Apply tiny deterministic stemming for common task/code vocabulary."""
+
+    if len(term) > 5 and term.endswith("ies"):
+        return term[:-3] + "y"
+    if len(term) > 5 and term.endswith("ing"):
+        root = term[:-3]
+        if len(root) >= 2 and root[-1] == root[-2]:
+            root = root[:-1]
+        return root
+    if len(term) > 4 and term.endswith("s") and not term.endswith("ss"):
+        return term[:-1]
+    return term
+
+
+def _normalized_terms(text: str) -> set[str]:
+    """Split snake/camel identifiers and normalize lightweight word forms."""
+
+    terms: set[str] = set()
+    for raw in _IDENTIFIER_RE.findall(text or ""):
+        expanded = _CAMEL_BOUNDARY_RE.sub(" ", raw.replace("_", " "))
+        for piece in expanded.split():
+            term = _stem_term(piece.lower())
+            if len(term) >= 2 and term not in _QUERY_STOPWORDS:
+                terms.add(term)
+    return terms
+
+
 def _query_relevance(
     files: list[FileInfo],
     query: str | None,
 ) -> dict[Path, float]:
-    """Return deterministic path/symbol/keyword relevance boosts."""
+    """Return query boosts from path, symbol, and already-scanned source text.
 
-    terms = {term.lower() for term in _IDENTIFIER_RE.findall(query or "") if len(term) >= 2}
+    Query terms are normalized for snake_case/camelCase and a few common
+    inflections.  Rare terms receive larger boosts than repository-wide words,
+    while path/symbol matches stay stronger than plain source-text matches.  The
+    file contents used here are the in-memory scan snapshot, so ranking performs
+    no additional filesystem reads.
+    """
+
+    terms = _normalized_terms(query or "")
     if not terms:
         return {}
 
-    scores: dict[Path, float] = {}
-    matched_symbols: set[str] = set()
+    features: dict[Path, tuple[set[str], set[str], set[str]]] = {}
+    document_frequency = Counter()
     for file_info in files:
-        path_text = file_info.path.as_posix().lower()
-        path_parts = {part.lower() for part in _IDENTIFIER_RE.findall(path_text)}
-        symbol_names = {symbol.name.lower() for symbol in file_info.symbols}
-        path_hits = terms & path_parts
-        symbol_hits = terms & symbol_names
-        substring_hits = {term for term in terms if term in path_text}
-        score = len(path_hits) * 3.0 + len(symbol_hits) * 4.0
-        score += len(substring_hits - path_hits) * 1.0
-        if score:
-            scores[file_info.path] = score
-            matched_symbols.update(symbol_hits)
+        path_terms = _normalized_terms(file_info.path.as_posix())
+        symbol_terms: set[str] = set()
+        for symbol in file_info.symbols:
+            symbol_terms.update(_normalized_terms(symbol.name))
+        content_terms = _normalized_terms(file_info._content) if file_info._content else set()
+        features[file_info.path] = (path_terms, symbol_terms, content_terms)
+        for term in terms & (path_terms | symbol_terms | content_terms):
+            document_frequency[term] += 1
 
-    # Files using a directly matched symbol are useful dependency neighbours.
+    scores: dict[Path, float] = {}
+    total_files = max(1, len(files))
     for file_info in files:
-        if matched_symbols and file_info._content:
-            identifiers = {name.lower() for name in _IDENTIFIER_RE.findall(file_info._content)}
-            neighbour_hits = matched_symbols & identifiers
-            if neighbour_hits:
-                scores[file_info.path] = scores.get(file_info.path, 0.0) + len(neighbour_hits)
+        path_terms, symbol_terms, content_terms = features[file_info.path]
+        path_hits = terms & path_terms
+        symbol_hits = terms & symbol_terms
+        content_hits = terms & content_terms
+        if not (path_hits or symbol_hits or content_hits):
+            continue
+
+        score = 0.0
+        for term in path_hits:
+            idf = math.log((1 + total_files) / (1 + document_frequency[term])) + 1.0
+            score += 24.0 * idf
+        for term in symbol_hits:
+            idf = math.log((1 + total_files) / (1 + document_frequency[term])) + 1.0
+            score += 20.0 * idf
+        for term in content_hits - path_hits - symbol_hits:
+            idf = math.log((1 + total_files) / (1 + document_frequency[term])) + 1.0
+            score += 6.0 * idf
+        scores[file_info.path] = score
     return scores
 
 
