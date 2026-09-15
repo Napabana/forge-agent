@@ -1,7 +1,7 @@
 {
   "metadata": {
-    "generated_at": "2026-09-15T06:38:03.570875+00:00",
-    "runner_revision": "b74cba4b62a296cfdae4ff2db1f224c713a5b9f3",
+    "generated_at": "2026-09-15T06:59:22.265372+00:00",
+    "runner_revision": "30036d5028ad904fbecc37eef05fe0e4fbbad0e1",
     "working_tree_dirty": false,
     "python": "3.11.0rc1",
     "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.35"
@@ -19,13 +19,13 @@
     },
     "query_aware": {
       "cases": 12,
-      "recall_at_1": 0.0,
-      "recall_at_3": 0.0,
-      "recall_at_5": 0.0,
-      "mrr": 0.10348124098124098,
-      "mean_target_rank": 29.08730158730159,
-      "budget_target_recall": 0.36491402116402116,
-      "mean_map_tokens": 10149.25
+      "recall_at_1": 0.08333333333333333,
+      "recall_at_3": 0.20634920634920634,
+      "recall_at_5": 0.2561177248677249,
+      "mrr": 0.31875,
+      "mean_target_rank": 20.818121693121693,
+      "budget_target_recall": 0.6352513227513228,
+      "mean_map_tokens": 10111.333333333334
     }
   },
   "skipped_cases": [],
@@ -33,16 +33,16 @@
     "baseline": {
       "implementation_commit": "cdb02caa92046da906c148e470bebff00d151106",
       "runs": 5,
-      "median_seconds": 33.10253047699916,
-      "p95_seconds": 36.92180570100027
+      "median_seconds": 35.11762723399988,
+      "p95_seconds": 35.84220637599992
     },
     "optimized": {
       "implementation_commit": "08ea5f5fc22a67fc58da70786ee439ea255a3189",
       "runs": 5,
-      "median_seconds": 0.4414685150004516,
-      "p95_seconds": 0.4793633059998683
+      "median_seconds": 0.4928428059993166,
+      "p95_seconds": 0.5501182220004921
     },
     "semantic_equivalent": true,
-    "speedup": 74.98276627261924
+    "speedup": 71.25522946975629
   }
 }
