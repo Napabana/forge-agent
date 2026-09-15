@@ -1,48 +1,100 @@
-# Context Compaction C5 设计收口
+# Context Compaction C5 设计收口（Hybrid v2）
 
 日期：2026-09-15
 
 ## 1. 目标
 
-C5 将 C4 Stage B 的 `extractive-v1` 自由文本截断替换为 **deterministic structured compaction baseline**。
+C5 将 C4 Stage B 的 `extractive-v1` 替换为 **Hybrid Structured Compaction**：
 
-C5 不引入额外 LLM summary call，不改变 canonical `ConversationHistory`，不引入 context recall，不把 summary 当作 Repository 当前事实源。
+- 能从 Forge 协议事实确定的信息，由程序 deterministic 提取；
+- 必须理解自然语言语义的信息，只在真正发生 Stage B 压缩时额外调用一次当前 LLM；
+- 不用中英文关键词正则去猜用户的 Goal / Hard Constraints / Decisions；
+- 不在每轮 Agent step 注入 memory-maintenance prompt；
+- canonical `ConversationHistory` / EventLog 仍是事实与审计源，summary 只是 model-visible Context State；
+- semantic compaction 真正开始时，通过事件链向前端显示 `[压缩上下文]`。
 
-最终链路：
+核心原则：
+
+> 能从协议事实确定的，绝不让 LLM 猜；必须理解自然语言语义的，绝不用 regex 硬猜。
+
+## 2. 最终链路
 
 ```text
 canonical history
--> full request pressure
--> Stage A deterministic tool-output pruning
--> recompute pressure
-   -> pressure below threshold: pruning-only model view
-   -> still high:
-      deterministic structured state
-      -> render bounded structured summary
-      -> recent raw tail
-      -> next model request
+      |
+      v
+full request pressure
+      |
+      | pressure < threshold
+      +----------------------> no-op
+      |
+      v
+Stage A deterministic tool-output pruning (C4)
+      |
+      v
+recompute pressure
+      |
+      | pressure < threshold
+      +----------------------> pruning-only model view
+      |
+      v
+Stage B semantic compaction trigger
+      |
+      +--> EventLog: CONTEXT_COMPACTION_STARTED
+      |        |
+      |        +--> Chat/CLI/front-end 显示: [压缩上下文]
+      |
+      +--> deterministic evidence
+      |
+      +--> curated multilingual semantic packet
+      |
+      +--> one internal structured LLM call
+      |
+      +--> validate semantic fields
+      |
+      +--> merge deterministic + semantic state
+      |
+      +--> bounded renderer
+      |
+      +--> active compacted view + recent/raw delta
+      |
+      v
+next normal Agent LLM request
 ```
 
-C5 只替换 Stage B，不改 C1~C4 已验收契约。
+Stage A pruning-only 不显示 `[压缩上下文]`。它是快速 deterministic cleanup；只有真正要发起额外 semantic summary LLM call 时显示，用户才能理解为什么当前回合出现短暂停顿和额外 token 消耗。
 
-## 2. 为什么不直接加 LLM summarizer
+## 3. 为什么必须是 Hybrid，而不是纯正则
 
-Pi 等 coding agent 已经使用固定结构的 compaction summary，例如 Goal、Constraints、Progress、Key Decisions、Next Steps、Critical Context，并保留 recent raw messages；同时还累计 read/modified files。
+中文/英文/混合语言用户约束无法靠有限关键词可靠识别。例如：
 
-Forge 第一版不直接照搬“再调用一次 LLM 做 summary”，原因是：
+```text
+core 最好先别碰，优先放到 context 层，实在不行再改 Runner。
+```
 
-1. 目前还没有离线 bad case 证明 deterministic baseline 不够；
-2. 多一次 LLM 调用会引入成本、延迟、provider 差异和新的失败模式；
-3. Forge 已经有稳定的 Action / Observation 文本格式、`event_ref`、canonical history 与 append-only EventLog，可以先从这些确定性证据构造 state；
-4. Benchmark 需要先有可重复 baseline，之后才能判断 LLM semantic summary 是否真的带来收益。
+语义上包含：
 
-与 Pi 的重要差异：Pi 可以迭代更新 previous summary；Forge C5 仍坚持从完整 canonical history 重新生成 structured state，避免 summary-of-summary drift。
+- 暂不修改 `agent/core.py`；
+- 优先在 Context 层实现；
+- Runner 是 fallback。
 
-## 3. StructuredContextState
+它不一定包含 `must` / `do not` / `必须` / `不要` 等显式 marker。
 
-新增独立 Context state，不把摘要重新写回 history。
+因此 C5 不再设计“English regex + Chinese regex”的 Hard Constraint extractor。Regex 只用于解析 Forge 自己定义的稳定协议文本，例如：
 
-第一版固定包含：
+```text
+Action: file_write
+Params: {"path": "context/compaction.py"}
+
+[Tool: file_write | SUCCESS]
+...
+```
+
+自然语言语义交给 LLM；Tool/Repo/Test 事实交给 deterministic code。
+
+## 4. StructuredContextState
+
+最终 model-visible state 固定为：
 
 ```text
 Goal
@@ -63,374 +115,493 @@ Historical References
 
 ```python
 @dataclass(frozen=True)
-class StructuredContextState:
-    goal: str
+class SemanticContextFields:
     hard_constraints: tuple[str, ...]
     decisions: tuple[str, ...]
     completed: tuple[str, ...]
     in_progress: tuple[str, ...]
     blocked: tuple[str, ...]
+    next_actions: tuple[str, ...]
+
+@dataclass(frozen=True)
+class DeterministicEvidence:
     unresolved_failures: tuple[str, ...]
     verification_state: tuple[str, ...]
     read_paths: tuple[str, ...]
     modified_paths: tuple[str, ...]
-    next_actions: tuple[str, ...]
     historical_references: tuple[str, ...]
+
+@dataclass(frozen=True)
+class StructuredContextState:
+    goal: str
+    semantic: SemanticContextFields
+    evidence: DeterministicEvidence
 ```
 
-所有字段都由 deterministic extractor 产生；没有证据的字段写明确的 `None deterministically identified` / `Unknown`，不能靠猜补齐。
+`goal` 直接使用当前 `PrepareNextTurnContext.task.description`，不让 summary model 重写当前任务目标。
 
-## 4. 证据来源与可信度
+## 5. Deterministic Evidence：不交给 LLM 判断
 
-### 4.1 Goal
+### 5.1 HistoryEvidence 共享 parser
 
-权威来源：当前 `PrepareNextTurnContext.task.description`。
-
-Chat 每轮的 `Task.description` 就是本轮 user input，因此 Goal 不需要从历史文本猜。
-
-### 4.2 Hard Constraints
-
-只从 user-authored、非 Tool Observation 的历史消息中提取。
-
-第一版采用保守 marker 规则识别显式约束，例如：
-
-- English：`must`、`must not`、`do not`、`don't`、`never`、`only`、`without`、`avoid`、`preserve`、`keep`、`requirement`、`constraint` 等；
-- 中文：`必须`、`不要`、`不得`、`不能`、`只`、`仅`、`避免`、`保留`、`不修改`、`不要改`、`不允许`、`要求` 等。
-
-规则宁可略保守多保留，也不能为了“更像摘要”删掉早期 hard constraint。
-
-去重保持首次出现顺序；不把 Tool Observation、Reflection 注入文本误当成用户约束。
-
-### 4.3 Decisions
-
-C5 不把 assistant `Thought:` 当作可靠事实决策源。
-
-第一版只记录可以从已执行 Action 证明的高置信度决策，例如：
-
-- `file_write(path=...)`：选择修改该文件；
-- `git_add(...)` / `git_commit(...)`：选择暂存/提交；
-- 其它无法确定为持久决策的 read/search/test Action 不进入 Decisions。
-
-这样避免把模型的探索性 reasoning 误写成既定决策。
-
-### 4.4 Progress / Completed
-
-只从“Action 与随后 Observation 工具名一致 + SUCCESS”的已执行 unit 中提取高置信度完成项。
-
-第一版主要记录：
-
-- successful `file_write`；
-- successful `git_add`；
-- successful `git_commit`；
-- round completion message 若在 old region 中存在，可作为历史完成证据，但不得覆盖 repo 当前事实。
-
-### 4.5 Progress / In Progress
-
-不从旧 history 猜当前正在做什么。
-
-默认写：
-
-```text
-Continue current Goal; use recent raw context as the current execution state.
-```
-
-recent raw tail 才是当前 turn 的主要连续状态源。
-
-### 4.6 Blocked 与 Unresolved Failures
-
-ERROR Observation 不能简单全部写成 unresolved。
-
-规则：
-
-1. 先从 old summarized region 收集 failure；
-2. 用 **完整 canonical / pruned full history（包括 recent tail）** 检查同一 Action fingerprint 是否后来成功；
-3. 如果后来成功，旧 failure 标记为 superseded，不进入 `Unresolved Failures`；
-4. 如果没有后续成功，保留 tool、关键 error 摘要、`event_ref`；
-5. `Blocked` 直接引用尚未解决的 failure，不额外发明 blocker。
-
-特殊验证工具 `test` / `pytest`：latest test observation 具有更高状态优先级，旧 test failure 在后续 test success 后视为 superseded。
-
-## 5. Verification State
-
-从完整 history 中找最新 `test` / `pytest` Observation；必要时也可识别明确执行 pytest 的 shell Action，但 V1 优先只处理专用 test tool，避免误判 shell。
-
-结构：
-
-```text
-PASS / FAIL / UNKNOWN
-historical detail
-source event_ref
-freshness warning
-```
-
-无论 PASS 还是 FAIL，都必须明确：
-
-> This is historical verification evidence, not authoritative current repository state. Re-run tests if current state matters.
-
-C5 不自动宣称最新 test 仍然有效，也不把 summary 变成测试真相源。
-
-## 6. Working Set
-
-从 Action `Params:` JSON 中确定性提取路径。
-
-第一版：
-
-Read / inspect paths：
-
-- `file_read.path`
-- `file_view.path`
-- `git_diff.path`
-- search/find 的显式 `path`（若存在）
-
-Modified paths：
-
-- successful `file_write.path`
-- successful `git_add.path` / files 参数（若工具 schema 提供）
-
-不从 shell command 自由文本猜修改文件；shell 修改无法稳定证明时不进入 modified set。
-
-保持首次出现顺序并去重。
-
-Working Set 渲染必须带 freshness guard：
-
-```text
-Historical working set only; re-read files/diff before relying on current contents.
-```
-
-## 7. Next Actions
-
-C5 不生成“智能计划”。
-
-第一版只给确定性安全 continuation：
-
-1. Continue the current Goal.
-2. Re-read current repository/test/diff state before relying on historical observations.
-3. Resolve any listed unresolved failures before declaring completion.
-
-若没有 unresolved failure，则第 3 条不输出。
-
-## 8. Historical References
-
-Summary 中保留关键 `event_ref`，用于审计定位；checkpoint 仍保存完整 `source_event_ids`。
-
-Model-visible summary 不需要列出所有 event id，避免 refs 本身占满 Context。
-
-优先保留：
-
-1. unresolved failures；
-2. latest verification；
-3. completed write/commit evidence；
-4. 其余 refs 只显示总数和 deterministic bounded sample。
-
-注意：C6 未实现前，`event_ref` 仍只是审计引用，不能表述为 Agent 可自主 recall。
-
-## 9. HistoryEvidence 共享解析层
-
-C4 的 `context/tool_pruning.py` 已经有 Action/Observation regex parser。C5 不应再复制第三套消息 grammar。
-
-建议新增：
-
-`context/history_evidence.py`
-
-提供：
+新增 `context/history_evidence.py`，统一解析 Forge 内部稳定 grammar：
 
 - `ParsedAction`
 - `ParsedObservation`
 - `parse_action_message()`
 - `parse_observation_message()`
+- `Params:` JSON parser
 - Action/Observation pair 校验
-- `Params:` JSON 解析
 - deterministic action fingerprint
 
-然后：
+`context/tool_pruning.py` 与 C5 共用该 parser，避免多套 grammar 漂移。
 
-- `context/tool_pruning.py` 改为复用该 parser；
-- `context/structured_compaction.py` 也复用同一 parser。
+### 5.2 Working Set
 
-这次 refactor 只统一解析契约，不改变 C4 pruning 规则。
+从 Action Params 确定性提取：
 
-## 10. Bounded Renderer
+Read / inspect：
 
-不能像旧 `_summary()` 一样最后直接 `[:limit]`，否则可能把结构截断在某个 section 中间。
+- `file_read.path`
+- `file_view.path`
+- `git_diff.path`
+- search/find 的显式 `path`
 
-C5 renderer 必须：
+Modified：
 
-1. 固定 section 顺序；
-2. 所有 section heading 必须存在；
-3. 全局受 `max_summary_chars` 限制；
-4. 优先级：Goal / Hard Constraints / Unresolved Failures / Verification / Working Set > Decisions / Progress > Historical References；
-5. 单条 item 可 deterministic 截断，但不能把整个高优先级 section 静默裁掉；
-6. 超出预算时写 `... additional items omitted deterministically`。
+- successful `file_write.path`
+- 可明确从 schema 得到的 git add/commit 路径
 
-默认仍沿用现有 `max_summary_chars=2000`，不在 C5 顺手扩大 summary 预算。
+不从 shell command 自由文本猜文件修改。
 
-## 11. Stage B 集成
+### 5.3 Verification State
 
-C4 Stage A 保持不变。
-
-若 pruning 后仍高 pressure：
+从完整 canonical history 判断最新 `test` / `pytest` Observation：
 
 ```text
-pruned full history
-    |
-    +-- old summarized region [0:tail_start)
-    |
-    +-- recent raw tail [tail_start:]
+PASS / FAIL / UNKNOWN
+source event_ref
+historical-only freshness warning
 ```
 
-Structured extractor：
+LLM semantic summary 无权覆盖 Verification State。
 
-- summary 内容主要来自 old summarized region；
-- supersession / Verification 判断允许观察完整 history；
-- Goal 来自当前 task.description；
-- renderer 生成 bounded Markdown；
-- model-visible message 仍使用现有 synthetic compaction marker，保持 provider 兼容；
-- recent raw tail 原样保留。
+### 5.4 Unresolved Failures
 
-`summary_method` 更新为：
+先从 old region 找 failure，再用完整 canonical history（包括 recent tail）判断是否被后续成功 supersede。
+
+特别是：
 
 ```text
-structured-deterministic-v1
+old: pytest FAILED
+recent: pytest PASSED
 ```
 
-`summary_hash` 对最终 structured summary text 计算。
+最终必须是 `PASS`，旧 failure 不进入 `Unresolved Failures`。
 
-`source_event_ids` 仍来自原 canonical dropped region，不因为 structured extraction 丢失审计覆盖。
+### 5.5 Historical References
 
-## 12. Freshness / Source-of-Truth 规则
+checkpoint 保存完整 `source_event_ids`；model-visible summary 只保留关键 bounded refs。
 
-Structured summary 顶部必须明确：
+C6 未实现前，`event_ref` 只是审计定位，不表示 Agent 能自主 recall。
+
+## 6. Semantic Summary：只处理必须理解自然语言的字段
+
+Semantic LLM 只负责：
+
+- Hard Constraints
+- Decisions
+- Completed（自然语言层面的已完成事项）
+- In Progress
+- Blocked（语义 blocker；最终仍与 deterministic failure 合并）
+- Next Actions
+
+它不负责：
+
+- 当前 Repo 内容；
+- 当前 git status/diff；
+- test PASS/FAIL 真值；
+- read/modified path 的事实判断；
+- event_ref 完整性。
+
+## 7. 不新增“任意文本 LLM API”，复用现有 Tool Calling 抽象
+
+C5 不新增 provider-specific JSON completion API。
+
+新增一个内部-only Tool Schema，例如：
+
+```text
+record_context_summary(
+  hard_constraints: string[],
+  decisions: string[],
+  completed: string[],
+  in_progress: string[],
+  blocked: string[],
+  next_actions: string[]
+)
+```
+
+`LLMSemanticSummarizer` 调用现有：
+
+```python
+backend.complete(messages, [record_context_summary_schema])
+```
+
+支持 Function Calling 的 backend 返回结构化 ToolCall params；不支持 Function Calling 的 OpenAI-compatible backend 已有文本 ToolCall fallback。
+
+这个 ToolCall **只作为 structured-output transport，不进入 ToolRegistry，也不真正执行任何 Tool**。
+
+必须校验：
+
+- action 类型是 `TOOL_CALL`；
+- tool name 正确；
+- params 字段类型正确；
+- 每个 list 有 item 上限；
+- 单 item 有长度上限；
+- 总 semantic output 有预算上限。
+
+不合法就走安全 fallback，不把 malformed summary 写入 checkpoint。
+
+## 8. Semantic 输入不是整份 raw history
+
+Context 已经高压时，再把整份 history 原样送给 summarizer 会重复制造大请求。
+
+C5 构造 curated semantic packet：
+
+1. 当前 `task.description`；
+2. old region 中所有 user-authored、非 Tool Observation 的自然语言消息（保留原语言）；
+3. recent tail 中 user-authored natural messages，仅用于判断旧约束/决策是否已被用户修改；
+4. deterministic evidence 的 compact representation；
+5. 必要的历史 round-complete 摘要（bounded）；
+6. 不发送 Repo Map、正常 Tool schemas、大块 Tool raw output、assistant exploration Thought 全文。
+
+因此中文、英文和混合语言都由模型理解，而不是正则分类。
+
+如果 semantic packet 自身超过 summary input budget：
+
+- 保证当前 Goal 和最近 user-authored messages；
+- old user messages 按消息边界 deterministic 截断；
+- deterministic evidence 始终保留高优先级项；
+- 记录输入被截断的 trace 字段；
+- 不拆 Action/Observation unit。
+
+## 9. Prompt 约束
+
+Semantic compaction system prompt 必须明确：
+
+- 只提取提供证据明确支持的事实；
+- 不推断当前 repository/test/git 状态；
+- 保留用户原始语言；
+- 如果用户后续修改早期约束，以后续明确指令为准；
+- 不把 assistant exploratory Thought 当成用户约束；
+- 必须调用 `record_context_summary` 一次；
+- 不输出额外 ToolCall。
+
+## 10. Merge 优先级
+
+最终 state 的优先级：
+
+```text
+Current task.description
+        > deterministic protocol evidence
+        > semantic extracted fields
+        > fallback excerpts
+```
+
+例如 semantic model 输出 `tests pass` 也不会进入 Verification State；Verification 始终由 deterministic evidence 覆盖。
+
+## 11. Active Compacted View：避免每一步多一次 summary LLM call
+
+semantic compaction 不能在每次 `prepare_next_turn` 都重新调用模型。
+
+`TraceableCompaction` 增加进程内 active state，例如：
+
+```python
+@dataclass(frozen=True)
+class ActiveCompactedView:
+    summary_text: str
+    source_end_index: int
+    source_prefix_hash: str
+    checkpoint_id: str
+```
+
+第一次 Stage B：
+
+```text
+canonical prefix -> semantic compaction -> active summary
+```
+
+后续 turn：
+
+```text
+active summary
++ canonical messages[source_end_index:]
+-> Stage A prune old delta where allowed
+-> pressure check
+```
+
+若仍低于 threshold：
+
+- 直接复用 active summary；
+- 不调用 semantic model；
+- 不生成新 semantic checkpoint。
+
+只有 active summary + raw delta 再次达到 threshold 时才重新 semantic compact。
+
+重新 compact 时仍从 canonical history 构造 curated semantic packet，**不把 previous summary 当输入事实源**，因此不形成 summary-of-summary drift。
+
+Resume 后 V1 不要求恢复 `summary_text`；首次再次高压时允许重新做一次 semantic compaction。后续 benchmark 再决定是否值得持久化 active summary。
+
+## 12. 前端可见 `[压缩上下文]`
+
+当前已有 `EventType.CONTEXT_COMPACTED`，它是在压缩成功后写入。semantic LLM call 可能有明显延迟，因此仅在成功后显示不够。
+
+C5 新增：
+
+```text
+CONTEXT_COMPACTION_STARTED = "context_compaction_started"
+CONTEXT_COMPACTION_FAILED  = "context_compaction_failed"
+```
+
+当 Stage A 后仍高压、准备真正发起 semantic summary LLM call 时：
+
+```python
+log.log_trace(
+    EventType.CONTEXT_COMPACTION_STARTED,
+    step,
+    mode="semantic",
+    pressure_ratio=...,
+    projected_input_tokens=...,
+)
+```
+
+当前 Chat frontend `entry/chat.py::_print_event_live()` 收到后只显示一行：
+
+```text
+[压缩上下文]
+```
+
+不打印内部 summary，不污染正常回答。
+
+外部 frontend / API 已经可以通过 EventLog / Runner `on_event` 收到该结构化事件，后续 UI 只需映射同一 event type。
+
+成功后继续记录现有 `CONTEXT_COMPACTED`，包含 checkpoint 和 token evidence；不再额外打印第二行，避免 UI 噪音。
+
+若 semantic summary 失败：
+
+- Trace 写 `CONTEXT_COMPACTION_FAILED`；
+- 前端可选显示 `[压缩上下文失败，使用安全回退]`；
+- canonical history 不变；
+- 不直接让 Agent task 因 summary API 失败而失败。
+
+## 13. Usage / Token accounting 必须计入 summary LLM call
+
+semantic summary 是真实 provider 调用，必须进入 Forge token usage。
+
+扩展：
+
+```python
+@dataclass(frozen=True)
+class PrepareNextTurnResult:
+    ...
+    additional_usage: tuple[TokenUsage, ...] = ()
+```
+
+Semantic summarizer 返回 `LLMResponse.usage`，`TraceableCompaction` 把它放进 `additional_usage`。
+
+Turn-boundary：
+
+- `agent/core.py::_prepare_next_turn()` 将 `additional_usage` 记录进当前 `SessionUsage`；
+- 正常下一次 Agent LLM call 后，`total_tokens = usage.total_tokens` 自动包含 summary call。
+
+Round-boundary：
+
+- `agent/runner.py::_prepare_shared_history_boundary()` 收集 preflight `additional_usage`；
+- `Agent.run()` 返回后 merge 到 `RunResult.usage`；
+- Chat session 聚合时因此不会漏记 compaction 成本。
+
+Trace 的 successful compaction payload 额外记录 `summary_usage`，benchmark 可区分 Agent 主调用和 compaction 调用成本。
+
+## 14. Safe fallback
+
+Semantic compaction 失败不能让整个 coding task 因 memory maintenance 直接失败。
+
+fallback 顺序：
+
+1. 若已有可复用 active compacted view，继续用 active summary + raw delta；
+2. 否则构造 `structured-fallback-v1`：
+   - current Goal；
+   - deterministic evidence；
+   - bounded user-authored raw excerpts（保留原语言，不做关键词分类）；
+3. 再由最终 TokenBudget trim 做硬兜底。
+
+fallback 不伪造 Hard Constraints/Decisions 分类；无法语义判断时保留 user excerpt 给主模型自己理解。
+
+## 15. Bounded Renderer
+
+最终 renderer 固定 section 顺序：
+
+1. Goal
+2. Hard Constraints
+3. Decisions
+4. Progress
+5. Unresolved Failures
+6. Verification State
+7. Working Set
+8. Next Actions
+9. Historical References
+
+所有 heading 必须存在。
+
+优先级：
+
+```text
+Goal / Hard Constraints / Unresolved Failures / Verification / Working Set
+> Decisions / Progress / Next Actions
+> Historical References
+```
+
+不能最后简单 `summary[:limit]`；按 item 分配预算并 deterministic 截断。
+
+顶部始终包含 freshness guard：
 
 ```text
 Historical compacted context. Canonical Session/EventLog remain the audit source.
 Repository files, git diff/status and test results may have changed; re-read/re-run when current truth matters.
 ```
 
-因此：
+## 16. Summary method
 
-- Repo 当前内容：repository/files 是权威源；
-- Git 当前状态：重新 `git status/diff`；
-- Tests 当前状态：重新运行 tests；
-- Summary 只描述历史执行证据。
+成功的 Hybrid summary：
 
-## 13. 失败与原子性
+```text
+structured-hybrid-v1
+```
 
-Structured extraction / rendering 全部是纯内存 deterministic 操作。
+Semantic call 失败后安全 fallback：
 
-只有在以下内容全部成功生成后才 append `CompactionEntry` / checkpoint：
+```text
+structured-fallback-v1
+```
 
-- structured state；
-- rendered summary；
-- summary hash；
-- projected-after pressure；
-- checkpoint payload。
+C4 pruning-only 仍保持：
 
-如果 structured builder 失败：
+```text
+summary_method="none"
+```
 
-- 不写半个 CompactionEntry；
-- 不写半 checkpoint；
-- canonical history 不变；
-- 优先返回 Stage A pruning view（若有）；否则让现有 final TokenBudget trim 兜底；
-- 不为了 summary 失败直接破坏整个 Session 可用性。
+## 17. 测试矩阵
 
-C5 不新增 provider 调用，因此无 summary API timeout/retry 问题。
+至少覆盖：
 
-## 14. 测试矩阵
+1. 中文隐式约束无需关键词正则，由 FakeSemanticSummarizer 正确进入 Hard Constraints；
+2. 英文/中文/混合语言 semantic fields 原样保留语言；
+3. malformed semantic ToolCall -> safe fallback；
+4. semantic model 试图写 Verification State 时不会覆盖 deterministic evidence；
+5. successful file_write -> modified path；
+6. old pytest fail + later pass -> PASS，旧 failure superseded；
+7. latest test fail -> FAIL；
+8. recent raw tail 不被 summary 改写；
+9. canonical history 不变；
+10. Stage A pruning 足够 -> 不调用 semantic summarizer；
+11. Stage B 第一次触发 -> semantic summarizer 恰好调用一次；
+12. active summary + small delta -> 不重复调用 summarizer；
+13. active view 再次超过 threshold -> 重新 semantic compact；
+14. 第二次 semantic compact 仍从 canonical history 构造，不吃 previous summary；
+15. renderer tight budget 下 section heading 仍完整；
+16. summary input budget 截断保持 message/unit 边界；
+17. semantic summary usage 进入 turn-boundary SessionUsage；
+18. round-boundary preflight summary usage 进入最终 RunResult / Chat usage；
+19. `CONTEXT_COMPACTION_STARTED` 在 semantic LLM call 前产生；
+20. Chat live UI 收到 started event 时输出 `[压缩上下文]`；
+21. semantic failure 记录 failed event 且 Agent 仍可继续；
+22. existing C4 tool pruning tests 全部不回归。
 
-新增 `tests/test_structured_compaction.py`，至少覆盖：
+真实 provider 不参与单测；测试使用 FakeSemanticSummarizer / MockBackend。
 
-1. current `Task.description` -> Goal；
-2. early English / Chinese hard constraint 保留；
-3. Tool Observation / Reflection 不误判为 hard constraint；
-4. successful file_write -> Decisions + Completed + modified path；
-5. file_read/file_view -> read working set；
-6. unresolved ERROR -> Blocked + Unresolved Failures + event_ref；
-7. old failure 后同一 action success -> failure superseded；
-8. old pytest failure 后 later test success -> Verification PASS，旧 failure 不 unresolved；
-9. latest test failure -> Verification FAIL；
-10. no test evidence -> Verification UNKNOWN；
-11. renderer 在 tight limit 下所有 section header 仍存在；
-12. deterministic 输入 -> byte-identical summary；
-13. Historical References bounded，但 checkpoint `source_event_ids` 完整；
-14. recent raw tail 不被 structured summary 改写；
-15. canonical history 不变；
-16. repeated compaction 仍从 canonical history 重建，不引用 previous summary；
-17. C4 Stage A 足够时仍 pruning-only，不进入 structured Stage B；
-18. C4 Stage A 不足时 Stage B 使用 `structured-deterministic-v1`；
-19. 被 Stage A prune 的旧大 Tool 正文不会重新进入 structured summary。
-
-现有 `tests/test_tool_pruning.py` 需要把 Stage B 断言从 `extractive-v1` 更新为 structured method，但 C4 Stage A 单测保持原样。
-
-## 15. 预计修改范围
+## 18. 预计修改范围
 
 生产代码：
 
 1. 新增 `context/history_evidence.py`
-   - 统一 Action/Observation/Params parser 与 action fingerprint。
+   - 统一 Action / Observation / Params parser。
 
 2. `context/tool_pruning.py`
-   - 改为复用 history evidence parser；
-   - 不改变 C4 pruning 行为。
+   - 复用共享 parser；C4 行为不变。
 
 3. 新增 `context/structured_compaction.py`
-   - `StructuredContextState`；
-   - deterministic extractor；
-   - bounded renderer。
+   - deterministic evidence；
+   - semantic packet；
+   - internal `record_context_summary` schema；
+   - `LLMSemanticSummarizer`；
+   - merge / fallback / bounded renderer。
 
 4. `context/compaction.py`
-   - Stage B 从 `extractive-v1` 切换到 `structured-deterministic-v1`；
-   - structured failure 的 availability fallback；
-   - Stage A 与 checkpoint lineage 语义保持。
+   - Stage B Hybrid integration；
+   - active compacted view reuse；
+   - started/failed/success trace；
+   - additional usage；
+   - C4 Stage A 保持。
+
+5. `agent/core.py`
+   - `PrepareNextTurnResult.additional_usage`；
+   - turn-boundary usage 聚合；
+   - 不把 compaction 策略搬入 Core。
+
+6. `agent/runner.py`
+   - round-boundary preflight additional usage 聚合到最终 RunResult。
+
+7. `agent/task.py`
+   - 新增 `CONTEXT_COMPACTION_STARTED` / `CONTEXT_COMPACTION_FAILED` EventType。
+
+8. `entry/chat.py`
+   - started event 显示 `[压缩上下文]`；
+   - 不展示 summary 内容。
+
+9. `entry/cli.py`
+   - 构造 Chat Context policy 时注入 `LLMSemanticSummarizer(backend)`；
+   - 通用 event printer 可识别 started marker。
 
 测试：
 
-5. 新增 `tests/test_structured_compaction.py`
-
-6. `tests/test_tool_pruning.py`
-   - 只更新 Stage B 集成断言；
-   - Stage A 契约保持。
+10. 新增 `tests/test_structured_compaction.py`
+11. `tests/test_tool_pruning.py`
+12. `tests/test_compaction.py`
+13. `tests/test_chat.py`
 
 明确不改：
 
-- `agent/core.py`
-- `agent/task.py`
-- `agent/session.py`
-- `agent/runner.py`
-- `entry/chat.py`
-- `entry/cli.py`
+- `agent/session.py`（checkpoint 仍是 `list[dict[str, Any]]`，无需 schema bump）
 - `context/token_budget.py`
 - `tools/*`
 - `config/default.yaml`
+- provider backend 实现（Anthropic/OpenAI-compatible/Responses 不增加新专用接口）
 
-如果实施中证明必须修改上述额外生产文件，先停止并重新确认范围。
+若实施证明 provider backend 必须修改，先停止并重新确认范围。
 
-## 16. C5 验收标准
+## 19. C5 验收标准
 
-- structured summary section 完整且 deterministic；
-- early hard constraint 在 old region 被保留；
-- unresolved failure 不因压缩消失，已被后续成功证明 superseded 的 failure 不再错误阻塞；
-- latest test evidence 有明确 PASS/FAIL/UNKNOWN 与 freshness warning；
-- read/modified working set 可追踪；
-- recent raw tail 与 canonical history 均不被修改；
-- Stage A 足够时仍不创建 structured summary；
-- Stage B checkpoint `summary_method=structured-deterministic-v1`；
-- repeated compaction 不出现 summary-of-summary；
-- 不新增任何 LLM summary call；
-- 定向 pytest 与受影响 Chat/Session 回归通过后，C5 才标记完成。
+- 中文/英文自然语言约束不依赖关键词 regex；
+- semantic summary 只在 Stage B 真正触发时调用，不是每轮调用；
+- semantic call 通过现有 `LLMBackend` Tool Calling 抽象完成；
+- Tool/verification/repository evidence 不由 semantic model 覆盖；
+- `[压缩上下文]` 在 semantic call 开始前可见；
+- summary LLM token/latency 有 Trace，usage 不漏记；
+- active compacted view 避免每 step 重复 summary call；
+- repeated re-compaction 从 canonical history 重建，不发生 summary-of-summary drift；
+- semantic failure 有 safe fallback，不破坏 Session；
+- recent raw tail 与 canonical history 均保持不变；
+- C1~C4 回归全部通过后才标记 C5 完成。
 
-## 17. C5 之后
+## 20. C5 之后
 
-C5 完成后，Context Compaction 主实现链路已经具备：
+C5 完成后先进入 B1 Context Policy 离线 benchmark，不直接实现 C6。
 
-```text
-full request pressure
-+ token-based recent raw tail
-+ deterministic tool-output pruning
-+ deterministic structured historical state
-+ checkpoint lineage / resume
-+ canonical history / EventLog audit source
-```
+B1 要回答：
 
-下一步不应立即引入更复杂语义模块，而应先进入 B1 离线 Context Policy Benchmark。
+- Hybrid semantic summary 是否比 C4 deterministic pruning + legacy extractive 更能保留 early constraints；
+- summary 额外 LLM token 是否值得；
+- active view reuse 后每 solved task 的 provider input / summary-call 数量；
+- 是否真的出现需要 `context_recall(event_ref)` 的稳定失败样本。
 
-C6 `context_recall(event_ref)` 只有在 B1/B2 出现稳定“structured compaction 后仍需要旧 Tool 原文细节”的失败样本时再做。
+只有 B1/B2 证明需要旧 Tool 原文自主回查时，再实现 C6。
