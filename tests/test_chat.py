@@ -282,6 +282,7 @@ class TestChatCommand:
 
     def test_chat_sandbox_injects_runtime_and_cleans_up(self, tmp_path, monkeypatch):
         from click.testing import CliRunner
+        from context.compaction import TraceableCompaction
         from entry.cli import cli
         from tools.runtime import LocalRuntime
 
@@ -318,6 +319,7 @@ class TestChatCommand:
 
         assert result.exit_code == 0
         assert fake_runtime.cleaned is True
+        assert isinstance(captured["prepare_next_turn"], TraceableCompaction)
         registry = captured["registry"]
         shell_tool = registry._tools["shell"]
         assert shell_tool._runtime is fake_runtime
