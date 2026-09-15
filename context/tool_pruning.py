@@ -2,27 +2,22 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
+from context.history_evidence import (
+    ParsedObservation,
+    parse_action_message,
+    parse_observation_message,
+)
 from context.token_budget import estimate_messages_tokens, estimate_tokens, history_units
 from llm.base import LLMMessage
 
 
-_OBSERVATION_HEADER = re.compile(r"^\[Tool: (?P<tool>[^|]+) \| (?P<status>SUCCESS|ERROR)\](?:\n|$)")
-_ACTION_TOOL = re.compile(r"(?m)^Action:\s*(?P<tool>[^\s]+)\s*$")
 _SEARCH_TOOLS = frozenset({"search_text", "find_files", "find_symbol"})
 _LARGE_OUTPUT_TOKENS = 200
 _SHELL_PREVIEW_CHARS = 320
 _TEST_TAIL_LINES = 4
 _TEST_TAIL_CHARS = 800
-
-
-@dataclass(frozen=True)
-class ParsedObservation:
-    tool_name: str
-    status: str
-    body: str
 
 
 @dataclass(frozen=True)
@@ -65,33 +60,41 @@ class DeterministicToolPruner:
             if len(unit.indices) != 2:
                 continue
             action_index, observation_index = unit.indices
-            action = messages[action_index]
-            observation = messages[observation_index]
-            parsed = _parse_observation(observation.content)
-            action_tool = _parse_action_tool(action)
+            action_message = messages[action_index]
+            observation_message = messages[observation_index]
+            parsed_action = parse_action_message(action_message)
+            parsed_observation = parse_observation_message(observation_message)
             if (
-                parsed is None
-                or parsed.status != "SUCCESS"
-                or action_tool != parsed.tool_name
+                parsed_action is None
+                or parsed_observation is None
+                or parsed_observation.status != "SUCCESS"
+                or parsed_action.tool_name != parsed_observation.tool_name
             ):
                 continue
 
-            duplicate_key = (action.content, parsed.tool_name, observation.content)
-            if parsed.tool_name in _SEARCH_TOOLS and observation.event_ref:
+            duplicate_key = (
+                action_message.content,
+                parsed_observation.tool_name,
+                observation_message.content,
+            )
+            if parsed_observation.tool_name in _SEARCH_TOOLS and observation_message.event_ref:
                 newer_ref = latest_duplicate.get(duplicate_key)
                 if newer_ref is None:
-                    latest_duplicate[duplicate_key] = observation.event_ref
+                    latest_duplicate[duplicate_key] = observation_message.event_ref
                 elif observation_index < protected_from_index:
                     replacements[observation_index] = _copy_message(
-                        observation,
-                        _duplicate_marker(parsed.tool_name, newer_ref),
+                        observation_message,
+                        _duplicate_marker(parsed_observation.tool_name, newer_ref),
                     )
                     continue
 
-            if observation_index >= protected_from_index or not observation.event_ref:
+            if observation_index >= protected_from_index or not observation_message.event_ref:
                 continue
 
-            replacement = self._prune_large_success(observation, parsed)
+            replacement = self._prune_large_success(
+                observation_message,
+                parsed_observation,
+            )
             if replacement is not None:
                 replacements[observation_index] = replacement
 
@@ -129,24 +132,6 @@ class DeterministicToolPruner:
         else:
             return None
         return _copy_message(message, content)
-
-
-def _parse_observation(content: str) -> ParsedObservation | None:
-    match = _OBSERVATION_HEADER.match(content)
-    if match is None:
-        return None
-    return ParsedObservation(
-        tool_name=match.group("tool").strip(),
-        status=match.group("status"),
-        body=content[match.end():],
-    )
-
-
-def _parse_action_tool(message: LLMMessage) -> str | None:
-    if message.role != "assistant":
-        return None
-    match = _ACTION_TOOL.search(message.content)
-    return match.group("tool").strip() if match is not None else None
 
 
 def _copy_message(message: LLMMessage, content: str) -> LLMMessage:
