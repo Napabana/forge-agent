@@ -45,8 +45,10 @@ C4 不做 structured semantic summary、context recall、provider-native compact
 
 - 只操作 model-visible message copy；
 - 用 Forge 内部稳定 Observation 头解析 Tool/status：`[Tool: <name> | SUCCESS/ERROR]`；
+- 同时校验前一条 assistant Action 中的 `Action: <tool>` 与 Observation tool 一致，避免只凭 Observation 文本误判；
 - 只 prune SUCCESS Observation；ERROR 原样保留；
 - 只处理 protected recent tail 之前的消息；
+- 没有 `event_ref` 的 Observation 不 prune，因为无法证明完整内容可从 EventLog 审计回查；
 - 保留 message role、`tool_call_id` 与 `event_ref`；
 - 相同输入执行结果 deterministic；
 - 返回 `PruningResult(messages, pruned_event_ids, before_tokens, after_tokens, pruned_units)`。
@@ -56,10 +58,12 @@ V1 规则：
 1. `file_read` SUCCESS：旧大输出保留 `File: ...` 元信息与审计 marker，正文移除；
 2. `shell` SUCCESS：旧大输出保留 deterministic head/tail preview；
 3. `test` / `pytest` SUCCESS：旧大输出只保留尾部非空摘要；
-4. `search_text` / `find_files` / `find_symbol`：只对 exact duplicate interaction 去重，最新一份保留，旧副本指向 `duplicate_of_event_ref`；
+4. `search_text` / `find_files` / `find_symbol`：只对 exact duplicate interaction 去重，最新一份保留，所有更旧副本直接指向该最新 retained `event_ref`；
 5. `file_view` 不处理；失败 Observation 不处理。
 
 marker 中 `full_output_available=true` 只表示本次进入 canonical Observation 的完整 output 可从 EventLog 审计回查；不声称底层 Tool 在自身安全截断前产生的无限原始 stdout 被保存。
+
+`pruned_event_ids` 按 canonical history 顺序输出，便于 checkpoint / benchmark 稳定比较。
 
 ## 2. Recent raw tail 保护
 
@@ -132,19 +136,34 @@ ChatSession(..., prepare_next_turn=context_policy)
 
 `tests/test_chat.py` 在真实 CLI sandbox fixture 上新增断言：传给 `ChatSession` 的 `prepare_next_turn` 必须是 `TraceableCompaction`，防止 production wiring 再次遗漏。
 
+## 7. Review 修复
+
+代码完成后的审查又修复两个边界：
+
+1. 三次及以上完全相同的 search/find interaction 时，所有更旧副本现在都直接指向最终保留的最新 `event_ref`，不会形成“旧 pruned event -> 中间 pruned event”的链；
+2. Stage A 现在要求 assistant Action 的工具名与 Observation header 工具名一致后才允许 prune，进一步降低误判风险。
+
+Review 修复提交：
+
+`f1614198b861d9796325edc48cada185337127be`
+
 ## 当前提交
 
 C4 设计基线：
 
 `56fe9fb52a379a310e1be088c45426fca0c780e3`
 
-C4 代码与测试完成点（创建本文档前）：
+C4 初版代码与测试完成点：
 
 `a45751f76462ddde88b381d59644fe0f468e74b7`
 
+C4 review 修复完成点：
+
+`f1614198b861d9796325edc48cada185337127be`
+
 ## 验证状态
 
-当前 ChatGPT 执行环境无法运行用户 WSL venv，因此不能声称 pytest 已通过。
+当前 ChatGPT 执行环境无法运行用户 WSL venv；GitHub 当前 commit 也没有 CI status，因此不能声称 pytest 已通过。
 
 用户 pull 后先运行：
 
