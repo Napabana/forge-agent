@@ -173,13 +173,13 @@ def test_latest_test_failure_stays_unresolved_when_it_is_in_old_region():
     assert "o-test" in evidence.unresolved_failures[0]
 
 
-def test_semantic_packet_preserves_multilingual_user_text_and_excludes_tool_observation():
+def test_semantic_packet_preserves_old_multilingual_user_text_and_excludes_recent_raw_tail():
     old = [
         LLMMessage("user", "core 最好先别碰，优先 context 层。"),
         _observation("shell", "ERROR", "SECRET_TOOL_OUTPUT", "o1"),
         LLMMessage("assistant", "Thought: exploratory internal reasoning"),
     ]
-    recent = [LLMMessage("user", "Keep the API stable，其他可以重构。")]
+    recent = [LLMMessage("user", "RESUME_CURRENT_USER 这是恢复后本轮唯一的新用户输入。")]
     evidence = DeterministicEvidence((), ("UNKNOWN",), (), (), ())
 
     packet, truncated = build_semantic_packet(
@@ -192,7 +192,8 @@ def test_semantic_packet_preserves_multilingual_user_text_and_excludes_tool_obse
 
     assert not truncated
     assert "core 最好先别碰" in packet
-    assert "Keep the API stable" in packet
+    assert "RESUME_CURRENT_USER" not in packet
+    assert "RECENT USER MESSAGE" not in packet
     assert "SECRET_TOOL_OUTPUT" not in packet
     assert "exploratory internal reasoning" not in packet
 
