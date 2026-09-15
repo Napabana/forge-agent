@@ -4,7 +4,7 @@
 
 执行原则：一次只收口一个 Context 契约；每批生产代码修改前按 `AGENTS.md` 检查工作树/分支/remote/stash，列出拟修改文件和理由，等待用户确认。测试先定向后扩展，不把未执行测试写成通过。
 
-当前状态：C1、C2、C3、C4 已完成，并经用户本地 pytest 验证全部通过；C5 已重新设计为 **Hybrid Structured Compaction**，等待用户确认实施范围。
+当前状态：C1、C2、C3、C4 已完成，并经用户本地 pytest 验证全部通过；C5 Hybrid Structured Compaction **代码完成，等待用户本地 pytest 验收**。
 
 ## 0. 实施门禁
 
@@ -60,89 +60,95 @@
 
 ## C5：Hybrid Structured Compaction
 
-状态：设计已重新收口，等待用户确认实施范围。
+状态：代码完成，等待用户本地 pytest 验收。
 
-详细设计：`2026-09-15-Context-Compaction-C5设计收口.md`。
+设计：`2026-09-15-Context-Compaction-C5设计收口.md`。
+交接：`2026-09-15-Context-Compaction-C5改动内容.md`。
 
 ### 语义原则
 
-- [ ] 不再用中英文关键词 regex 判断 Hard Constraints / Decisions。
-- [ ] 必须理解自然语言的字段只在 Stage B 真正触发时额外调用一次 LLM。
-- [ ] Tool / test / file / event_ref 等协议事实 deterministic 提取，LLM 无权覆盖。
-- [ ] 当前 Goal 直接使用 `task.description`。
-- [ ] semantic summary 通过内部-only `record_context_summary` Tool Schema 复用现有 `LLMBackend.complete()`，不新增 provider-specific completion API。
-- [ ] semantic packet 保留用户原语言，支持中文/英文/混合语言。
+- [x] 不用中英文关键词 regex 判断 Hard Constraints / Decisions。
+- [x] 必须理解自然语言的字段只在 Stage B 真正触发时额外调用一次 LLM。
+- [x] Tool / test / file / event_ref 等协议事实 deterministic 提取，LLM 无权覆盖。
+- [x] 当前 Goal 直接使用 `task.description`。
+- [x] semantic summary 通过内部-only `record_context_summary` Tool Schema 复用现有 `LLMBackend.complete()`，不新增 provider-specific completion API。
+- [x] semantic packet 保留用户原语言，支持中文/英文/混合语言。
+- [x] Forge 自动 `[REFLECTION]` prompt 不进入 user-authored semantic evidence。
 
 ### 压缩触发与前端反馈
 
-- [ ] Stage A pruning-only 保持静默。
-- [ ] Stage A 后仍高 pressure、准备发起 semantic summary LLM call 时写 `CONTEXT_COMPACTION_STARTED`。
-- [ ] Chat/CLI frontend 收到 started event 后显示精确提示：`[压缩上下文]`。
-- [ ] 成功后继续写现有 `CONTEXT_COMPACTED` checkpoint evidence。
-- [ ] semantic failure 写 `CONTEXT_COMPACTION_FAILED`，走 safe fallback，不让 memory maintenance 直接击穿 Agent task。
+- [x] Stage A pruning-only 保持静默。
+- [x] Stage A 后仍高 pressure、准备发起 semantic summary LLM call 时写 `CONTEXT_COMPACTION_STARTED`。
+- [x] Chat frontend 收到 started event 后显示 `[压缩上下文]`。
+- [x] 成功后继续写现有 `CONTEXT_COMPACTED` checkpoint evidence。
+- [x] semantic failure 写 `CONTEXT_COMPACTION_FAILED`，走 safe fallback，不让 memory maintenance 直接击穿 Agent task。
 
 ### Active Compacted View
 
-- [ ] semantic compaction 后缓存进程内 active compacted view。
-- [ ] 后续 turn 优先使用 `active summary + raw delta`，不每 step 重复调用 summary model。
-- [ ] active view 再次超过 threshold 才重新 semantic compact。
-- [ ] re-compaction 从 canonical history 构造 semantic packet，不吃 previous summary，避免 summary-of-summary drift。
-- [ ] Resume V1 可不恢复 active summary；首次再次高压允许重新 compact。
+- [x] semantic compaction 后缓存进程内 active compacted view。
+- [x] 同一 Task 后续 turn 优先使用 `active summary + raw delta`，不每 step 重复调用 summary model。
+- [x] active view 再次超过 threshold 才重新 semantic compact。
+- [x] re-compaction 从 canonical history 构造 semantic packet，不吃 previous summary，避免 summary-of-summary drift。
+- [x] Chat 新 round 的 `task.description` 变化时 active view 自动失效，避免陈旧 Goal。
+- [x] Resume V1 不恢复 active summary；首次再次高压允许重新 compact。
 
 ### Structured State
 
 固定 section：
 
-- [ ] Goal
-- [ ] Hard Constraints
-- [ ] Decisions
-- [ ] Progress / Completed / In Progress / Blocked
-- [ ] Unresolved Failures
-- [ ] Verification State
-- [ ] Working Set
-- [ ] Next Actions
-- [ ] Historical References
+- [x] Goal
+- [x] Hard Constraints
+- [x] Decisions
+- [x] Progress / Completed / In Progress / Blocked
+- [x] Unresolved Failures
+- [x] Verification State
+- [x] Working Set
+- [x] Next Actions
+- [x] Historical References
 
 ### Usage / Trace
 
-- [ ] semantic summary provider usage 必须计入 SessionUsage / RunResult / Chat usage。
-- [ ] `PrepareNextTurnResult` 增加 additional usage 载体。
-- [ ] turn-boundary 与 round-boundary preflight 都不能漏记 summary call token。
-- [ ] checkpoint/Trace 记录 summary usage，benchmark 可分离 normal Agent call 与 compaction call 成本。
+- [x] semantic summary provider usage 计入 Chat round / Session usage。
+- [x] policy 自己累计 side-call usage，由 `ChatSession` 统一 merge，不侵入 Agent Core/Runner。
+- [x] round-boundary 与 turn-boundary 的 semantic side-call 都由同一 policy usage accumulator 覆盖。
+- [x] checkpoint/Trace 记录 `summary_usage`、`semantic_duration_ms`、packet truncation、semantic error。
 
 ### Safe fallback
 
-- [ ] malformed ToolCall / provider failure 不写半 checkpoint。
-- [ ] 优先复用 active view；否则 deterministic evidence + bounded user-authored raw excerpts。
-- [ ] fallback 不用 regex 假装理解中文约束。
-- [ ] final TokenBudget trim 继续做硬兜底。
+- [x] malformed ToolCall / provider failure 不改 canonical history。
+- [x] semantic failure 使用 deterministic evidence + bounded user-authored raw excerpts。
+- [x] fallback 不用 regex 假装理解中文约束。
+- [x] final TokenBudget trim 继续做硬兜底。
 
-### C5 预计生产范围（待确认）
+### 实际生产范围
 
-- [ ] 新增 `context/history_evidence.py`
-- [ ] `context/tool_pruning.py`
-- [ ] 新增 `context/structured_compaction.py`
-- [ ] `context/compaction.py`
-- [ ] `agent/core.py`
-- [ ] `agent/runner.py`
-- [ ] `agent/task.py`
-- [ ] `entry/chat.py`
-- [ ] `entry/cli.py`
+- [x] 新增 `context/history_evidence.py`
+- [x] `context/tool_pruning.py`
+- [x] 新增 `context/structured_compaction.py`
+- [x] `context/compaction.py`
+- [x] `agent/task.py`
+- [x] `entry/chat.py`
+
+设计阶段预计但最终无需修改：
+
+- [x] `agent/core.py`：无需修改；usage 由 policy + Chat 合并。
+- [x] `agent/runner.py`：无需修改；不把 compaction 策略搬入 Runner。
+- [x] `entry/cli.py`：无需修改；C4 已完成真实 Chat policy wiring，C5 由 ChatSession `bind_backend()`。
 
 测试：
 
-- [ ] 新增 `tests/test_structured_compaction.py`
-- [ ] `tests/test_tool_pruning.py`
-- [ ] `tests/test_compaction.py`
-- [ ] `tests/test_chat.py`
+- [x] 新增 `tests/test_structured_compaction.py`
+- [x] `tests/test_tool_pruning.py`
+- [ ] 用户本地运行 C5 定向测试。
+- [ ] 用户本地运行 Chat/Session/Day2 回归。
 
-明确不改：
+明确未改：
 
-- [ ] `agent/session.py`
-- [ ] `context/token_budget.py`
-- [ ] `tools/*`
-- [ ] `config/default.yaml`
-- [ ] provider backend 实现；若证明必须改，先重新确认。
+- [x] `agent/session.py`
+- [x] `context/token_budget.py`
+- [x] `tools/*`
+- [x] `config/default.yaml`
+- [x] provider backend 实现。
 
 ## C6：Optional `context_recall(event_ref)`
 
@@ -187,4 +193,4 @@ Formal：5 cases × 3 variants × 3 repeats = 45 runs，冻结 Forge commit/mode
 
 ## Claim 门禁
 
-正式 benchmark 前不得写具体 Token/成功率提升数字，不得宣称“长历史不丢约束”“Agent 可自主回查历史 Tool 结果”“支持语义压缩”。只有 fixed commit + fixed cases + raw Trace + hidden verifier 支持后，才能形成简历 Claim。
+正式 benchmark 前不得写具体 Token/成功率提升数字，不得宣称“长历史不丢约束”“Agent 可自主回查历史 Tool 结果”。C5 验收通过后可以表述“实现 Hybrid Structured Compaction”，但效果数字仍必须等 fixed commit + fixed cases + raw Trace + hidden verifier 支持后再形成 Claim。
