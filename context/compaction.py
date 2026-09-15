@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import subprocess
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from agent.core import PrepareNextTurnContext, PrepareNextTurnResult
 from agent.task import EventType
+from context.repository_state import repository_fingerprint
 from context.token_budget import (
     estimate_messages_tokens,
     history_unit_tokens,
@@ -80,6 +80,19 @@ class TraceableCompaction:
         self.max_summary_chars = max_summary_chars
         self.entries: list[CompactionEntry] = []
         self.checkpoints: list[CompactionCheckpoint] = []
+        self._lineage_checkpoint_id: str | None = None
+
+    def restore_checkpoint_lineage(self, checkpoint_id: str | None) -> None:
+        """恢复持久化 Session 的 lineage cursor，不把旧 summary 恢复成事实。"""
+        self.entries.clear()
+        self.checkpoints.clear()
+        self._lineage_checkpoint_id = checkpoint_id
+
+    def reset_checkpoint_lineage(self) -> None:
+        """新上下文从新的 checkpoint 链开始，同时清空待持久化的旧 checkpoint。"""
+        self.entries.clear()
+        self.checkpoints.clear()
+        self._lineage_checkpoint_id = None
 
     def __call__(self, context: PrepareNextTurnContext):
         messages = context.history.to_list()
@@ -139,7 +152,9 @@ class TraceableCompaction:
         checkpoint_id = uuid.uuid4().hex[:12]
         created_at = datetime.now(timezone.utc).isoformat()
         previous_checkpoint_id = (
-            self.entries[-1].checkpoint_id if self.entries else None
+            self.entries[-1].checkpoint_id
+            if self.entries
+            else self._lineage_checkpoint_id
         )
         summary_hash = hashlib.sha256(summary.encode("utf-8")).hexdigest()
         entry = CompactionEntry(
@@ -159,7 +174,7 @@ class TraceableCompaction:
             source_event_ids=source_event_ids,
             before_tokens=before_tokens,
             after_tokens=after_tokens,
-            repo_revision=_repo_revision(context.task.repo_path),
+            repo_revision=repository_fingerprint(context.task.repo_path),
             summary_method=entry.summary_method,
             summary_hash=summary_hash,
             retained_tail=len(messages) - tail_start,
@@ -173,6 +188,7 @@ class TraceableCompaction:
         )
         self.entries.append(entry)
         self.checkpoints.append(checkpoint)
+        self._lineage_checkpoint_id = checkpoint_id
         context.event_log.log_trace(
             EventType.CONTEXT_COMPACTED,
             context.step,
@@ -198,18 +214,3 @@ class TraceableCompaction:
     def _summary(self, messages: list[LLMMessage], limit: int) -> str:
         lines = [f"- {message.role}: {' '.join(message.content.split())}" for message in messages]
         return "\n".join(lines)[:limit]
-
-
-def _repo_revision(repo_path: str) -> str:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        return result.stdout.strip() if result.returncode == 0 else ""
-    except (OSError, subprocess.SubprocessError):
-        return ""
