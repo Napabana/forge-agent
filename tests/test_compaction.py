@@ -227,8 +227,8 @@ def test_compaction_runs_at_turn_boundary_and_only_changes_next_model_view(tmp_p
 
     canonical_count_before_run = history.message_count
     strategy = TraceableCompaction(
-        threshold=0.5,
-        target_ratio=0.25,
+        threshold=0.2,
+        target_ratio=0.1,
         keep_recent_tokens=20,
     )
     backend = MockBackend([
@@ -270,8 +270,8 @@ def test_chat_persists_compaction_checkpoint(tmp_path):
     config.context.history_window = 20
     store = JsonChatSessionStore(tmp_path / "sessions")
     strategy = TraceableCompaction(
-        threshold=0.5,
-        target_ratio=0.25,
+        threshold=0.2,
+        target_ratio=0.1,
         keep_recent_tokens=20,
     )
     session = ChatSession(
