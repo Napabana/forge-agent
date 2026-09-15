@@ -86,3 +86,36 @@ def test_query_aware_ranking_improves_symbol_matched_history_case(tmp_path):
     assert by_variant["query_aware"]["mrr"] >= by_variant["static"]["mrr"]
     assert by_variant["query_aware"]["target_ranks"]["payments.py"] == 1
     assert by_variant["query_aware"]["recall_at_1"] == 1.0
+
+
+def test_query_aware_ranking_improves_content_only_history_case(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "runtime.py").write_text(
+        "def execute():\n"
+        "    # provider retry timeout failure recovery\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    (repo / "core.py").write_text(
+        "\n".join(f"class Service{i}: pass" for i in range(12)) + "\n",
+        encoding="utf-8",
+    )
+    _commit(repo, "base")
+
+    (repo / "runtime.py").write_text(
+        "def execute():\n"
+        "    # provider retry timeout failure recovery\n"
+        "    return False\n",
+        encoding="utf-8",
+    )
+    changed = _commit(repo, "handle provider retry timeout failure")
+
+    results = evaluate_retrieval_case(
+        repo,
+        {"id": "provider-retry", "commit": changed},
+        budget=2_000,
+    )
+    by_variant = {result["variant"]: result for result in results}
+
+    assert by_variant["query_aware"]["target_ranks"]["runtime.py"] == 1
+    assert by_variant["query_aware"]["mrr"] > by_variant["static"]["mrr"]
