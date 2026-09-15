@@ -235,13 +235,13 @@ def test_compaction_runs_at_turn_boundary_and_only_changes_next_model_view(tmp_p
         Action(ActionType.TOOL_CALL, "run", ToolCall("noop", {})),
         Action(ActionType.FINISH, "done", message="Done."),
     ])
-    task = Task("Continue.", str(tmp_path), task_id="compact", max_steps=2, budget_tokens=160)
+    task = Task("Continue.", str(tmp_path), task_id="compact", max_steps=2, budget_tokens=2_000)
     log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
 
     Agent(
         backend,
         ToolRegistry().register(NoopTool("noop")),
-        AgentConfig(budget_tokens=160, prepare_next_turn=strategy),
+        AgentConfig(budget_tokens=2_000, prepare_next_turn=strategy),
     ).run(task, log, history=history)
 
     checkpoint = strategy.checkpoints[0]
@@ -265,7 +265,7 @@ def test_compaction_runs_at_turn_boundary_and_only_changes_next_model_view(tmp_p
 def test_chat_persists_compaction_checkpoint(tmp_path):
     config = AppConfig()
     config.agent.max_steps = 2
-    config.agent.budget_tokens = 160
+    config.agent.budget_tokens = 2_000
     config.agent.log_dir = str(tmp_path / "logs")
     config.context.history_window = 20
     store = JsonChatSessionStore(tmp_path / "sessions")
