@@ -1,3 +1,15 @@
+from agent.core import PrepareNextTurnContext
+from agent.event_log import EventLog
+from agent.task import Task
+from context.compaction import TraceableCompaction
+from context.history import ConversationHistory
+from context.repo_map import RepoMap
+from context.token_budget import (
+    TokenBudget,
+    history_unit_tokens,
+    history_units,
+    recent_history_units,
+)
 from context.tool_pruning import DeterministicToolPruner
 from llm.base import LLMMessage
 
@@ -165,3 +177,182 @@ def test_pruning_is_deterministic_and_keeps_action_observation_count():
     assert len(first.messages) == len(messages)
     assert first.messages[1].content == messages[1].content
     assert first.messages[2].event_ref == messages[2].event_ref
+
+
+def _history_for_compaction(*, include_unprunable_old_output: bool = False) -> ConversationHistory:
+    history = ConversationHistory(max_messages=40)
+    history.add(LLMMessage("user", "hard constraint: preserve public API"))
+    large_file = (
+        "File: src/large.py (900 lines total)\n"
+        + ("SECRET_TOOL_BODY_MARKER source line with details\n" * 900)
+    )
+    history.add(_action("file_read", '{"path":"src/large.py"}', "a-file"))
+    history.add(_observation("file_read", "SUCCESS", large_file, "o-file"))
+    if include_unprunable_old_output:
+        history.add(LLMMessage(
+            "assistant",
+            "Thought: preserve unresolved context\nAction: custom_tool\nParams: {}",
+            event_ref="a-custom",
+        ))
+        history.add(LLMMessage(
+            "user",
+            "[Tool: custom_tool | SUCCESS]\n" + ("important unprunable state line\n" * 900),
+            event_ref="o-custom",
+        ))
+    history.add(_action("file_view", '{"path":"src/current.py","start_line":1}', "a-recent"))
+    history.add(_observation(
+        "file_view",
+        "SUCCESS",
+        "recent working set must remain raw",
+        "o-recent",
+    ))
+    return history
+
+
+def _recent_budget(history: ConversationHistory) -> int:
+    raw = history.to_dicts()
+    units = history_units(raw)
+    return sum(history_unit_tokens(raw, unit) for unit in units[-1:])
+
+
+def _context(tmp_path, history: ConversationHistory, budget: TokenBudget, log: EventLog):
+    task = Task("continue", str(tmp_path), task_id="pruning-integration", max_steps=2)
+    return PrepareNextTurnContext(
+        task=task,
+        step=2,
+        history=history,
+        repo_map=RepoMap(tmp_path),
+        token_budget=budget,
+        cancel_event=None,
+        event_log=log,
+        system_content="system prompt",
+    )
+
+
+def test_compaction_returns_pruning_only_view_when_stage_a_relief_is_enough(tmp_path):
+    history = _history_for_compaction()
+    canonical_before = history.to_dicts()
+    keep_recent_tokens = _recent_budget(history)
+    pruner = DeterministicToolPruner(min_output_tokens=20)
+    raw = history.to_dicts()
+    recent = recent_history_units(raw, keep_recent_tokens)
+    tail_start = recent[0].indices[0]
+    pruned = pruner.prune(history.to_list(), protected_from_index=tail_start)
+
+    probe = TokenBudget(total=50_000)
+    before_projected = probe.request_pressure(
+        system_text="system prompt", repo_map_text="", history=raw,
+    ).projected_input
+    after_projected = probe.request_pressure(
+        system_text="system prompt",
+        repo_map_text="",
+        history=[{"role": m.role, "content": m.content} for m in pruned.messages],
+    ).projected_input
+    total = max(500, int(before_projected / (0.80 * 0.85)))
+    budget = TokenBudget(total=total)
+    before_ratio = budget.request_pressure(
+        system_text="system prompt", repo_map_text="", history=raw,
+    ).ratio
+    after_ratio = budget.request_pressure(
+        system_text="system prompt",
+        repo_map_text="",
+        history=[{"role": m.role, "content": m.content} for m in pruned.messages],
+    ).ratio
+    assert after_ratio < before_ratio
+    threshold = (before_ratio + after_ratio) / 2
+
+    strategy = TraceableCompaction(
+        threshold=threshold,
+        target_ratio=threshold / 2,
+        keep_recent_tokens=keep_recent_tokens,
+        pruner=pruner,
+    )
+    task = Task("continue", str(tmp_path), task_id="pruning-only", max_steps=2)
+    log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
+    context = PrepareNextTurnContext(
+        task=task,
+        step=2,
+        history=history,
+        repo_map=RepoMap(tmp_path),
+        token_budget=budget,
+        cancel_event=None,
+        event_log=log,
+        system_content="system prompt",
+    )
+
+    result = strategy(context)
+
+    assert result is not None and result.history_override is not None
+    visible = "\n".join(message.content for message in result.history_override)
+    assert "[Pruned old tool output]" in visible
+    assert "[Compacted earlier context" not in visible
+    assert "recent working set must remain raw" in visible
+    assert history.to_dicts() == canonical_before
+    assert strategy.entries == []
+    checkpoint = strategy.checkpoints[0]
+    assert checkpoint.summary_method == "none"
+    assert checkpoint.pruning_method == pruner.method
+    assert checkpoint.pruned_event_ids == ("o-file",)
+    assert checkpoint.pruned_after_tokens < checkpoint.pruned_before_tokens
+    log.close()
+
+
+def test_stage_b_summary_consumes_pruned_old_tool_view(tmp_path):
+    history = _history_for_compaction(include_unprunable_old_output=True)
+    canonical_before = history.to_dicts()
+    keep_recent_tokens = _recent_budget(history)
+    pruner = DeterministicToolPruner(min_output_tokens=20)
+    raw = history.to_dicts()
+    recent = recent_history_units(raw, keep_recent_tokens)
+    tail_start = recent[0].indices[0]
+    pruned = pruner.prune(history.to_list(), protected_from_index=tail_start)
+    probe = TokenBudget(total=100_000)
+    pruned_projected = probe.request_pressure(
+        system_text="system prompt",
+        repo_map_text="",
+        history=[{"role": m.role, "content": m.content} for m in pruned.messages],
+    ).projected_input
+    total = max(500, int(pruned_projected / (0.80 * 0.85)))
+    budget = TokenBudget(total=total)
+    pruned_ratio = budget.request_pressure(
+        system_text="system prompt",
+        repo_map_text="",
+        history=[{"role": m.role, "content": m.content} for m in pruned.messages],
+    ).ratio
+    threshold = min(0.95, pruned_ratio * 0.9)
+    assert 0 < threshold < pruned_ratio
+
+    strategy = TraceableCompaction(
+        threshold=threshold,
+        target_ratio=threshold / 2,
+        keep_recent_tokens=keep_recent_tokens,
+        max_summary_chars=4_000,
+        pruner=pruner,
+    )
+    task = Task("continue", str(tmp_path), task_id="pruning-stage-b", max_steps=2)
+    log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
+    context = PrepareNextTurnContext(
+        task=task,
+        step=2,
+        history=history,
+        repo_map=RepoMap(tmp_path),
+        token_budget=budget,
+        cancel_event=None,
+        event_log=log,
+        system_content="system prompt",
+    )
+
+    result = strategy(context)
+
+    assert result is not None and result.history_override is not None
+    visible = "\n".join(message.content for message in result.history_override)
+    assert "[Compacted earlier context" in visible
+    assert "SECRET_TOOL_BODY_MARKER" not in visible
+    assert "[Pruned old tool output]" in strategy.entries[0].summary_text
+    assert history.to_dicts() == canonical_before
+    checkpoint = strategy.checkpoints[0]
+    assert checkpoint.summary_method == "extractive-v1"
+    assert checkpoint.pruning_method == pruner.method
+    assert checkpoint.pruned_event_ids == ("o-file",)
+    assert checkpoint.pruned_after_tokens < checkpoint.pruned_before_tokens
+    log.close()
