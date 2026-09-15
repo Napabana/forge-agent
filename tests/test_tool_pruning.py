@@ -297,7 +297,7 @@ def test_compaction_returns_pruning_only_view_when_stage_a_relief_is_enough(tmp_
     log.close()
 
 
-def test_stage_b_summary_consumes_pruned_old_tool_view(tmp_path):
+def test_stage_b_fallback_does_not_reintroduce_pruned_old_tool_body(tmp_path):
     history = _history_for_compaction(include_unprunable_old_output=True)
     canonical_before = history.to_dicts()
     keep_recent_tokens = _recent_budget(history)
@@ -348,10 +348,10 @@ def test_stage_b_summary_consumes_pruned_old_tool_view(tmp_path):
     visible = "\n".join(message.content for message in result.history_override)
     assert "[Compacted earlier context" in visible
     assert "SECRET_TOOL_BODY_MARKER" not in visible
-    assert "[Pruned old tool output]" in strategy.entries[0].summary_text
+    assert "## Working Set" in strategy.entries[0].summary_text
     assert history.to_dicts() == canonical_before
     checkpoint = strategy.checkpoints[0]
-    assert checkpoint.summary_method == "extractive-v1"
+    assert checkpoint.summary_method == "structured-fallback-v1"
     assert checkpoint.pruning_method == pruner.method
     assert checkpoint.pruned_event_ids == ("o-file",)
     assert checkpoint.pruned_after_tokens < checkpoint.pruned_before_tokens
