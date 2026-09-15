@@ -16,6 +16,7 @@ _OBSERVATION_HEADER = re.compile(
 )
 _ACTION_TOOL = re.compile(r"(?m)^Action:\s*(?P<tool>[^\s]+)\s*$")
 _ACTION_PARAMS = re.compile(r"(?m)^Params:\s*(?P<params>\{.*\})\s*$")
+_REFLECTION_PREFIX = "[REFLECTION]"
 
 
 @dataclass(frozen=True)
@@ -122,5 +123,7 @@ def action_fingerprint(action: ParsedAction) -> str:
 
 
 def is_user_authored_message(message: LLMMessage) -> bool:
-    """排除 Tool Observation，只保留真正用户自然语言消息。"""
-    return message.role == "user" and parse_observation_message(message) is None
+    """排除 Tool Observation 与 Forge 自动 Reflection，只保留用户自然语言消息。"""
+    if message.role != "user" or parse_observation_message(message) is not None:
+        return False
+    return not message.content.lstrip().startswith(_REFLECTION_PREFIX)
