@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from evals import context_policy_benchmark as benchmark
 
 _ORIGINAL_EVALUATE = benchmark._evaluate_case_variant
 _ORIGINAL_TRIM_HISTORY = TokenBudget.trim_history
+_HEARTBEAT_SECONDS = 10.0
 
 
 def _manifest_path_from_argv() -> Path:
@@ -53,6 +55,16 @@ def _stage_hint(variant: str) -> str:
     return "物化 History -> Hybrid Stage A/Stage B -> final TokenBudget trim -> metrics"
 
 
+def _heartbeat(stop: threading.Event, started: float, case_id: str, variant: str) -> None:
+    """长时间 trim 时周期输出心跳，避免命令行长时间无反馈。"""
+    while not stop.wait(_HEARTBEAT_SECONDS):
+        elapsed = time.perf_counter() - started
+        _print(
+            f"    [仍在计算] TokenBudget.trim_history() 已运行 {elapsed:.1f}s "
+            f"| {case_id}/{variant}"
+        )
+
+
 def _trim_history_with_progress(self: TokenBudget, messages: list[dict], token_limit: int) -> list[dict]:
     current = _STATE.get("current")
     if current is not None:
@@ -63,12 +75,22 @@ def _trim_history_with_progress(self: TokenBudget, messages: list[dict], token_l
             f"| messages={len(messages)} | limit={token_limit} | {case_id}/{variant}"
         )
         started = time.perf_counter()
+        stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=_heartbeat,
+            args=(stop, started, case_id, variant),
+            daemon=True,
+        )
+        heartbeat.start()
         try:
             result = _ORIGINAL_TRIM_HISTORY(self, messages, token_limit)
         except KeyboardInterrupt:
             elapsed = time.perf_counter() - started
             _print(f"    [中断] final trim 已运行 {elapsed:.1f}s，瓶颈位于 TokenBudget.trim_history()")
             raise
+        finally:
+            stop.set()
+            heartbeat.join(timeout=0.2)
         elapsed = time.perf_counter() - started
         _print(f"    [阶段完成] final trim {elapsed:.2f}s | {len(messages)} -> {len(result)} messages")
         return result
@@ -143,6 +165,7 @@ def main() -> None:
     _print("Context Policy B1 benchmark（可观察模式）")
     _print(f"共 {len(_PLAN)} 个 case-variant replay；semantic mode/输出参数沿用原 benchmark CLI。")
     _print("每项会显示当前阶段、耗时、关键 token 指标、已完成和下一项。")
+    _print(f"final trim 超过 {_HEARTBEAT_SECONDS:.0f}s 时，每 {_HEARTBEAT_SECONDS:.0f}s 输出一次心跳。")
     benchmark._evaluate_case_variant = _evaluate_with_progress
     TokenBudget.trim_history = _trim_history_with_progress
     try:
