@@ -83,7 +83,7 @@ def _load_dotenv() -> None:
     """从仓库外的 .env 加载环境变量（不覆盖 shell 已设置的值）。
 
     零依赖：手写解析标准 KEY=VALUE 行，跳过注释与空行。
-    默认复用 ~/learn-claude-code/.env —— key 只保留这一份、且始终在
+    默认复用 ~/.config/forge-agent/env—— key 只保留这一份、且始终在
     forge-agent 仓库之外，git 永远不会上传它。config/default.yaml 里的
     ${VAR} 占位符在加载时从这些环境变量展开。
     可用环境变量 FORGE_ENV_FILE 指向其它路径。
@@ -92,7 +92,7 @@ def _load_dotenv() -> None:
     custom = os.environ.get("FORGE_ENV_FILE")
     if custom:
         candidates.append(Path(custom))
-    candidates.append(Path.home() / "learn-claude-code" / ".env")
+    candidates.append(Path.home() / ".config" /"forge-agent"/ "env")
     for env_path in candidates:
         if not env_path.exists():
             continue
