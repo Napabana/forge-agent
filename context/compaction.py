@@ -10,7 +10,11 @@ from datetime import datetime, timezone
 
 from agent.core import PrepareNextTurnContext
 from agent.task import EventType
-from context.token_budget import estimate_messages_tokens
+from context.token_budget import (
+    estimate_messages_tokens,
+    history_unit_tokens,
+    recent_history_units,
+)
 from llm.base import LLMMessage
 
 
@@ -25,6 +29,8 @@ class CompactionCheckpoint:
     summary_method: str
     summary_hash: str
     retained_tail: int
+    keep_recent_tokens: int
+    retained_tail_tokens: int
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -38,14 +44,16 @@ class TraceableCompaction:
         *,
         threshold: float = 0.8,
         target_ratio: float = 0.5,
-        retained_tail: int = 8,
+        keep_recent_tokens: int = 8_000,
         max_summary_chars: int = 2_000,
     ) -> None:
         if not 0 < target_ratio < threshold <= 1:
             raise ValueError("require 0 < target_ratio < threshold <= 1")
+        if keep_recent_tokens <= 0:
+            raise ValueError("keep_recent_tokens must be positive")
         self.threshold = threshold
         self.target_ratio = target_ratio
-        self.retained_tail = max(2, retained_tail)
+        self.keep_recent_tokens = keep_recent_tokens
         self.max_summary_chars = max_summary_chars
         self.checkpoints: list[CompactionCheckpoint] = []
 
@@ -54,16 +62,13 @@ class TraceableCompaction:
         raw = context.history.to_dicts()
         before_tokens = estimate_messages_tokens(raw)
         history_budget = context.token_budget.default_plan().history
-        if len(messages) <= self.retained_tail + 1 or before_tokens < history_budget * self.threshold:
+        if len(messages) <= 1 or before_tokens < history_budget * self.threshold:
             return None
 
-        tail_start = max(1, len(messages) - self.retained_tail)
-        if (
-            tail_start > 1
-            and messages[tail_start].role in {"user", "tool"}
-            and messages[tail_start - 1].role == "assistant"
-        ):
-            tail_start -= 1
+        recent_units = recent_history_units(raw, self.keep_recent_tokens)
+        if not recent_units:
+            return None
+        tail_start = recent_units[0].indices[0]
         dropped = messages[1:tail_start]
         if not dropped:
             return None
@@ -85,6 +90,9 @@ class TraceableCompaction:
         source_event_ids = tuple(
             message.event_ref for message in dropped if message.event_ref is not None
         )
+        retained_tail_tokens = sum(
+            history_unit_tokens(raw, unit) for unit in recent_units
+        )
         checkpoint = CompactionCheckpoint(
             checkpoint_id=uuid.uuid4().hex[:12],
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -94,7 +102,9 @@ class TraceableCompaction:
             repo_revision=_repo_revision(context.task.repo_path),
             summary_method="extractive-v1",
             summary_hash=hashlib.sha256(summary.encode("utf-8")).hexdigest(),
-            retained_tail=len(compacted) - 2,
+            retained_tail=len(messages) - tail_start,
+            keep_recent_tokens=self.keep_recent_tokens,
+            retained_tail_tokens=retained_tail_tokens,
         )
         self.checkpoints.append(checkpoint)
         context.event_log.log_trace(
@@ -108,6 +118,8 @@ class TraceableCompaction:
             summary_method=checkpoint.summary_method,
             summary_hash=checkpoint.summary_hash,
             retained_tail=checkpoint.retained_tail,
+            keep_recent_tokens=checkpoint.keep_recent_tokens,
+            retained_tail_tokens=checkpoint.retained_tail_tokens,
         )
         return None
 
