@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "runner_revision": "6c8219910b720de74939ab1c5e7a3e18feeaa6f6",
+  "fixture_sha256": "f9f57af5faead4715e52ba21ac247787107a3ad6622f8663759c7d34ab1ccece",
+  "semantic": {
+    "mode": "live",
+    "provider": "openai",
+    "protocol": "auto",
+    "model": "deepseek-v4.1-flash",
+    "max_tokens": 8192
+  },
+  "variants": [
+    "budget_trim_only",
+    "deterministic_pruning",
+    "hybrid_compaction"
+  ],
+  "case_count": 1
+}
