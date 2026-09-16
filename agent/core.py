@@ -5,7 +5,7 @@ ReAct 主循环。整个 agent 的大脑。
 
 职责（只做这些，不做别的）：
 - 维护对话历史，每轮组装 messages 调用 LLM
-- 拿到 Action 后调用 ToolRegistry 执行
+- 拿到 Action 后调用 ToolExecutor 执行
 - 把 Action + Observation 写入 EventLog
 - 检测三种终止/Reflection 触发条件
 - 返回 RunResult
@@ -51,10 +51,11 @@ from agent.task import (
     Action, ActionType, Event, EventType,
     Observation, ObservationStatus, RunResult, RunStatus, Task, ToolCall,
 )
+from harness.executor import ToolExecutionCanceled, ToolExecutorInfrastructureError
 from llm.base import LLMBackend, LLMMessage, LLMToolSchema
 from llm.errors import LLMCallbackError, LLMErrorInfo, classify_llm_error
 from llm.usage import SessionUsage
-from tools.base import ToolRegistry
+from tools.base import ToolErrorType, ToolRegistry
 
 if TYPE_CHECKING:
     from harness.hooks import Hooks
@@ -84,58 +85,40 @@ class PrepareNextTurnResult:
     """prepare_next_turn 的薄结果：持久消息、Repo Map 刷新和一次性模型视图。"""
 
     messages: tuple[LLMMessage, ...] = ()
-    refresh_repo_map: bool = False  # True 时让下一次消息组装重新扫描当前仓库
-    # 仅下一次 LLM 调用可见；不会写回 canonical ConversationHistory。
+    refresh_repo_map: bool = False
     history_override: tuple[LLMMessage, ...] | None = None
 
 
-PrepareNextTurn = Callable[
-    [PrepareNextTurnContext],
-    PrepareNextTurnResult | None,
-]
+PrepareNextTurn = Callable[[PrepareNextTurnContext], PrepareNextTurnResult | None]
 
-
-# ---------------------------------------------------------------------------
-# 配置
-# ---------------------------------------------------------------------------
 
 @dataclass
 class AgentConfig:
     """Agent 运行时配置，从 config/default.yaml 加载后传入。"""
     max_steps: int = 40
-    reflection_no_edit_steps: int = 6   # 连续 N 步无文件写操作触发 Reflection
-    loop_detection_window: int = 3       # 同一周期至少重复 N 次
-    loop_detection_max_period: int = 3   # 检测 AAA / ABABAB / ABCABCABC
-    test_tool_names: tuple[str, ...] = ("test", "pytest")  # 触发 Reflection 的工具名
-    fatal_tool_error_repeats: int = 2     # repeated fatal infrastructure errors before abort
-    budget_tokens: int = 80_000            # 总 token 预算
-    history_max_messages: int = 40         # 兼容旧配置；canonical history 不再按条数破坏性裁剪
-    llm_max_retries: int = 3               # LLM 调用失败最大重试次数
-    llm_retry_delay: float = 2.0           # 重试间隔（秒，指数退避）
-    llm_retry_max_delay: float = 30.0      # 单次等待上限
-    llm_retry_jitter: float = 0.0          # 随机抖动比例（0=关闭）
-    stream: bool = False                   # 是否启用流式输出
-    stream_callback: object = None         # StreamCallback，最终回答流式回调
-    thought_callback: object = None        # StreamCallback，推理模型专用
-    confirm_dangerous: bool = False        # 是否对危险命令要求用户确认
-    confirm_callback: object = None        # ConfirmCallback，None=跳过确认
-    cancel_event: object = None            # threading.Event-like；set 后协作取消
-    hooks: Hooks | None = None              # 可选工具生命周期 hooks
+    reflection_no_edit_steps: int = 6
+    loop_detection_window: int = 3
+    loop_detection_max_period: int = 3
+    test_tool_names: tuple[str, ...] = ("test", "pytest")
+    fatal_tool_error_repeats: int = 2
+    budget_tokens: int = 80_000
+    history_max_messages: int = 40
+    llm_max_retries: int = 3
+    llm_retry_delay: float = 2.0
+    llm_retry_max_delay: float = 30.0
+    llm_retry_jitter: float = 0.0
+    stream: bool = False
+    stream_callback: object = None
+    thought_callback: object = None
+    confirm_dangerous: bool = False
+    confirm_callback: object = None
+    cancel_event: object = None
+    hooks: Hooks | None = None
     prepare_next_turn: PrepareNextTurn | None = None
 
 
-# ---------------------------------------------------------------------------
-# Agent
-# ---------------------------------------------------------------------------
-
 class Agent:
-    """
-    ReAct 主循环实现。
-
-    用法：
-        agent = Agent(backend, registry, config)
-        result = agent.run(task, log)
-    """
+    """同步 ReAct 主循环实现。"""
 
     def __init__(
         self,
@@ -147,9 +130,7 @@ class Agent:
         self._backend = backend
         self._registry = registry
         self._cfg = config or AgentConfig()
-        # 默认透明直通：未注入 executor 时用一个无 hooks/permission 的
-        # ToolExecutor 包住 registry，行为等价于直接 registry.execute_tool。
-        # 需要安全管线的地方（如 --confirm / 多智能体入口）显式注入 executor。
+        # 未注入 executor 时仍使用透明 ToolExecutor；生产 Runner 会注入 permission 版本。
         self._executor = executor or _default_executor(registry, self._cfg.hooks)
         self._repo_map_cache_key: str | None = None
         self._repo_map_force_refresh = False
@@ -168,28 +149,13 @@ class Agent:
         self._repo_map_force_refresh = True
         return existed
 
-    # ------------------------------------------------------------------
-    # 公开接口
-    # ------------------------------------------------------------------
-
     def run(
         self,
         task: Task,
         log: EventLog,
         history: ConversationHistory | None = None,
     ) -> RunResult:
-        """
-        执行一次完整的 agent 运行。
-
-        Args:
-            task: 任务描述
-            log:  已初始化的 EventLog（由调用方创建并传入）
-            history: 可选共享对话历史。chat/session 模式传入后跨轮复用；
-                     None 时为单次 run 新建 history。
-
-        Returns:
-            RunResult，包含最终状态和统计信息
-        """
+        """执行一次完整的 agent 运行。"""
         self._current_repo_path = task.repo_path
         self._repo_map_query = task.description
         cache_key = task.repo_path
@@ -214,7 +180,6 @@ class Agent:
 
         token_budget = TokenBudget(total=self._cfg.budget_tokens)
         repo_map = getattr(self, "_repo_map_instance", RepoMap(task.repo_path))
-
         usage = SessionUsage()
         total_tokens = 0
         steps_without_edit = 0
@@ -256,23 +221,16 @@ class Agent:
                     return prepare_result
 
             logger.debug("Step %d/%d", step, task.max_steps)
-
             messages = self._build_messages(history, token_budget, repo_map)
-            # Step 上限是最坏情况熔断器；最后三轮给模型显式收尾信号，避免突然硬切。
             remaining_steps = task.max_steps - step + 1
             injected_messages: list[LLMMessage] = []
             if remaining_steps <= 3:
-                warning = LLMMessage(
-                    role="user",
-                    content=step_budget_warning(),
-                )
+                warning = LLMMessage(role="user", content=step_budget_warning())
                 messages.append(warning)
                 injected_messages.append(warning)
             tools = self._registry.get_schemas()
             token_breakdown = self._trace_token_breakdown(
-                messages,
-                tools,
-                injected_messages=injected_messages,
+                messages, tools, injected_messages=injected_messages,
             )
             llm_started = time.perf_counter()
             llm_span = log.log_trace(
@@ -303,6 +261,7 @@ class Agent:
             try:
                 response = self._call_with_retry(messages, tools, on_retry=log_retry)
             except Exception as exc:
+                canceled = self._is_cancel_requested()
                 error = classify_llm_error(exc)
                 log.log_trace(
                     EventType.LLM_CALL_FAILED,
@@ -314,10 +273,24 @@ class Agent:
                     retries=llm_retries,
                     retry_count=llm_retries,
                     token_breakdown=token_breakdown,
-                    error_type=error.kind.value,
+                    error_type="canceled" if canceled else error.kind.value,
                     status_code=error.status_code,
                     error=str(exc),
+                    cancel_requested=canceled,
                 )
+                if canceled:
+                    reason = "Canceled by external request"
+                    logger.info("Agent task %s canceled during model call", task.task_id)
+                    log.log_task_failed(steps=step, reason=reason)
+                    return RunResult(
+                        task_id=task.task_id,
+                        status=RunStatus.CANCELED,
+                        summary=reason,
+                        steps_taken=step,
+                        total_tokens=total_tokens,
+                        usage=usage.snapshot(),
+                        termination_reason="canceled",
+                    )
                 logger.error("LLM call failed at step %d after retries: %s", step, exc)
                 log.log_task_failed(steps=step, reason=f"LLM error: {exc}")
                 return RunResult(
@@ -341,15 +314,28 @@ class Agent:
                 retries=llm_retries,
                 retry_count=llm_retries,
                 token_breakdown=token_breakdown,
-                # ``usage`` is kept for B1/B2 readers; provider_usage is the
-                # explicit Trace v2 name and represents provider-reported usage.
                 usage=response.usage.to_dict(),
                 provider_usage=response.usage.to_dict(),
             )
             usage.record(response.usage)
             total_tokens = usage.total_tokens
-            action = response.action
 
+            # 同步 provider call 无法强杀；返回后第一安全边界优先响应 cancel。
+            if self._is_cancel_requested():
+                reason = "Canceled by external request"
+                logger.info("Agent task %s canceled after model call", task.task_id)
+                log.log_task_failed(steps=step, reason=reason)
+                return RunResult(
+                    task_id=task.task_id,
+                    status=RunStatus.CANCELED,
+                    summary=reason,
+                    steps_taken=step,
+                    total_tokens=total_tokens,
+                    usage=usage.snapshot(),
+                    termination_reason="canceled",
+                )
+
+            action = response.action
             action_event_ref = log.log_action(
                 step=step,
                 action=action,
@@ -418,7 +404,8 @@ class Agent:
                         step, rejection_code or "COMPLETION_REQUIREMENT_UNMET", verification_error
                     )
                     history.add(LLMMessage(
-                        role="assistant", content=self._format_action_for_history(action),
+                        role="assistant",
+                        content=self._format_action_for_history(action),
                         event_ref=action_event_ref,
                     ))
                     history.add(LLMMessage(
@@ -476,9 +463,24 @@ class Agent:
                     step,
                     tool_name=tc.name,
                 )
+
+                def log_permission_decision(name, params, decision) -> None:
+                    log.log_permission_decision(
+                        task.task_id,
+                        name,
+                        decision.decision.value,
+                        decision.reason,
+                        params,
+                    )
+
                 try:
-                    result = self._executor.execute(tc.name, tc.params)
-                except Exception as exc:
+                    result = self._executor.execute(
+                        tc.name,
+                        tc.params,
+                        decision_callback=log_permission_decision,
+                        cancel_event=self._cfg.cancel_event,
+                    )
+                except ToolExecutionCanceled as exc:
                     log.log_trace(
                         EventType.TOOL_EXECUTION_FAILED,
                         step,
@@ -486,10 +488,74 @@ class Agent:
                         tool_name=tc.name,
                         duration_ms=(time.perf_counter() - tool_started) * 1000,
                         result_bytes=0,
-                        error_type=type(exc).__name__,
+                        error_type="canceled",
                         error=str(exc),
+                        lifecycle_phase=exc.phase,
+                        cancel_requested=True,
                     )
-                    raise
+                    reason = "Canceled by external request"
+                    log.log_task_failed(steps=step, reason=reason)
+                    return RunResult(
+                        task_id=task.task_id,
+                        status=RunStatus.CANCELED,
+                        summary=reason,
+                        steps_taken=step,
+                        total_tokens=total_tokens,
+                        usage=usage.snapshot(),
+                        termination_reason="canceled",
+                    )
+                except ToolExecutorInfrastructureError as exc:
+                    log.log_trace(
+                        EventType.TOOL_EXECUTION_FAILED,
+                        step,
+                        span_id=tool_span,
+                        tool_name=tc.name,
+                        duration_ms=(time.perf_counter() - tool_started) * 1000,
+                        result_bytes=0,
+                        error_type=ToolErrorType.INFRASTRUCTURE.value,
+                        error=str(exc),
+                        lifecycle_phase=exc.phase,
+                        framework_error_type=type(exc.original_error).__name__,
+                    )
+                    reason = f"Tool lifecycle infrastructure failure: {exc}"
+                    log.log_task_failed(steps=step, reason=reason)
+                    return RunResult(
+                        task_id=task.task_id,
+                        status=RunStatus.FAILED,
+                        summary=reason,
+                        steps_taken=step,
+                        total_tokens=total_tokens,
+                        usage=usage.snapshot(),
+                        patch=self._get_git_diff(task.repo_path),
+                        error=reason,
+                        termination_reason="infrastructure_error",
+                    )
+                except Exception as exc:
+                    # BaseTool 自身异常已由 ToolRegistry 转为 TOOL_EXECUTION；能到这里的是框架故障。
+                    log.log_trace(
+                        EventType.TOOL_EXECUTION_FAILED,
+                        step,
+                        span_id=tool_span,
+                        tool_name=tc.name,
+                        duration_ms=(time.perf_counter() - tool_started) * 1000,
+                        result_bytes=0,
+                        error_type=ToolErrorType.INFRASTRUCTURE.value,
+                        error=str(exc),
+                        framework_error_type=type(exc).__name__,
+                    )
+                    reason = f"Tool executor infrastructure failure: {type(exc).__name__}: {exc}"
+                    log.log_task_failed(steps=step, reason=reason)
+                    return RunResult(
+                        task_id=task.task_id,
+                        status=RunStatus.FAILED,
+                        summary=reason,
+                        steps_taken=step,
+                        total_tokens=total_tokens,
+                        usage=usage.snapshot(),
+                        patch=self._get_git_diff(task.repo_path),
+                        error=reason,
+                        termination_reason="infrastructure_error",
+                    )
 
                 tool_event = (
                     EventType.TOOL_EXECUTION_FINISHED
@@ -529,9 +595,23 @@ class Agent:
                     observation=observation,
                 )
 
-                infrastructure_error = self._detect_known_fatal_infrastructure_error(
-                    observation
-                )
+                # Tool 已经开始时不强杀同步调用；真实结果和 post-hook 先落盘，再在这里取消。
+                if self._is_cancel_requested():
+                    reason = "Canceled by external request"
+                    logger.info("Agent task %s canceled after tool execution", task.task_id)
+                    log.log_task_failed(steps=step, reason=reason)
+                    return RunResult(
+                        task_id=task.task_id,
+                        status=RunStatus.CANCELED,
+                        summary=reason,
+                        steps_taken=step,
+                        total_tokens=total_tokens,
+                        usage=usage.snapshot(),
+                        patch=self._get_git_diff(task.repo_path),
+                        termination_reason="canceled",
+                    )
+
+                infrastructure_error = self._detect_known_fatal_infrastructure_error(observation)
                 if infrastructure_error is not None:
                     if infrastructure_error == fatal_error_key:
                         fatal_error_count += 1
@@ -540,10 +620,7 @@ class Agent:
                         fatal_error_count = 1
 
                     if fatal_error_count >= max(1, self._cfg.fatal_tool_error_repeats):
-                        reason = (
-                            "Repeated fatal infrastructure error: "
-                            f"{infrastructure_error}"
-                        )
+                        reason = "Repeated fatal infrastructure error: " + infrastructure_error
                         logger.error(reason)
                         log.log_task_failed(steps=step, reason=reason)
                         return RunResult(
@@ -626,8 +703,7 @@ class Agent:
                     )
                     history.add(LLMMessage(role="user", content=reflect_prompt))
                     logger.warning(
-                        "Loop detected at step %d; injected recovery reflection",
-                        step,
+                        "Loop detected at step %d; injected recovery reflection", step,
                     )
                     continue
 
@@ -652,15 +728,14 @@ class Agent:
                     logger.debug("Reflection triggered: no_edit at step %d", step)
 
             elif action.action_type == ActionType.REFLECTION:
-                history.add(LLMMessage(
-                    role="assistant",
-                    content=action.thought,
-                ))
+                history.add(LLMMessage(role="assistant", content=action.thought))
 
         reason = f"Reached max_steps limit ({task.max_steps})"
         log.log_task_incomplete(
-            steps=task.max_steps, reason=reason,
-            termination_reason="resource_exhausted", resource_reason="max_steps",
+            steps=task.max_steps,
+            reason=reason,
+            termination_reason="resource_exhausted",
+            resource_reason="max_steps",
         )
         return RunResult(
             task_id=task.task_id,
@@ -674,17 +749,13 @@ class Agent:
         )
 
     @staticmethod
-    def _detect_known_fatal_infrastructure_error(
-        observation: Observation,
-    ) -> str | None:
+    def _detect_known_fatal_infrastructure_error(observation: Observation) -> str | None:
         """只检查可能经过 Runtime 的工具，不要所有失败 Observation 都检查。"""
         if observation.is_success():
             return None
-
         runtime_tools = {"shell", "test", "pytest", "git"}
         if observation.tool_name not in runtime_tools:
             return None
-
         text = "\n".join(
             part for part in (observation.output, observation.error) if part
         ).lower()
@@ -710,10 +781,6 @@ class Agent:
         if callable(is_set):
             return bool(is_set())
         return bool(event)
-
-    # ------------------------------------------------------------------
-    # 内部辅助
-    # ------------------------------------------------------------------
 
     def _prepare_next_turn(
         self, task: Task, step: int, history: ConversationHistory, repo_map: RepoMap,
@@ -851,12 +918,8 @@ class Agent:
         else:
             raw_history = history.to_dicts()
 
-        history_limit = token_budget.history_limit_for_request(
-            system_content,
-            schemas,
-        )
+        history_limit = token_budget.history_limit_for_request(system_content, schemas)
         trimmed_history_dicts = token_budget.trim_history(raw_history, history_limit)
-
         messages = [LLMMessage(role="system", content=system_content)]
         for item in trimmed_history_dicts:
             messages.append(LLMMessage(
@@ -873,12 +936,7 @@ class Agent:
         *,
         injected_messages: list[LLMMessage] | None = None,
     ) -> dict[str, int]:
-        """Estimate why a provider request is large without claiming billing truth.
-
-        ``system_tokens`` excludes the Repo Map estimate so the diagnostic
-        partitions can be added without double-counting. ``provider_usage`` on
-        the finished model span remains the source of actual provider usage.
-        """
+        """Estimate why a provider request is large without claiming billing truth."""
 
         def as_dict(message: LLMMessage) -> dict:
             data = {"role": message.role, "content": message.content}
@@ -894,20 +952,14 @@ class Agent:
         repo_map_tokens = min(repo_map_tokens, system_message_tokens)
         system_tokens = max(0, system_message_tokens - repo_map_tokens)
         tool_schema_tokens = estimate_tool_schemas_tokens(tools)
-
-        injected_dicts = [
-            as_dict(message) for message in (injected_messages or [])
-        ]
+        injected_dicts = [as_dict(message) for message in (injected_messages or [])]
         injected_tokens = estimate_messages_tokens(injected_dicts)
         non_system_tokens = estimate_messages_tokens(message_dicts[1:])
         history_tokens = max(0, non_system_tokens - injected_tokens)
         pending_tokens = 0
         context_tokens = history_tokens + injected_tokens + pending_tokens
         estimated_input_tokens = (
-            system_tokens
-            + repo_map_tokens
-            + tool_schema_tokens
-            + context_tokens
+            system_tokens + repo_map_tokens + tool_schema_tokens + context_tokens
         )
         return {
             "system_tokens": system_tokens,
@@ -921,20 +973,16 @@ class Agent:
         }
 
     def _format_action_for_history(self, action: Action) -> str:
-        """把 Action 格式化为 assistant 消息，写入对话历史。"""
         parts = [f"Thought: {action.thought}"]
         if action.tool_call:
             parts.append(f"Action: {action.tool_call.name}")
-            parts.append(
-                f"Params: {json.dumps(action.tool_call.params, ensure_ascii=False)}"
-            )
+            parts.append(f"Params: {json.dumps(action.tool_call.params, ensure_ascii=False)}")
         elif action.message:
             parts.append(f"Message: {action.message}")
         return "\n".join(parts)
 
     def _format_observation_for_history(self, observation: Observation) -> str:
-        """把 Observation 格式化为 user 消息，写入对话历史。"""
-        status = "SUCCESS" if observation.is_success() else "ERROR"
+        status = observation.status.value.upper()
         lines = [f"[Tool: {observation.tool_name} | {status}]"]
         if observation.output:
             lines.append(observation.output)
@@ -948,7 +996,7 @@ class Agent:
         tools: list[LLMToolSchema],
         on_retry: Callable[[int, LLMErrorInfo], None] | None = None,
     ):
-        """Call the backend with bounded retry for whitelisted transient errors."""
+        """Call the backend with bounded retry; cancel interrupts retry waits, not an active sync call."""
         import random
 
         attempts = self._cfg.llm_max_retries
@@ -956,6 +1004,8 @@ class Agent:
             raise RuntimeError("llm_max_retries must be at least 1")
 
         for attempt in range(1, attempts + 1):
+            if self._is_cancel_requested():
+                raise RuntimeError("Canceled by external request")
             stream_output_started = False
 
             def tracked_callback(callback):
@@ -986,6 +1036,8 @@ class Agent:
             except LLMCallbackError:
                 raise
             except Exception as exc:
+                if self._is_cancel_requested():
+                    raise
                 error = classify_llm_error(exc)
                 if stream_output_started or not error.retryable or attempt >= attempts:
                     raise
@@ -1013,12 +1065,16 @@ class Agent:
                 )
                 if on_retry is not None:
                     on_retry(attempt, error)
-                time.sleep(delay)
+                wait = getattr(self._cfg.cancel_event, "wait", None)
+                if delay and callable(wait):
+                    if wait(delay):
+                        raise
+                elif delay:
+                    time.sleep(delay)
 
         raise AssertionError("retry loop exited unexpectedly")
 
     def _get_git_diff(self, repo_path: str) -> str | None:
-        """抓取 git diff HEAD 作为 patch，失败时静默返回 None。"""
         import subprocess
         try:
             proc = subprocess.run(
@@ -1034,7 +1090,6 @@ class Agent:
             return None
 
     def _get_repo_state(self, repo_path: str) -> str:
-        """返回 HEAD + working-tree 指纹，提交后的 clean 状态也能与基线区分。"""
         return repository_fingerprint(repo_path)
 
 
@@ -1042,9 +1097,6 @@ def _default_executor(
     registry: ToolRegistry,
     hooks: "Hooks | None" = None,
 ) -> "ToolExecutor":
-    """
-    构造一个透明直通的 ToolExecutor：无 hooks、无 permission，
-    行为等价于直接调 registry.execute_tool。延迟 import 避免 agent <-> harness 循环。
-    """
+    """构造透明 ToolExecutor；产品入口由 ExecutionRunner 注入 permission。"""
     from harness.executor import ToolExecutor
     return ToolExecutor(registry, hooks=hooks)

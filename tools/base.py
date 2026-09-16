@@ -87,9 +87,15 @@ class ToolResult:
     diagnostics: tuple[str, ...] = ()   # 不改变结果的观察阶段诊断
 
     def to_observation(self, tool_name: str) -> Observation:
-        """转换为 Observation，供 core.py 写入 EventLog 和注入上下文。"""
+        """转换为 Observation；TIMEOUT 保留独立状态，其余失败统一为 ERROR。"""
+        if self.success:
+            status = ObservationStatus.SUCCESS
+        elif self.error_type is ToolErrorType.TIMEOUT:
+            status = ObservationStatus.TIMEOUT
+        else:
+            status = ObservationStatus.ERROR
         return Observation(
-            status=ObservationStatus.SUCCESS if self.success else ObservationStatus.ERROR,
+            status=status,
             output=self.output,
             tool_name=tool_name,
             error=self.error,
