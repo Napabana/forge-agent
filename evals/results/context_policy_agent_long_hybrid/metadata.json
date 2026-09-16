@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "runner_revision": "9e2910f37284c4ea2c390cf9d7eab4c632e59aa2",
+  "fixture_sha256": "1f0f29f3ed63e9a7d22f4fd586f3ab17cae9d2eeac59e6e43c3fb911cc56eadc",
+  "model": "deepseek-v4.1-flash",
+  "provider": "openai",
+  "protocol": "auto",
+  "budget_tokens": 8000,
+  "max_steps": 8,
+  "cases": [
+    "long-hard-constraint"
+  ],
+  "variants": [
+    "hybrid_compaction"
+  ],
+  "run_count": 1
+}
