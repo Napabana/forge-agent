@@ -246,7 +246,7 @@ def test_provider_transient_retry_then_success_is_offline_and_traced(tmp_path):
     assert backend.call_count == 2
     retries = event_payloads(result, EventType.LLM_CALL_RETRY)
     assert len(retries) == 1
-    assert retries[0]["error_type"] == "transient"
+    assert retries[0]["error_type"] == "connection"
     assert len(event_payloads(result, EventType.LLM_CALL_FINISHED)) == 1
 
 
