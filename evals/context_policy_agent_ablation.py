@@ -448,6 +448,8 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if not group:
             continue
         solved = sum(bool(row["passed"]) for row in group)
+        verifier_passed = sum(row.get("verifier_status") == "passed" for row in group)
+        max_steps_exhausted = sum(row.get("agent_status") == "max_steps" for row in group)
         total_tokens = sum(int(row["total_tokens_with_context"]) for row in group)
         latencies = sorted(float(row["latency_seconds"]) for row in group)
         pressures = [
@@ -459,6 +461,8 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "runs": len(group),
             "solved": solved,
             "pass_at_1": solved / len(group),
+            "verifier_pass_rate": verifier_passed / len(group),
+            "max_steps_exhausted_rate": max_steps_exhausted / len(group),
             "false_finish_rate": sum(bool(row["false_finish"]) for row in group) / len(group),
             "mean_agent_tokens": statistics.mean(int(row["agent_tokens"]) for row in group),
             "mean_semantic_tokens": statistics.mean(int(row["semantic_tokens"]) for row in group),
@@ -485,14 +489,15 @@ def _report_markdown(metadata: dict[str, Any], report: dict[str, Any]) -> str:
         f"- runs: {metadata['run_count']}",
         f"- cases: {', '.join(metadata['cases'])}",
         "",
-        "| variant | pass@1 | tokens/solved | mean total tokens | mean latency(s) | trigger rate | semantic calls | max pressure |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| variant | pass@1 | verifier pass | max-step exhausted | tokens/solved | mean total tokens | mean latency(s) | trigger rate | semantic calls | max pressure |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for variant, row in report.items():
         pressure = row.get("mean_max_pressure_ratio")
         pressure_text = "n/a" if pressure is None else f"{pressure:.3f}"
         lines.append(
-            f"| {variant} | {row['pass_at_1']:.3f} | {row['tokens_per_solved']:.1f} | "
+            f"| {variant} | {row['pass_at_1']:.3f} | {row['verifier_pass_rate']:.3f} | "
+            f"{row['max_steps_exhausted_rate']:.3f} | {row['tokens_per_solved']:.1f} | "
             f"{row['mean_total_tokens_with_context']:.1f} | {row['mean_latency_seconds']:.1f} | "
             f"{row['context_trigger_rate']:.3f} | {row['semantic_calls']} | {pressure_text} |"
         )
