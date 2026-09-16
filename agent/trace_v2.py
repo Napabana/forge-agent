@@ -8,10 +8,10 @@ tests/reporting code.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from collections.abc import Mapping
 from typing import Any, Iterator
 
 TRACE_SCHEMA_VERSION = 2
@@ -52,7 +52,7 @@ def current_trace_context() -> TraceContext:
 
 
 # Exact credential-bearing field names. Key matching is case-insensitive and
-# treats '-' and '_' equivalently.
+# treats spaces, '-' and '_' equivalently.
 _SENSITIVE_KEYS = frozenset({
     "authorization",
     "proxy_authorization",
@@ -114,14 +114,15 @@ _SK_RE = re.compile(r"(?i)\bsk-[A-Za-z0-9_-]{8,}\b")
 _GHP_RE = re.compile(r"(?i)\bghp_[A-Za-z0-9]{8,}\b")
 _GITHUB_PAT_RE = re.compile(r"(?i)\bgithub_pat_[A-Za-z0-9_]{8,}\b")
 _INLINE_SECRET_RE = re.compile(
-    r"(?i)\b(authorization|proxy-authorization|api[_-]?key|apikey|"
-    r"access[_-]?token|refresh[_-]?token|github[_-]?token|password|secret|token)"
+    r"(?i)\b(authorization|proxy[\s_-]?authorization|api[\s_-]?key|apikey|"
+    r"access[\s_-]?token|refresh[\s_-]?token|github[\s_-]?token|"
+    r"password|secret|token)"
     r"(\s*[:=]\s*)([^\s,;]+)"
 )
 
 
 def _normalize_key(key: object) -> str:
-    return str(key).strip().lower().replace("-", "_")
+    return re.sub(r"[\s-]+", "_", str(key).strip().lower())
 
 
 def is_sensitive_trace_key(key: object) -> bool:
