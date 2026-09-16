@@ -4,9 +4,11 @@
 
 当前基线：`dev`
 
-## 当前状态
+## 最终状态
 
-P2 生产主链已经完成：
+P2 已完成并收口，状态：**DONE**。
+
+生产主链：
 
 ```text
 Repository State Detector
@@ -17,22 +19,22 @@ Repository State Detector
 → Model-visible Repo Map
 ```
 
-当前状态：
+Milestone：
 
 | Milestone | 状态 | 证据 |
 | --- | --- | --- |
 | RM1 No / Static / Query-aware real-model baseline | DONE（small sample） | `repo_map_agent_ablation_real_v1`，4 cases × 4 variants × 1 run |
-| RM2 Persistent per-file index | DONE | SQLite index + warm reuse + fallback |
+| RM2 Persistent per-file index | DONE | SQLite index + warm reuse + corruption/schema fallback |
 | RM3 Changed-file incremental update | DONE | add/modify/delete/rename/staged/unstaged/untracked/HEAD + direct write update |
-| RM4 Prompt Cache layout | PARTIAL | stable-prefix production layout 已完成；真实 Provider cache A/B harness 已就绪，尚未执行 |
+| RM4 Prompt Cache layout | DONE（structural only） | stable-prefix production layout + deterministic regression；不形成定量 cache improvement claim |
 | RM5 Incremental final ablation | DONE（small sample） | Incremental included；16-run real-model artifact 已冻结 |
 
-## 已冻结的离线证据
+## 冻结离线证据
 
-12-case commit-history：
+12-case commit-history retrieval：
 
 ```text
-MRR: 0.096954 → 0.318750
+MRR:                  0.096954 → 0.318750
 budget target recall: 0.364914 → 0.635251
 ```
 
@@ -55,10 +57,9 @@ two-file update       0.1766s
 full rebuild          0.8045s
 ```
 
-结论边界：收益来自 warm reuse / changed-file update；cold build 没有加速。
-`71.26×` 仍只属于旧 reference-count 子步骤。
+结论边界：收益来自 warm reuse / changed-file update；cold build 没有加速。`71.26×` 仍只属于旧 reference-count 子步骤，不是完整 Repo Map 或 Agent E2E speedup。
 
-## 已冻结的 Real-model Small Sample
+## Real-model Small Sample
 
 目录：
 
@@ -90,7 +91,7 @@ runs = 16
 
 - 16/16 verifier pass，说明四组都生成了满足 hidden verifier 的 patch。
 - Static 0/4 solved 来自 completion/resource boundary，不等于 patch 全失败。
-- 这是每 cell 只执行 1 次的 non-deterministic small sample，不计算稳定 pass@1。
+- 每 cell 只执行 1 次，属于 non-deterministic small sample，不计算稳定 pass@1，不外推总体 success rate。
 
 机器校验：
 
@@ -98,46 +99,82 @@ runs = 16
 python -m evals.verify_p2_repo_map_real
 ```
 
-## Exploration telemetry 修正
+## Exploration telemetry
 
-历史字段 `files_read` / `first_target_read_step` 只识别 `file_read/file_view`，而真实模型频繁使用 shell 访问文件，因此不进入正式 P2 performance claim。
+历史 `files_read` / `first_target_read_step` 只识别 `file_read/file_view`，而真实模型频繁使用 shell 访问文件，因此不进入正式 P2 performance claim。
 
 新增离线 Trace reader：
 
-```bash
-python -m evals.repo_map_trace_analysis
+```text
+evals/repo_map_trace_analysis.py
 ```
 
-它保留 legacy metric，同时增加 explicit shell-path access。历史 raw 不重写。
+它保留 legacy metric，同时增加 explicit shell-path access；历史 raw 不重写。
 
-## RM4：唯一剩余正式实验
+## RM4 Prompt Cache 最终结论
 
-真实 Provider 已经返回非零 `cached_input_tokens`，所以现在可以做 prompt-layout controlled A/B。
-
-先跑一次：
-
-```bash
-python -m evals.repo_map_prompt_cache_ablation --config config/default.yaml --repetitions 1 --measured-calls 4 --max-tokens 64 --output ../forge-agent-evals/repo-map-prompt-cache-ab
-```
-
-该实验只比较：
+生产布局：
 
 ```text
-legacy_dynamic_first
-vs
-stable_prefix
+stable system rules
+→ stable textual tool descriptions / tool schemas
+→ dynamic Repo Map
+→ conversation
 ```
 
-保持 model、tool schemas、user message 和 dynamic context 形状一致。
+该顺序作为结构优化保留，目标是让支持 prefix caching 的 Provider 尽可能复用更长的稳定前缀。
 
-只有该实验跑完并审计 provider usage 后，才能决定是否写 cached input fraction、uncached input tokens 或 provider-specific cache effect。
+已执行一次 controlled real-provider A/B：
 
-不能提前写“Prompt Cache 提升 X%”。
+```text
+legacy_dynamic_first:
+mean input = 4514
+mean cached input = 0
+cache fraction = 0.0
 
-## 可选增强，不是 blocker
+stable_prefix:
+mean input = 4514
+mean cached input = 0
+cache fraction = 0.0
+```
 
-- [ ] Real-model A/B/C/D 做 3 repetitions，提高统计稳定性；
-- [ ] 扩大到更多真实仓库任务；
-- [ ] 换第二个 provider 验证 cache layout 是否具有 provider portability。
+两组都没有观察到 provider-reported cached input，因此该实验不提供 layout cache effect 的定量证据。
 
-这些都不是当前 P2 persistent/incremental 实现的完成 blocker。
+同时真实 Agent Trace 中曾观察到非零 provider-reported cached tokens，所以不能把本次 A/B 的 0 解读为 Provider 不支持缓存或 Forge 无法解析缓存。
+
+最终决定：
+
+- 保留 stable-prefix 生产布局；
+- 保留 layout regression 和 cache A/B harness；
+- 不写 Prompt Cache 提升百分比；
+- 不再追加 identical-control、更多重复或第二 Provider 实验；
+- RM4 记为 **DONE（structural optimization, no quantitative provider-cache claim）**。
+
+## 可引用表述
+
+可以说：
+
+> Query-aware Repo Map 在 12-case frozen commit-history benchmark 上将 MRR 从 0.097 提升到 0.319、Token Budget 内 target recall 从 0.365 提升到 0.635；随后将 Repo Map 拆为持久化 SQLite 结构索引与 Query-aware 视图，Query 改变只 rerank、代码修改按 changed file 增量更新，并用 12-case strict equivalence regression 保证旧排序/渲染语义不变。
+
+追问真实 Agent 时可以补充：
+
+> 在 4-case × 4-variant 的 single-run real-model small sample 中，四组 patch 均通过 hidden verifier；Incremental Query-aware 观察到 4/4 completion、mean total tokens 约 59.5k、mean latency 约 64.7s。
+
+Prompt Cache 只说：
+
+> 将稳定 rules/tool descriptions 放在动态 Repo Map 前，尽量扩大支持 prefix caching Provider 的可复用前缀；没有宣称定量 cache 提升。
+
+## 不可夸大
+
+- 不写“Repo Map 让 Agent 总体成功率提升 X%”；
+- 不写“Incremental 稳定优于所有方案”；
+- 不写“Static Repo Map 代码成功率为 0%”；
+- 不写“整个 Agent 快 71×”；
+- 不写“Prompt Cache 命中率提升 X%”；
+- 不把 3.85s → 3.10s 的 microbenchmark latency 当作 layout 提速结论。
+
+## 后续
+
+P2 没有剩余 blocker。
+
+以下只属于未来可选研究，不再作为当前 TODO：更多 repetitions、更大真实任务集、第二 Provider cache portability、进一步 Repo Map retrieval/ranking 研究。
