@@ -8,6 +8,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent.loop_detector import snapshot_repository
+
 
 _SKIP_DIRS = frozenset({
     ".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache",
@@ -132,8 +134,28 @@ def detect_repository_changes(
 
 
 def repository_fingerprint(repo_path: str | Path) -> str:
-    """Backward-compatible fingerprint used by Chat and completion guards."""
-    return capture_repository_state(repo_path).fingerprint
+    """Return the frozen HEAD + working-tree fingerprint used outside Repo Map.
+
+    Repo Map needs richer change-detection state than the pre-existing Context/
+    Chat/completion contract. Keep that richer state in ``capture_repository_state``
+    instead of changing this public helper's semantics.
+    """
+    root = Path(repo_path)
+    head = "no-head"
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            head = result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return f"{head}:{snapshot_repository(root)}"
 
 
 def _parse_status_porcelain_z(raw: str) -> tuple[set[str], set[tuple[str, str]]]:
