@@ -1,4 +1,4 @@
-"""Trace v2 schema constants and schema-level redaction helpers.
+"""Trace v2 schema constants, context propagation, and redaction helpers.
 
 This module deliberately has no dependency on EventLog or provider SDKs so the
 same sanitisation rules can be applied at the final JSONL boundary and reused by
@@ -8,11 +8,48 @@ tests/reporting code.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
-from typing import Any
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from collections.abc import Mapping
+from typing import Any, Iterator
 
 TRACE_SCHEMA_VERSION = 2
 REDACTED = "[REDACTED]"
+
+
+@dataclass(frozen=True)
+class TraceContext:
+    """Product-level correlation propagated into nested runner/orchestrator code."""
+
+    entrypoint: str | None = None
+    session_id: str | None = None
+
+
+_TRACE_CONTEXT: ContextVar[TraceContext] = ContextVar(
+    "forge_trace_context",
+    default=TraceContext(),
+)
+
+
+@contextmanager
+def bind_trace_context(
+    *,
+    entrypoint: str | None = None,
+    session_id: str | None = None,
+) -> Iterator[None]:
+    """Temporarily propagate entrypoint/session metadata through async code."""
+
+    token = _TRACE_CONTEXT.set(TraceContext(entrypoint=entrypoint, session_id=session_id))
+    try:
+        yield
+    finally:
+        _TRACE_CONTEXT.reset(token)
+
+
+def current_trace_context() -> TraceContext:
+    return _TRACE_CONTEXT.get()
+
 
 # Exact credential-bearing field names. Key matching is case-insensitive and
 # treats '-' and '_' equivalently.
@@ -72,9 +109,7 @@ _SAFE_TOKEN_KEYS = frozenset({
     "tokens_used",
 })
 
-_BEARER_RE = re.compile(
-    r"(?i)\bBearer\s+([A-Za-z0-9._~+/=-]{6,})"
-)
+_BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~+/=-]{6,})")
 _SK_RE = re.compile(r"(?i)\bsk-[A-Za-z0-9_-]{8,}\b")
 _GHP_RE = re.compile(r"(?i)\bghp_[A-Za-z0-9]{8,}\b")
 _GITHUB_PAT_RE = re.compile(r"(?i)\bgithub_pat_[A-Za-z0-9_]{8,}\b")
@@ -144,6 +179,9 @@ def redact_trace_value(value: Any) -> Any:
 __all__ = [
     "TRACE_SCHEMA_VERSION",
     "REDACTED",
+    "TraceContext",
+    "bind_trace_context",
+    "current_trace_context",
     "is_sensitive_trace_key",
     "redact_trace_string",
     "redact_trace_value",
