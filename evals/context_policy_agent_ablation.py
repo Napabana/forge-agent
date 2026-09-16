@@ -50,6 +50,7 @@ class AgentAblationResult:
     false_finish: bool
     agent_status: str
     verifier_status: str
+    agent_error: str | None
     latency_seconds: float
     tool_calls: int
     agent_tokens: int
@@ -61,6 +62,8 @@ class AgentAblationResult:
     context_pruned_units: int
     semantic_calls: int
     semantic_error_count: int
+    initial_pressure_ratio: float | None
+    max_pressure_ratio: float | None
     patch: str
     trace_path: str | None
 
@@ -98,14 +101,28 @@ class PruningOnlyPolicy:
 
 
 class CountingPolicy:
-    """只统计 prepare_next_turn 实际调用次数，不改变被测 Context Policy 行为。"""
+    """记录 Context Policy 实际调用次数与请求压力，不改变被测策略行为。"""
 
     def __init__(self, inner) -> None:
         self.inner = inner
         self.call_count = 0
+        self.pressure_ratios: list[float] = []
 
     def __call__(self, context):
         self.call_count += 1
+        pressure = context.token_budget.request_pressure(
+            system_text=context.system_content,
+            repo_map_text=context.repo_map_content,
+            history=context.history.to_dicts(),
+            tools=context.tool_schemas,
+        )
+        self.pressure_ratios.append(pressure.ratio)
+        threshold = float(getattr(self.inner, "threshold", 1.0))
+        print(
+            f"    [context] call={self.call_count} pressure={pressure.ratio:.3f} "
+            f"threshold={threshold:.3f}",
+            flush=True,
+        )
         return self.inner(context)
 
 
@@ -255,12 +272,15 @@ def run_ablation(
                 rows.append(payload)
                 stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
                 stream.flush()
+                pressure = "n/a" if row.max_pressure_ratio is None else f"{row.max_pressure_ratio:.3f}"
                 print(
                     f"    {'PASS' if row.passed else 'FAIL'} | agent={row.agent_status} "
                     f"| verifier={row.verifier_status} | tokens={row.agent_tokens}+{row.semantic_tokens} "
-                    f"| {row.latency_seconds:.1f}s | 剩余 {total-index}",
+                    f"| pressure(max)={pressure} | {row.latency_seconds:.1f}s | 剩余 {total-index}",
                     flush=True,
                 )
+                if row.agent_error:
+                    print(f"    agent_error={row.agent_error}", flush=True)
 
     metadata = {
         "schema_version": 1,
@@ -294,6 +314,7 @@ def _run_one(
     progress_total: int,
 ) -> AgentAblationResult:
     repo = materialize_case(case.base, output_dir / "repos" / variant / case.base.case_id)
+    _init_fixture_repo(repo)
     history = build_history(case, repo)
     preloaded_tokens = estimate_messages_tokens(history.to_dicts())
     policy = _build_policy(variant, defaults, backend)
@@ -346,6 +367,7 @@ def _run_one(
     checkpoints = 0
     policy_calls = policy_probe.call_count if policy_probe is not None else 0
     pruned_units = int(getattr(policy, "pruned_units", 0)) if policy is not None else 0
+    pressure_ratios = policy_probe.pressure_ratios if policy_probe is not None else []
     if isinstance(policy, TraceableCompaction):
         pending = policy.consume_usage()
         semantic_tokens = pending.total_tokens
@@ -364,6 +386,7 @@ def _run_one(
         false_finish=result.is_success() and not verifier_passed,
         agent_status=result.status.value,
         verifier_status="passed" if verifier_passed else "failed",
+        agent_error=result.error,
         latency_seconds=elapsed,
         tool_calls=_count_tool_calls(result.trace_path),
         agent_tokens=result.total_tokens,
@@ -375,9 +398,24 @@ def _run_one(
         context_pruned_units=pruned_units,
         semantic_calls=semantic_calls,
         semantic_error_count=semantic_error_count,
+        initial_pressure_ratio=pressure_ratios[0] if pressure_ratios else None,
+        max_pressure_ratio=max(pressure_ratios) if pressure_ratios else None,
         patch=_fixture_patch(case.base, repo),
         trace_path=result.trace_path,
     )
+
+
+def _init_fixture_repo(repo: Path) -> None:
+    """把 B2 fixture 变成独立 Git repo，避免继承 Forge Agent 父仓库的 ignore/status。"""
+    commands = (
+        ("git", "init", "-q"),
+        ("git", "config", "user.email", "forge-agent-eval@example.invalid"),
+        ("git", "config", "user.name", "Forge Agent Eval"),
+        ("git", "add", "-A"),
+        ("git", "commit", "-qm", "fixture baseline"),
+    )
+    for command in commands:
+        subprocess.run(command, cwd=repo, check=True, capture_output=True, text=True)
 
 
 def _heartbeat(stop: threading.Event, started: float, index: int, total: int, case_id: str, variant: str) -> None:
@@ -412,6 +450,11 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         solved = sum(bool(row["passed"]) for row in group)
         total_tokens = sum(int(row["total_tokens_with_context"]) for row in group)
         latencies = sorted(float(row["latency_seconds"]) for row in group)
+        pressures = [
+            float(row["max_pressure_ratio"])
+            for row in group
+            if row.get("max_pressure_ratio") is not None
+        ]
         result[variant] = {
             "runs": len(group),
             "solved": solved,
@@ -427,6 +470,7 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "context_trigger_rate": sum(int(row["context_checkpoints"]) > 0 for row in group) / len(group),
             "semantic_calls": sum(int(row["semantic_calls"]) for row in group),
             "semantic_error_count": sum(int(row["semantic_error_count"]) for row in group),
+            "mean_max_pressure_ratio": statistics.mean(pressures) if pressures else None,
         }
     return result
 
@@ -441,14 +485,16 @@ def _report_markdown(metadata: dict[str, Any], report: dict[str, Any]) -> str:
         f"- runs: {metadata['run_count']}",
         f"- cases: {', '.join(metadata['cases'])}",
         "",
-        "| variant | pass@1 | tokens/solved | mean total tokens | mean latency(s) | trigger rate | semantic calls |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| variant | pass@1 | tokens/solved | mean total tokens | mean latency(s) | trigger rate | semantic calls | max pressure |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for variant, row in report.items():
+        pressure = row.get("mean_max_pressure_ratio")
+        pressure_text = "n/a" if pressure is None else f"{pressure:.3f}"
         lines.append(
             f"| {variant} | {row['pass_at_1']:.3f} | {row['tokens_per_solved']:.1f} | "
             f"{row['mean_total_tokens_with_context']:.1f} | {row['mean_latency_seconds']:.1f} | "
-            f"{row['context_trigger_rate']:.3f} | {row['semantic_calls']} |"
+            f"{row['context_trigger_rate']:.3f} | {row['semantic_calls']} | {pressure_text} |"
         )
     return "\n".join(lines) + "\n"
 
