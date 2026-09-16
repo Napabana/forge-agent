@@ -11,9 +11,17 @@ Forge Agent 当前已经完成这一阶段的三个 P0 生命周期基础项：
 - P0-2：Tool Hook / Permission / Cancel 生产语义；
 - P0-3：Trace v2 最小闭环。
 
-同时已完成 P1-1 统一 Runner/独立验收、P1-2 Context Compaction、P1-3 Session 加固和 P1-5 Repo Map 核心能力。
+同时已完成：
 
-P0-2 本轮冻结了中央 Tool lifecycle：
+- P1-1：统一 Runner / 独立验收；
+- P1-2：Context Compaction；
+- P1-3：Session 加固；
+- P1-4：Failure Harness / deterministic failure injection；
+- P1-5：Repo Map 核心能力。
+
+当前主线下一批只剩 P1-6 面试证据包产品化；Repo Map 小尾项继续条件执行，不提前扩成功能开发。
+
+P0-2 冻结的中央 Tool lifecycle 仍保持：
 
 ```text
 cancel check
@@ -38,17 +46,18 @@ cancel check
 - Tool 已经发生后收到 cancel 时，先保留 ToolResult、post-hook diagnostic 和 Observation，再进入 `CANCELED`；
 - 四入口继续统一走 ExecutionRunner/Agent/ToolExecutor；GitHub Issue 自动 PR 不重新开放 `git_add/git_commit`。
 
-Trace 仍使用 P0-3 既有 schema，没有为 P0-2 另造 tracing framework。P0-2 详细契约见：
-[`docs/changes/2026-09-16/P0-2-Tool-Hook-Permission-Cancel收口改动内容.md`](docs/changes/2026-09-16/P0-2-Tool-Hook-Permission-Cancel收口改动内容.md)。
+Trace 继续使用 P0-3 schema；P1-4 没有增加 Trace v3 或 failure-only event family。
 
-> 验证状态：P0-2 回归测试代码已补齐，但当前 GitHub connector 无仓库执行环境；用户 pull 后在本地
-> 运行定向测试与全量 pytest。若出现回归，重新打开 P0-2，不通过修改 fixture 或历史结果规避失败。
+> 验证状态：P1-4 回归代码已提交，但当前 GitHub connector 无仓库执行环境，容器也无法解析 `github.com`，
+> 因此本轮远程会话未真正执行 pytest。用户 pull 后运行第 4 节命令做最终本地验证；若出现失败，立即 reopen P1-4，
+> 不得修改 B1/B2 fixture 或历史 `evals/results` 规避失败。
 
 ## 2. 已完成主线
 
 ### 2.1 生命周期、Runner 与 Trace
 
 - `prepare_next_turn` 已作为策略插槽接入 Agent step 和 shared-history run 首轮 preflight。
+- P1-4 将 shared-history 首轮 prepare 改为直接复用 `Agent._prepare_next_turn`，因此 exception/cancel/Trace 与 step>1 共用同一生产语义。
 - `ExecutionRunner` 统一 run、Trace、acceptance 和结果边界。
 - Tool lifecycle 已统一 validation、Hook、Permission、Tool、post-hook、cancel 与 error classification。
 - 产品 Runner 使用默认 PermissionManager；isolate 使用 workspace-bound PermissionManager。
@@ -63,6 +72,7 @@ Trace 仍使用 P0-3 既有 schema，没有为 P0-2 另造 tracing framework。P
 - C1-C5 已完成：canonical/model view 分离、HistoryUnit、预算与 fingerprint、tool pruning、structured/semantic compaction、usage/Trace/Runner 集成。
 - B1 离线 benchmark 已完成 7×3=21 个 fixture 样本；hybrid 7/7，仅代表冻结任务集。
 - B2 termination 已完成，v3 按冻结参数执行 3×3×1=9 个真实 run。
+- semantic side-call failure 继续使用既有 `CONTEXT_COMPACTION_FAILED → structured-fallback-v1`；P1-4 只补回归，不重构 Context Policy。
 - C6 `context_recall(event_ref)` 延期，只有稳定 benchmark 出现明确需求时才重启。
 
 结论：P1-2 已完成。
@@ -76,40 +86,44 @@ Trace 仍使用 P0-3 既有 schema，没有为 P0-2 另造 tracing framework。P
 
 结论：P1-5 核心完成。cache identity、shell/git 写入感知等只在测试稳定复现时做尾项。
 
-### 2.4 Session、Harness 与真实交付
+### 2.4 Session 与 Failure Harness
 
 - Session 恢复、共享历史和双进程占用边界已加固。
-- P0-2 已新增 Tool lifecycle/cancel/error classification 的集中离线回归。
-- 固定 context-policy fixture、真实 Agent ablation、仓库外 verifier 和真实 PR 证据已存在。
+- P0-2 已冻结 Tool lifecycle/cancel/error classification。
+- P1-4 新增 `tests/test_failure_harness.py` 和 `tests/test_failure_harness_isolate.py`，以 deterministic fake 只负责注入失败，真实执行链仍是：
 
-结论：P1-3 完成；P1-4、P1-6 仍保持 `PARTIAL`。
+```text
+ExecutionRunner
+  → Agent
+  → ToolExecutor
+  → EventLog / Trace v2
+  → RunResult
+```
+
+- test-local `ScriptedFailureBackend` 支持固定序列 return/raise；不访问网络或付费 provider。
+- Hook/Permission/Tool 使用 deterministic fake callback/result；cancel 使用 Event-like 对象或 `threading.Event`；isolate sandbox preflight 使用 fake DockerRuntime/FakeWorktreeSession。
+- Provider、Hook、Permission、Tool/runtime、Cancel、prepare/context、completion/termination、acceptance/delivery、Trace correlation/redaction 均形成固定 regression contract。
+- 没有新增 production `FailureScenario` framework；pytest 是 correctness source，避免维护第二套 eval lifecycle。
+
+结论：P1-3、P1-4 已完成。P1-6 仍为 `PARTIAL`。
 
 ## 3. 下一批执行顺序
 
-### Batch A：固定 Harness failure injection 任务集（P1-4）
+### Batch A：证据包产品化（P1-6）
 
-目标：把 provider、permission、hook、cancel、runtime infrastructure 的失败边界变成默认离线、deterministic 的统一回归，而不是继续散落在单元测试中。
+目标：把已经存在的实现、测试和实验整理成可复现、不过度宣称的面试证据，而不是继续给 Forge Agent 加新功能。
 
-开始 P1-4 时先冻结，不先写功能：
+开始 P1-6 时先审计现有证据，再决定是否需要很小的索引/脚本：
 
-1. failure case taxonomy：provider timeout/空响应/协议错误、permission subsystem crash、hook block/failure、cancel 各阶段、runtime infrastructure；
-2. 每个 case 的固定期望：ToolResult/Observation、RunStatus、termination reason、acceptance、delivery、Trace；
-3. deterministic fake provider / fake tool / fake hook 的注入接口；
-4. 默认离线的一条 Harness 回归命令；真实 provider 实验保持显式 opt-in；
-5. 与现有 ExecutionRunner / Trace v2 / P0-2 lifecycle 复用，禁止建立第二套生命周期。
+1. 盘点可直接引用的 implementation evidence：Runner、Tool lifecycle、Trace v2、Context Policy、Repo Map、Failure Harness、GitHub delivery；
+2. 将证据分成：实现事实、确定性离线回归、冻结 fixture benchmark、小样本真实模型实验、单个真实 PR 案例；
+3. 为每类主张给出唯一可复现入口和输出位置；优先复用现有 pytest/evals，不新造 benchmark framework；
+4. 把“能证明什么 / 不能证明什么”写清，禁止把测试覆盖、单案例或 `n=3` 外推为总体成功率；
+5. 最终形成可直接用于简历项目深挖和面试回答的 evidence index。
 
-验收重点：失败注入本身可重复、无需付费模型、不会修改 B1/B2 fixture，也不会把 P0-2 单元测试包装成虚假的 benchmark 指标。
+P1-6 不应重新打开 P1-4 failure semantics，也不应添加新 Provider、新 Agent 算法、多 Agent 或 Resource Manager。
 
-### Batch B：证据包产品化（P1-6）
-
-目标：把已经存在的实现、测试和实验整理成可复现、不过度宣称的面试证据。
-
-1. 维护 evidence index。
-2. 提供默认离线的复现命令。
-3. 将实现事实、真实单案例、固定 fixture benchmark、小样本真实模型实验、仍未知分开。
-4. 最终简历只引用能指向代码、测试或正式结果的主张。
-
-### Batch C：Repo Map 小尾项（条件执行）
+### Batch B：Repo Map 小尾项（条件执行）
 
 仅在最小测试能稳定复现时处理：
 
@@ -119,39 +133,79 @@ Trace 仍使用 P0-3 既有 schema，没有为 P0-2 另造 tracing framework。P
 
 不为追求更漂亮指标追加付费实验。
 
-## 4. P0-2 / P0-3 本地验证命令
+## 4. P1-4 本地验证命令
 
-用户 pull 后优先运行：
+用户 pull 后先运行默认离线 Failure Harness：
 
 ```bash
-pytest tests/test_tool_lifecycle_p0_2.py tests/test_harness.py \
-  tests/test_runner.py tests/test_confirm.py -q
+pytest tests/test_failure_harness*.py -q
+```
 
-pytest tests/test_trace_v2.py tests/test_agent_completion_guards.py \
-  tests/test_chat.py tests/test_api.py tests/test_cli_isolate.py \
+然后运行生命周期 / Runner / Trace / 四入口回归：
+
+```bash
+pytest tests/test_tool_lifecycle_p0_2.py \
+  tests/test_harness.py \
+  tests/test_runner.py \
+  tests/test_trace_v2.py \
+  tests/test_agent_completion_guards.py \
+  tests/test_compaction.py \
+  tests/test_chat.py \
+  tests/test_api.py \
   tests/test_github_issue_delivery.py -q
+```
 
+再确认冻结 Context Policy reader：
+
+```bash
 pytest tests/test_context_policy_benchmark.py \
   tests/test_context_policy_agent_ablation.py -q
+```
 
+最后：
+
+```bash
 pytest -q
 ```
 
-其中第一组负责 P0-2 生命周期定向回归；第二组验证 P0-3、Completion Guard 与四入口；第三组保证 B1/B2 reader 未受影响；最后一条做全量确认。
+第一组只用 fake provider/tool/hook/permission/runtime 和临时目录，默认不访问在线模型、不依赖 Docker、不依赖 GitHub。
+本轮远程会话没有执行这些命令；本地失败时保留原始输出并 reopen 对应阶段。
 
-## 5. 证据基线
+## 5. P1-4 failure contract 基线
+
+| Failure 类 | deterministic 注入 | 主要期望 |
+| --- | --- | --- |
+| Provider retryable | `ScriptedFailureBackend` 抛 `ConnectionError` / `TimeoutError` | `llm_call_retry`；成功则正常完成，耗尽则 `FAILED/provider_error` |
+| Provider non-retryable / parser | RuntimeError / parser ValueError | 不重试；`llm_call_failed`；`FAILED/provider_error` |
+| Provider retry wait cancel | Event-like `.wait()` | 不发第二次 provider call；`CANCELED/canceled` |
+| Pre-hook block / crash | Hook callback | `hook_blocked` / `hook_failed` Observation；Tool/Permission 按 P0-2 契约跳过 |
+| Post-hook crash | Hook callback | Tool side effect/result 保留；仅 diagnostic |
+| Permission deny / confirm reject | fixed decision/callback | `permission_denied` Observation；Agent 可恢复 |
+| Permission subsystem / confirm crash | callback exception | `FAILED/infrastructure_error` |
+| Tool validation/runtime | fake ToolResult / raising tool | unknown/invalid/tool_execution/timeout；普通错误可恢复 |
+| Fatal runtime | deterministic Docker-marker ToolResult | unresolved finish 或 repeated fatal → `FAILED/infrastructure_error` |
+| Cancel | `threading.Event` / event-like fake | 已开始同步操作完成真实 outcome；下一安全边界 `CANCELED/canceled` |
+| prepare/context | callback exception/cancel | `FAILED/infrastructure_error` 或 `CANCELED/canceled`；首轮 shared-history 与 step>1 一致 |
+| Completion | scripted Actions | recoverable guard、resource_exhausted、loop_detected、agent_gave_up 等固定 taxonomy |
+| Acceptance | verifier fake | Agent 非成功 → skipped；SUCCESS + verifier fail 仍保持 Agent SUCCESS |
+| Delivery | fake/no-op dependency | acceptance fail / agent fail 在 git/push/PR 前 blocked |
+| Trace | EventLog JSONL | 关键 failure event + `run_terminated`；v2 correlation；failure path redaction |
+| Isolate preflight | fake DockerRuntime/FakeWorktreeSession | 不触 Docker/provider；Runner 输出 `FAILED/infrastructure_error` |
+
+## 6. 证据基线
 
 | 能力 | 证据 | 可安全表述 |
 | --- | --- | --- |
 | Tool lifecycle | `harness/executor.py`、`agent/core.py`、`tests/test_tool_lifecycle_p0_2.py` | 四入口共享中央 Tool 生命周期；cooperative cancel 与可恢复/fatal failure 已区分 |
+| Failure Harness | `tests/test_failure_harness.py`、`tests/test_failure_harness_isolate.py` | 主要失败类可 deterministic、offline 注入并按 RunStatus/termination/Trace 断言；不是线上可靠性指标 |
 | Trace v2 | `agent/trace_v2.py`、`agent/event_log.py`、`tests/test_trace_v2.py` | Forge 自有最小 tracing schema，跨入口一致并在写盘边界脱敏 |
 | Context Policy B1 | `evals/results/context_policy_benchmark/report.json` | 冻结 fixture 上 hybrid 7/7；不是总体胜率 |
 | B2 Agent v3 | `evals/results/context_policy_agent_ablation_v3/` | 9 个单次真实 run；`n=3` 且模型非确定 |
 | Repo Map retrieval | `evals/results/repo_map_ablation/report.json` | 固定 12-case 集上 MRR/recall 改善 |
 | Runner/PR | Trace、verifier、PR 记录 | 一个真实案例完成确定性交付闭环 |
-| termination | B2 tests、Trace | 可恢复拒绝、INCOMPLETE、FAILED、GAVE_UP、CANCELED 已区分 |
+| termination | B2 tests、Failure Harness、Trace | completion rejection、INCOMPLETE、FAILED、GAVE_UP、CANCELED 已区分 |
 
-## 6. 明确延期与非目标
+## 7. 明确延期与非目标
 
 - 完整 Resource Manager：总 token、wall-clock、成本预算与统一调度。
 - 强制终止任意同步 Tool/subprocess/provider call 的通用 async runtime 重写。
@@ -161,7 +215,7 @@ pytest -q
 - tree-structured session、自动 merge、无人监督发布。
 - 为改善 pass@1 静默重跑、修改 fixture 或改变冻结实验变量。
 
-## 7. 工作规则
+## 8. 工作规则
 
 - 每批开始前以 `TODO-P0-P1.md` 的状态为准，不从历史日志恢复待办。
 - 先复现、再修改；只运行与风险相称的测试。
