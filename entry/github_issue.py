@@ -138,8 +138,13 @@ def _github_git_env() -> dict[str, str] | None:
     env.pop("GITHUB_TOKEN", None)
     # 禁用可能打印 HTTP 头的 Git 调试开关，认证配置仅对子进程生效。
     for key in tuple(env):
-        if key.startswith("GIT_TRACE") or key == "GIT_CURL_VERBOSE": env.pop(key)
-    env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.https://github.com/.extraHeader", "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {encoded}"})
+        if key.startswith("GIT_TRACE") or key == "GIT_CURL_VERBOSE":
+            env.pop(key)
+    env.update({
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraHeader",
+        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {encoded}",
+    })
     return env
 
 
@@ -185,7 +190,14 @@ def _command_verifier(command: str):
         raise ValueError("verification command cannot be empty")
 
     def verify(repo: Path) -> bool:
-        proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True, timeout=600, check=False)
+        proc = subprocess.run(
+            argv,
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
         logger.info("Independent verifier exited with %d", proc.returncode)
         return proc.returncode == 0
 
@@ -195,13 +207,24 @@ def _command_verifier(command: str):
 def _branch_is_pushed(local_path: str, branch: str) -> bool:
     """比较本地 HEAD 和远端分支 SHA，避免 PR 重试时重复 push。"""
     head_ok, head = _run_git(["rev-parse", "HEAD"], cwd=local_path)
-    remote_ok, remote = _run_git(["ls-remote", "--heads", "origin", f"refs/heads/{branch}"], cwd=local_path, env=_github_git_env())
+    remote_ok, remote = _run_git(
+        ["ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
+        cwd=local_path,
+        env=_github_git_env(),
+    )
     return head_ok and remote_ok and bool(remote) and remote.split()[0] == head.strip()
 
 
 def deliver_pull_request(
-    result, local_path: str, branch: str, commit_message: str, repo_name: str,
-    pr_title: str, pr_body: str, base_branch: str = "main", pr_creator=create_pull_request,
+    result,
+    local_path: str,
+    branch: str,
+    commit_message: str,
+    repo_name: str,
+    pr_title: str,
+    pr_body: str,
+    base_branch: str = "main",
+    pr_creator=create_pull_request,
 ) -> str | None:
     """通过验收后确定性执行 commit、push 和 PR；失败时保留本地成果。"""
     if not result.is_success():
@@ -215,19 +238,28 @@ def deliver_pull_request(
     if not branch_ok or current_branch.strip() != branch:
         result.delivery_status = "commit_failed"
         return None
-    status_ok, status = _run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=local_path)
+    status_ok, status = _run_git(
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=local_path,
+    )
     if not status_ok:
         result.delivery_status = "commit_failed"
         return None
 
     if status:
         added, _ = _run_git(["add", "--all"], cwd=local_path)
-        committed, _ = _run_git(["commit", "-m", commit_message], cwd=local_path) if added else (False, "")
+        committed, _ = (
+            _run_git(["commit", "-m", commit_message], cwd=local_path)
+            if added
+            else (False, "")
+        )
         if not committed:
             result.delivery_status = "commit_failed"
             return None
     else:
-        subject_ok, subject = _run_git(["log", "-1", "--format=%s"], cwd=local_path)
+        subject_ok, subject = _run_git(
+            ["log", "-1", "--format=%s"], cwd=local_path
+        )
         if not subject_ok or subject.strip() != commit_message:
             result.delivery_status = "no_changes"
             return None
@@ -241,13 +273,52 @@ def deliver_pull_request(
             return None
 
     try:
-        pr_url = pr_creator(repo_name=repo_name, branch=branch, title=pr_title, body=pr_body, base=base_branch)
+        pr_url = pr_creator(
+            repo_name=repo_name,
+            branch=branch,
+            title=pr_title,
+            body=pr_body,
+            base=base_branch,
+        )
     except Exception as exc:
         logger.warning("PR creation failed; pushed branch retained: %s", exc)
         result.delivery_status = "pr_failed"
         return None
     result.delivery_status = "delivered"
     return pr_url
+
+
+def _record_delivery_trace(
+    result,
+    *,
+    requested: bool,
+    repo_name: str,
+    branch: str,
+    issue_number: int,
+    pr_url: str | None = None,
+) -> None:
+    """Append product delivery outcome without making delivery depend on Trace I/O."""
+    if not result.trace_path:
+        return
+    from agent.event_log import EventLog
+
+    try:
+        with EventLog.open_existing(
+            result.trace_path,
+            task_id=result.task_id,
+            entrypoint="github_issue",
+        ) as log:
+            log.log_delivery(
+                steps=result.steps_taken,
+                requested=requested,
+                delivery_status=result.delivery_status,
+                repo=repo_name,
+                branch=branch,
+                issue_number=issue_number,
+                pr_url=pr_url,
+            )
+    except Exception as exc:  # noqa: BLE001 — observability must not alter delivery
+        logger.warning("Failed to append GitHub delivery trace: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +348,10 @@ def run_on_issue(
 
     config = load_config(config_path)
     if create_pr and not verify_command:
-        click.echo("Error: automatic PR requires --verify-command for independent acceptance.", err=True)
+        click.echo(
+            "Error: automatic PR requires --verify-command for independent acceptance.",
+            err=True,
+        )
         return 1
     try:
         verifier = _command_verifier(verify_command) if create_pr else None
@@ -305,9 +379,15 @@ def run_on_issue(
 
     if create_pr:
         # 自动交付只接受干净基线，防止把用户运行前的修改一并提交。
-        clean_ok, dirty = _run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=local_path)
+        clean_ok, dirty = _run_git(
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=local_path,
+        )
         if not clean_ok or dirty:
-            click.echo("Error: repository must be clean before automatic issue delivery.", err=True)
+            click.echo(
+                "Error: repository must be clean before automatic issue delivery.",
+                err=True,
+            )
             return 1
 
     # 3. 创建工作分支
@@ -324,8 +404,8 @@ def run_on_issue(
         backend = create_backend_from_config({
             "provider": config.llm.provider,
             "protocol": config.llm.protocol,
-            "model":    config.llm.model,
-            "api_key":  config.llm.api_key or None,
+            "model": config.llm.model,
+            "api_key": config.llm.api_key or None,
             "base_url": config.llm.base_url or None,
             "max_tokens": config.llm.max_tokens,
         })
@@ -335,7 +415,11 @@ def run_on_issue(
 
     from entry.cli import _build_registry
     # GitHub Issue 的所有仓库工具默认在目标仓库执行，避免误用 Forge 进程目录。
-    registry = _build_registry(config, worktree_path=local_path, workspace=local_path)
+    registry = _build_registry(
+        config,
+        worktree_path=local_path,
+        workspace=local_path,
+    )
     if create_pr:
         # 自动交付层统一负责提交，Agent 不得在独立验收前改变 Git 基线。
         registry._tools.pop("git_add", None)
@@ -359,13 +443,21 @@ def run_on_issue(
     # 5. 运行 agent
     click.echo(f"\nRunning agent on issue #{issue_number} ...")
     t0 = time.time()
-    acceptance = AcceptanceContract(require_changes=require_changes, require_tests=require_tests, verifier=verifier)
+    acceptance = AcceptanceContract(
+        require_changes=require_changes,
+        require_tests=require_tests,
+        verifier=verifier,
+    )
     result = ExecutionRunner(
         backend=backend,
         registry=registry,
         config=agent_config,
         log_dir=config.agent.log_dir,
-    ).run(RunRequest(task=task, acceptance=acceptance))
+    ).run(RunRequest(
+        task=task,
+        acceptance=acceptance,
+        entrypoint="github_issue",
+    ))
 
     elapsed = time.time() - t0
     click.echo(f"  Status : {result.status.value}")
@@ -375,7 +467,16 @@ def run_on_issue(
     click.echo(f"  Time   : {elapsed:.1f}s")
 
     if not result.is_success():
-        click.echo(f"  Agent did not complete the task.", err=True)
+        if create_pr:
+            result.delivery_status = "blocked_agent"
+        _record_delivery_trace(
+            result,
+            requested=create_pr,
+            repo_name=repo_name,
+            branch=branch,
+            issue_number=issue_number,
+        )
+        click.echo("  Agent did not complete the task.", err=True)
         return 1
 
     # 6. 独立验收通过后才进入确定性交付
@@ -388,14 +489,39 @@ def run_on_issue(
             f"## Task\n{description[:500]}"
         )
         pr_url = deliver_pull_request(
-            result, local_path, branch, f"fix: resolve issue #{issue_number}", repo_name,
-            pr_title, pr_body, base_branch,
+            result,
+            local_path,
+            branch,
+            f"fix: resolve issue #{issue_number}",
+            repo_name,
+            pr_title,
+            pr_body,
+            base_branch,
+        )
+        _record_delivery_trace(
+            result,
+            requested=True,
+            repo_name=repo_name,
+            branch=branch,
+            issue_number=issue_number,
+            pr_url=pr_url,
         )
         if pr_url:
             click.echo(f"\n✓ PR created: {pr_url}\n")
         else:
-            click.echo(f"Delivery stopped: {result.delivery_status}. Local artifact: {local_path}", err=True)
+            click.echo(
+                f"Delivery stopped: {result.delivery_status}. Local artifact: {local_path}",
+                err=True,
+            )
             return 1
+    else:
+        _record_delivery_trace(
+            result,
+            requested=False,
+            repo_name=repo_name,
+            branch=branch,
+            issue_number=issue_number,
+        )
 
     return 0
 
@@ -414,7 +540,11 @@ def run_on_issue(
 @click.option("--config", "-c", default=None, help="Config YAML path")
 @click.option("--no-pr", is_flag=True, help="Skip PR creation")
 @click.option("--base-branch", default="main", help="Base branch for PR (default: main)")
-@click.option("--verify-command", default=None, help="Independent acceptance command required for automatic PR")
+@click.option(
+    "--verify-command",
+    default=None,
+    help="Independent acceptance command required for automatic PR",
+)
 @click.option("--verbose", "-v", is_flag=True)
 def main(
     repo: str,
