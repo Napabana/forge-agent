@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from agent.core import Agent
+from agent.core import Agent, AgentConfig
 from agent.event_log import EventLog
 from agent.task import Action, ActionType, Task, ToolCall
 from context import repo_map
@@ -245,7 +245,7 @@ def test_agent_exposes_selective_repo_map_cache_invalidation(tmp_path):
 
 def test_agent_invalidation_forces_refresh_on_live_repo_map(tmp_path):
     (tmp_path / "first.py").write_text("def first(): pass\n")
-    agent = Agent(MockBackend([]), ToolRegistry())
+    agent = Agent(MockBackend([]), ToolRegistry(), AgentConfig(repo_map_mode="query_aware"))
     agent._current_repo_path = str(tmp_path)
     agent._repo_map_cache_key = str(tmp_path)
     history = ConversationHistory()
@@ -265,7 +265,7 @@ def test_agent_invalidation_forces_refresh_on_live_repo_map(tmp_path):
     assert live_map.last_report.force_refresh
 
 
-def test_successful_file_write_refreshes_repo_map_before_next_step(tmp_path):
+def test_successful_file_write_updates_repo_map_before_next_step(tmp_path):
     (tmp_path / "existing.py").write_text("def existing(): pass\n")
     task = Task("write a new module", str(tmp_path), task_id="repo-map-write")
     backend = MockBackend([

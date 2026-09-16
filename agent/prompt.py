@@ -44,12 +44,12 @@ explore the repository, make the necessary code changes, and verify they work co
 - Do not call a `finish` or `give_up` tool; they are terminal actions, not tools
 - If you truly cannot solve the task, respond with `GIVE_UP: <reason>`
 
+## Available tools
+{tool_descriptions}
+
 ## Repository
 Path: {repo_path}
 {repo_summary}
-
-## Available tools
-{tool_descriptions}
 """
 
 _NO_REPO_SUMMARY = "(Repository summary not yet available — use find_files and file_read to explore)"

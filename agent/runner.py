@@ -102,6 +102,8 @@ class ExecutionRunner:
             id(self.config.cancel_event),
             id(self.config.prepare_next_turn),
             id(None),
+            self.config.repo_map_mode,
+            self.config.repo_map_cache_dir,
         )
 
     def run(
@@ -215,6 +217,8 @@ class ExecutionRunner:
             id(config.cancel_event),
             id(config.prepare_next_turn),
             id(request.permission),
+            config.repo_map_mode,
+            config.repo_map_cache_dir,
         )
         if key != self._agent_key:
             self.agent = Agent(self.backend, self.registry, config, executor=executor)
@@ -296,14 +300,15 @@ class ExecutionRunner:
         if self.agent._repo_map_cache_key != cache_key:
             self.agent.invalidate_repo_map_cache()
             self.agent._repo_map_force_refresh = False
+            self.agent._repo_map_sync_requested = False
             self.agent._repo_map_cache_key = cache_key
-            self.agent._repo_map_instance = RepoMap(task.repo_path)
+            self.agent._repo_map_instance = self.agent._new_repo_map(task.repo_path)
         elif getattr(self.agent, "_repo_map_cache_query", None) != task.description:
             if hasattr(self.agent, "_repo_map_cache"):
                 del self.agent._repo_map_cache
 
         token_budget = TokenBudget(total=config.budget_tokens)
-        repo_map = getattr(self.agent, "_repo_map_instance", RepoMap(task.repo_path))
+        repo_map = getattr(self.agent, "_repo_map_instance", self.agent._new_repo_map(task.repo_path))
         return self.agent._prepare_next_turn(
             task,
             1,

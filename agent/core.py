@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 from agent.event_log import EventLog
 from agent.loop_detector import LoopDetector, LoopSeverity, snapshot_repository
 from context.history import ConversationHistory
+from context.incremental_repo_map import PersistentRepoMap
 from context.repo_map import RepoMap
 from context.repository_state import repository_fingerprint
 from context.token_budget import (
@@ -115,6 +116,10 @@ class AgentConfig:
     cancel_event: object = None
     hooks: Hooks | None = None
     prepare_next_turn: PrepareNextTurn | None = None
+    # Production defaults to persistent incremental Repo Map. Other modes are
+    # retained as controlled ablation variants.
+    repo_map_mode: str = "incremental"
+    repo_map_cache_dir: str | None = None
 
 
 class Agent:
@@ -134,6 +139,9 @@ class Agent:
         self._executor = executor or _default_executor(registry, self._cfg.hooks)
         self._repo_map_cache_key: str | None = None
         self._repo_map_force_refresh = False
+        self._repo_map_sync_requested = False
+        self._repo_map_build_seconds = 0.0
+        self._repo_map_build_calls = 0
         self._prepared_history_override: tuple[LLMMessage, ...] | None = None
 
     def invalidate_repo_map_cache(self, repo_path: str | Path | None = None) -> bool:
@@ -146,8 +154,33 @@ class Agent:
         existed = hasattr(self, "_repo_map_cache")
         if existed:
             del self._repo_map_cache
-        self._repo_map_force_refresh = True
+        if self._repo_map_mode() == "incremental":
+            self._repo_map_sync_requested = True
+            self._repo_map_force_refresh = False
+        else:
+            self._repo_map_force_refresh = True
         return existed
+
+    def _repo_map_mode(self) -> str:
+        mode = (self._cfg.repo_map_mode or "incremental").strip().lower()
+        if mode not in {"none", "static", "query_aware", "incremental"}:
+            raise ValueError(f"Unsupported repo_map_mode: {self._cfg.repo_map_mode!r}")
+        return mode
+
+    def _new_repo_map(self, repo_path: str | Path) -> RepoMap:
+        if self._repo_map_mode() == "incremental":
+            return PersistentRepoMap(repo_path, cache_dir=self._cfg.repo_map_cache_dir)
+        return RepoMap(repo_path)
+
+    @property
+    def repo_map_telemetry(self) -> dict[str, object]:
+        index_metrics = getattr(getattr(self, "_repo_map_instance", None), "metrics", None)
+        return {
+            "mode": self._repo_map_mode(),
+            "build_seconds": self._repo_map_build_seconds,
+            "build_calls": self._repo_map_build_calls,
+            "index": index_metrics.snapshot() if index_metrics is not None else None,
+        }
 
     def run(
         self,
@@ -162,8 +195,9 @@ class Agent:
         if self._repo_map_cache_key != cache_key:
             self.invalidate_repo_map_cache()
             self._repo_map_force_refresh = False
+            self._repo_map_sync_requested = False
             self._repo_map_cache_key = cache_key
-            self._repo_map_instance = RepoMap(task.repo_path)
+            self._repo_map_instance = self._new_repo_map(task.repo_path)
         elif getattr(self, "_repo_map_cache_query", None) != task.description:
             if hasattr(self, "_repo_map_cache"):
                 del self._repo_map_cache
@@ -580,7 +614,21 @@ class Agent:
                     if observation.is_success():
                         successful_write = True
                         last_write_step = step
-                        self.invalidate_repo_map_cache(task.repo_path)
+                        if self._repo_map_mode() == "incremental":
+                            if hasattr(self, "_repo_map_cache"):
+                                del self._repo_map_cache
+                            changed_path = tc.params.get("path")
+                            try:
+                                if changed_path:
+                                    repo_map.update_paths([changed_path])  # type: ignore[attr-defined]
+                                    self._repo_map_sync_requested = False
+                                else:
+                                    self._repo_map_sync_requested = True
+                            except Exception as exc:
+                                logger.warning("Incremental Repo Map update failed: %s", exc)
+                                self._repo_map_sync_requested = True
+                        else:
+                            self.invalidate_repo_map_cache(task.repo_path)
                 else:
                     steps_without_edit += 1
 
@@ -872,27 +920,34 @@ class Agent:
     ) -> tuple[str, str, tuple[LLMToolSchema, ...]]:
         """统一生成下一请求固定部分，供 pressure 计算与最终消息组装复用。"""
         schemas = tuple(self._registry.get_schemas())
+        mode = self._repo_map_mode()
         if not hasattr(self, "_repo_map_cache"):
             map_budget = token_budget.default_plan().repo_map
-            if self._repo_map_force_refresh:
+            query = None if mode == "static" else getattr(self, "_repo_map_query", None)
+            started = time.perf_counter()
+            if mode == "none":
+                self._repo_map_cache = ""
+            elif mode == "incremental":
+                if self._repo_map_sync_requested:
+                    repo_map.sync()  # type: ignore[attr-defined]
+                self._repo_map_cache = repo_map.build(budget=map_budget, query=query)
+            elif self._repo_map_force_refresh:
                 self._repo_map_cache = repo_map.build(
-                    budget=map_budget,
-                    force_refresh=True,
-                    query=getattr(self, "_repo_map_query", None),
+                    budget=map_budget, force_refresh=True, query=query
                 )
             else:
-                self._repo_map_cache = repo_map.build(
-                    budget=map_budget,
-                    query=getattr(self, "_repo_map_query", None),
-                )
+                self._repo_map_cache = repo_map.build(budget=map_budget, query=query)
+            self._repo_map_build_seconds += time.perf_counter() - started
+            self._repo_map_build_calls += int(mode != "none")
             self._repo_map_force_refresh = False
+            self._repo_map_sync_requested = False
             self._repo_map_cache_query = getattr(self, "_repo_map_query", None)
 
         repo_map_content = self._repo_map_cache
         system_content = build_system_prompt(
             repo_path=getattr(self, "_current_repo_path", "."),
             tools=list(schemas),
-            repo_summary=repo_map_content,
+            repo_summary=repo_map_content if mode != "none" else None,
         )
         return system_content, repo_map_content, schemas
 
