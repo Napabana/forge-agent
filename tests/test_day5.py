@@ -309,18 +309,16 @@ class TestConversationHistory:
         assert h.message_count == 1
         assert h.to_list()[0].content == "hello"
 
-    def test_sliding_window_drops_oldest(self):
+    def test_history_keeps_messages_beyond_max_hint(self):
         h = ConversationHistory(max_messages=3)
         h.add(LLMMessage(role="user", content="first"))
         h.add(LLMMessage(role="user", content="second"))
         h.add(LLMMessage(role="user", content="third"))
         h.add(LLMMessage(role="user", content="fourth"))
-        # 最多 3 条，first 应该被丢弃（但保留 index 0）
-        assert h.message_count == 3
+        # max_messages 只是兼容旧配置的提示，逻辑历史不会被 destructive trim。
+        assert h.message_count == 4
         contents = [m.content for m in h.to_list()]
-        assert "first" in contents      # index 0 永不丢弃
-        assert "second" not in contents  # 被丢弃
-        assert "fourth" in contents
+        assert contents == ["first", "second", "third", "fourth"]
 
     def test_first_message_never_dropped(self):
         h = ConversationHistory(max_messages=2)

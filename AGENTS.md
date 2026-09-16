@@ -233,3 +233,11 @@ pytest -q
 - 当前 connector 只能看到远端 `dev`；无法读取用户本地工作区 `git status` / stash，因此没有对本地未提交修改或 stash 做任何处理或断言。
 - 完整记录：`docs/changes/2026-09-16/P1-4-Failure-Harness收口改动内容.md`。
 - 下一对话 P1-6 从“盘点现有可证明的 implementation/test/eval/PR evidence，并建立不过度宣称的 evidence taxonomy”开始；不要先写新功能。
+
+### 最后交接（2026-09-16，ConversationHistory 测试契约修正）
+
+- 本轮将 `tests/test_day5.py` 中过时的滑动窗口测试改为验证 `ConversationHistory` 保留完整逻辑历史的当前语义。
+- 生产代码未修改；未修改评测 fixture 或历史结果。
+- WSL 验证通过：`python -m pytest tests/test_day5.py::TestConversationHistory::test_history_keeps_messages_beyond_max_hint -q`，结果为 `1 passed`。
+- Windows 默认 Python 缺少 pytest；未执行 commit、push 或 stash。
+- 变更日志：`docs/changes/2026-09-16/ConversationHistory测试契约修正.md`。
