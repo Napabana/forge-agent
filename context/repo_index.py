@@ -121,7 +121,8 @@ class PersistentRepoIndex:
 
         identifiers: dict[str, dict[str, int]] = {}
         for row in conn.execute(
-            "SELECT source_file, referenced_symbol, occurrences FROM references ORDER BY source_file, referenced_symbol"
+            "SELECT source_file, referenced_symbol, occurrences "
+            "FROM symbol_references ORDER BY source_file, referenced_symbol"
         ):
             identifiers.setdefault(row[0], {})[row[1]] = int(row[2])
 
@@ -131,10 +132,10 @@ class PersistentRepoIndex:
                 "WITH owners AS ("
                 "  SELECT DISTINCT file_path, name FROM symbols WHERE length(name) >= 3"
                 ") "
-                "SELECT owners.file_path, SUM(references.occurrences) "
-                "FROM owners JOIN references "
-                "ON references.referenced_symbol = owners.name "
-                "AND references.source_file <> owners.file_path "
+                "SELECT owners.file_path, SUM(symbol_references.occurrences) "
+                "FROM owners JOIN symbol_references "
+                "ON symbol_references.referenced_symbol = owners.name "
+                "AND symbol_references.source_file <> owners.file_path "
                 "GROUP BY owners.file_path"
             )
         }
@@ -164,7 +165,7 @@ class PersistentRepoIndex:
     def replace_all(self, files: Sequence[StoredFile], repository_state_json: str) -> None:
         conn = self._require_conn()
         with conn:
-            conn.execute("DELETE FROM references")
+            conn.execute("DELETE FROM symbol_references")
             conn.execute("DELETE FROM imports")
             conn.execute("DELETE FROM symbols")
             conn.execute("DELETE FROM files")
@@ -270,14 +271,15 @@ class PersistentRepoIndex:
                 PRIMARY KEY(source_file, ordinal),
                 FOREIGN KEY(source_file) REFERENCES files(path) ON DELETE CASCADE
             );
-            CREATE TABLE IF NOT EXISTS references (
+            CREATE TABLE IF NOT EXISTS symbol_references (
                 source_file TEXT NOT NULL,
                 referenced_symbol TEXT NOT NULL,
                 occurrences INTEGER NOT NULL,
                 PRIMARY KEY(source_file, referenced_symbol),
                 FOREIGN KEY(source_file) REFERENCES files(path) ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_references_symbol ON references(referenced_symbol);
+            CREATE INDEX IF NOT EXISTS idx_symbol_references_symbol
+                ON symbol_references(referenced_symbol);
             """
         )
         conn.commit()
@@ -292,7 +294,7 @@ class PersistentRepoIndex:
 
     @staticmethod
     def _delete_file_tx(conn: sqlite3.Connection, path: str) -> None:
-        conn.execute("DELETE FROM references WHERE source_file = ?", (path,))
+        conn.execute("DELETE FROM symbol_references WHERE source_file = ?", (path,))
         conn.execute("DELETE FROM imports WHERE source_file = ?", (path,))
         conn.execute("DELETE FROM symbols WHERE file_path = ?", (path,))
         conn.execute("DELETE FROM files WHERE path = ?", (path,))
@@ -325,7 +327,7 @@ class PersistentRepoIndex:
             [(file_info.path, i, target) for i, target in enumerate(file_info.imports)],
         )
         conn.executemany(
-            "INSERT INTO references(source_file, referenced_symbol, occurrences) VALUES(?, ?, ?)",
+            "INSERT INTO symbol_references(source_file, referenced_symbol, occurrences) VALUES(?, ?, ?)",
             [
                 (file_info.path, name, int(count))
                 for name, count in sorted(file_info.identifier_counts.items())
