@@ -25,7 +25,11 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from agent.task import Action, Event, EventType, Observation, RunResult, Task
-from agent.trace_v2 import TRACE_SCHEMA_VERSION, redact_trace_value
+from agent.trace_v2 import (
+    TRACE_SCHEMA_VERSION,
+    current_trace_context,
+    redact_trace_value,
+)
 from llm.usage import SessionUsage, TokenUsage
 
 logger = logging.getLogger(__name__)
@@ -71,6 +75,25 @@ def _span_type(event_type: EventType) -> str:
     if event_type is EventType.RUN_TERMINATED:
         return "run"
     return "event"
+
+
+def _span_family(event_type: EventType) -> str:
+    """Return an operation family for pairing started/finished lifecycle events.
+
+    ``prepare_next_turn`` can contain a nested compaction span. Both are context
+    spans, so keying only by ``span_type`` would make deterministic compaction
+    accidentally reuse its parent prepare span.
+    """
+
+    if event_type.name.startswith("PREPARE_NEXT_TURN_"):
+        return "prepare"
+    if event_type.name.startswith("LLM_CALL_"):
+        return "model"
+    if event_type.name.startswith("TOOL_EXECUTION_"):
+        return "tool"
+    if event_type.name.startswith("CONTEXT_COMPACTION_") or event_type is EventType.CONTEXT_COMPACTED:
+        return "compaction"
+    return _span_type(event_type)
 
 
 def _span_status(event_type: EventType) -> str:
@@ -123,11 +146,14 @@ class EventLog:
         log_path.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"{task.task_id}_{timestamp}.jsonl"
+        inherited = current_trace_context()
         return cls(
             log_path / filename,
             task_id=task.task_id,
-            session_id=session_id,
-            entrypoint=entrypoint,
+            session_id=(
+                session_id if session_id is not None else inherited.session_id
+            ),
+            entrypoint=entrypoint or inherited.entrypoint,
         )
 
     @classmethod
@@ -262,7 +288,7 @@ class EventLog:
         """
 
         span_kind = _span_type(event_type)
-        active_key = (span_kind, step)
+        active_key = (_span_family(event_type), step)
         if span_id is None and event_type in {
             EventType.CONTEXT_COMPACTION_FAILED,
             EventType.CONTEXT_COMPACTED,
@@ -299,7 +325,7 @@ class EventLog:
             payload.setdefault("tool_execution_id", span_id)
             if event_type is EventType.TOOL_EXECUTION_STARTED:
                 payload.setdefault("arguments", self._tool_args_by_step.get(step, {}))
-        elif event_type.name.startswith("CONTEXT_COMPACTION_"):
+        elif event_type.name.startswith("CONTEXT_COMPACTION_") or event_type is EventType.CONTEXT_COMPACTED:
             payload.setdefault("compaction_id", span_id)
 
         try:
