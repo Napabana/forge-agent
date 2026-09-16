@@ -32,7 +32,7 @@ explore the repository, make the necessary code changes, and verify they work co
 2. **Plan**: Identify what needs to change and why
 3. **Edit**: Make precise, minimal changes using the available tools
 4. **Verify**: Run tests to confirm the fix works
-5. **Finish**: Call finish with a clear summary of what you changed
+5. **Finish**: Return a concise final summary after the work is complete
 
 ## Rules
 - Think step by step before each action (use the thought field)
@@ -40,7 +40,9 @@ explore the repository, make the necessary code changes, and verify they work co
 - If tests fail, read the error carefully and fix the root cause, not the symptom
 - If you are stuck after several attempts, reflect on your approach and try differently
 - Make the smallest change that fixes the problem
-- When done, call finish. If you truly cannot solve it, call give_up with an explanation
+- When done, return a normal final response with a concise summary
+- Do not call a `finish` or `give_up` tool; they are terminal actions, not tools
+- If you truly cannot solve the task, respond with `GIVE_UP: <reason>`
 
 ## Repository
 Path: {repo_path}
@@ -148,7 +150,7 @@ Please fix the following issue in the repository at {repo_path}.
 - Start by exploring the repository to understand the codebase
 - Make the minimal changes necessary to fix the issue
 - Run the tests to verify your fix works
-- When complete, call finish with a summary of your changes\
+- When complete, return a concise final summary in normal text\
 """
 
 _ISSUE_SECTION_TEMPLATE = """
