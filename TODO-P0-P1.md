@@ -1,10 +1,13 @@
 # Forge Agent P0/P1 当前状态
 
-> 状态基线：2026-09-16，`dev` @ `ba0720d3ca909afd0146510bd5bad7cf8131d2d6`。
-> 本文件只保留当前结论和剩余工作；历史过程见 [`docs/README.md`](docs/README.md)。
+> 状态基线：2026-09-16。P0-3 本轮实现以 `dev@18fb0cc39b09d428a069b79c3f925875bcdd7ffe` 为起点，
+> Trace v2 生产代码已收口；本文件只保留当前结论和剩余工作。历史过程见 [`docs/README.md`](docs/README.md)。
 
-状态定义：`DONE` 已有代码、测试或正式实验依据；`PARTIAL` 核心能力存在但仍有明确缺口；
+状态定义：`DONE` 已有代码与对应回归覆盖；`PARTIAL` 核心能力存在但仍有明确缺口；
 `TODO` 尚未实施；`DEFERRED` 已有意延后，不属于当前主线验收。
+
+> 测试说明：P0-3 的回归测试已补齐，但当前 GitHub connector 无仓库执行环境，pytest 尚未由本轮远程会话实际运行；
+> 用户 pull 后执行文末/变更日志中的命令做最终本地验证。若发现回归，P0-3 应立即重新打开而不是隐藏失败。
 
 ## 状态总览
 
@@ -12,7 +15,7 @@
 | --- | --- | --- |
 | P0-1 `prepare_next_turn` / shared-history 边界 | DONE | 策略插槽、首轮共享历史 preflight 和多轮接线已落地 |
 | P0-2 Tool Hook 生产语义 | PARTIAL | 核心顺序与错误分类已有，产品入口一致性和更完整取消语义待补 |
-| P0-3 Trace v2 最小闭环 | PARTIAL | 核心事件、usage、termination 与 acceptance 已有，schema/脱敏/统计仍未完全统一 |
+| P0-3 Trace v2 最小闭环 | DONE | v2 schema/correlation、写盘级脱敏、prompt token 分区、termination/acceptance/delivery 已统一；旧 JSONL 只读兼容 |
 | P1-1 统一 Runner 与独立验收 | DONE | Runner、acceptance、交付门禁及真实 PR 闭环均有证据 |
 | P1-2 Context Compaction | DONE | C1-C5、B1 与 B2 均已完成；C6 单独延期 |
 | P1-3 Session 加固 | DONE | 并发占用、恢复与共享历史边界已有实现和测试 |
@@ -23,14 +26,12 @@
 ## P0-1：`prepare_next_turn` 与共享历史边界 — DONE
 
 - [x] `prepare_next_turn` 是显式策略插槽，不把压缩逻辑硬编码进入口。
-- [x] fresh run 与 shared-history run 分流；已有共享历史在第一次模型调用前执行同一
-  Context Policy preflight。
+- [x] fresh run 与 shared-history run 分流；已有共享历史在第一次模型调用前执行同一 Context Policy preflight。
 - [x] Agent 内后续 step 继续复用相同生命周期。
 - [x] canonical History 与 model-facing view 分离，压缩不破坏审计历史。
 - [x] Chat/Session/Runner 回归覆盖共享历史传递和 round preflight。
 
-证据：`agent/runner.py`、`context/history.py`、`tests/test_chat.py`、
-`tests/test_compaction.py`，以及提交 `0376112`。
+证据：`agent/runner.py`、`context/history.py`、`tests/test_chat.py`、`tests/test_compaction.py`。
 
 ## P0-2：Tool Hook 生产语义 — PARTIAL
 
@@ -43,25 +44,38 @@
 剩余：
 
 - [ ] 审计 CLI、Chat、API、GitHub Issue 四入口是否全部暴露一致的 hook 行为。
-- [ ] 明确取消发生在 pre-hook、tool 和 post-hook 各阶段时的最终状态与 Trace。
-- [ ] 为敏感参数建立统一的输入/输出脱敏契约，而非依赖各工具自行处理。
+- [ ] 明确取消发生在 pre-hook、permission、tool 和 post-hook 各阶段时的最终状态与 Trace。
+- [ ] 固化入口 × hook × permission × cancel 的参数化离线行为矩阵。
+
+说明：Trace v2 的 schema 级凭据脱敏已在 P0-3 完成；P0-2 不再重复设计日志脱敏，只关注工具生命周期语义。
 
 证据：`harness/executor.py`、`tests/test_harness.py`。
 
-## P0-3：Trace v2 最小闭环 — PARTIAL
+## P0-3：Trace v2 最小闭环 — DONE
 
 已完成：
 
-- [x] model、tool、compaction、usage、completion rejection、termination、acceptance 和
-  delivery 已有可审计事件或结构化字段。
-- [x] B2 报告可汇总 status、termination/resource reason、rejection、token 与 latency。
-- [x] canonical History、ephemeral resource warning 与 hidden verifier 的边界已固定。
+- [x] 新写入事件统一携带 `trace_schema_version=2`，并保留 `schema_version=2` 兼容别名。
+- [x] Run 使用稳定 `run_id` / `run_span_id`；Model、Tool、Context/Compaction 使用 child span，包含 `step_id`、`span_id`、`parent_span_id` 与 operation-specific id。
+- [x] CLI、Chat、API、GitHub Issue 通过统一 `ExecutionRunner` 解析/传播 `entrypoint`；isolate 路径使用轻量 `ContextVar` 传播，不侵入 orchestrator 生命周期。
+- [x] EventLog 最终 JSONL 写盘边界统一递归 redaction；覆盖 Authorization/API Key/GitHub token/password/secret/token 字段，以及 Bearer、`sk-`、`ghp_`、`github_pat_` 常见字符串模式。
+- [x] token usage 字段白名单保护，`input_tokens` / `output_tokens` / `cached_tokens` / `total_tokens` 等统计不会被误删。
+- [x] Model span 记录本地诊断 `token_breakdown`：system、tool schema、repo map、history/context、pending、injected、estimated input；Provider 实际 usage 单独记录为 `provider_usage`，不与 estimate 混用。
+- [x] provider error、infrastructure error、cancel、loop detected、resource exhausted、completion rejection、acceptance、delivery 均可落到统一 run correlation 下。
+- [x] Runner 统一追加 `acceptance` 与 `run_terminated`；GitHub Issue 在真实 commit/push/PR 决策后追加 `delivery`。
+- [x] 旧 JSONL 读取/追加保持只读兼容：历史行不迁移、不重写；新追加行才使用 v2 schema。
+- [x] B1/B2 reader 继续按事件类型和可选字段消费；历史 `evals/results` 未改写。
+- [x] 回归覆盖集中扩展在 `tests/test_trace_v2.py` 与既有 GitHub delivery 测试，包含 schema、correlation、parent/child、model/tool/compaction、termination、acceptance/delivery、四入口、redaction、token breakdown、provider error、completion rejection、INCOMPLETE、legacy JSONL。
 
-剩余：
+已知边界（不影响 P0-3 完成）：
 
-- [ ] 固化跨入口统一的 Trace schema/version，而不是由报告层兼容字段差异。
-- [ ] 补齐 prompt 分区 token 统计和 schema 级脱敏测试。
-- [ ] 固化取消、provider 空响应和基础设施失败的跨入口统计口径。
+- Trace v2 是 Forge 自有最小 schema，不引入 OpenTelemetry SDK、collector、外部数据库或云 tracing 服务。
+- 本地 token breakdown 是诊断估算，不代表 provider 计费真值；真实 usage 以 provider 返回为准。
+- 不全量保存/复制 provider request payload，也不在本轮实现 MCP、多 Agent、multi-tool call 或 Resource Manager。
+- 本轮远程连接无法执行 pytest；本地测试若发现失败则重新打开 P0-3。
+
+证据：`agent/trace_v2.py`、`agent/event_log.py`、`agent/core.py`、`agent/runner.py`、`entry/github_issue.py`、
+`tests/test_trace_v2.py`、`tests/test_github_issue_delivery.py`、`docs/changes/2026-09-16/Trace-v2收口改动内容.md`。
 
 ## P1-1：统一 Runner、独立验收与真实 PR — DONE
 
@@ -71,8 +85,8 @@
 - [x] clone/push 使用临时认证 header，remote 和日志不保存 Token。
 - [x] 真实案例完成 Agent → verifier → commit → push → PR → merge 闭环。
 
-证据：`agent/runner.py`、`entry/github_issue.py`、`tests/test_runner.py`、
-`tests/test_github_issue_delivery.py`、`evals/pr_test_issue_4_verifier.py`，以及
+证据：`agent/runner.py`、`entry/github_issue.py`、`tests/test_runner.py`、`tests/test_github_issue_delivery.py`、
+`evals/pr_test_issue_4_verifier.py`，以及
 [`docs/changes/2026-09-15/pr-test真实PR改动内容.md`](docs/changes/2026-09-15/pr-test真实PR改动内容.md)。
 
 ## P1-2：Context Compaction — DONE（C6 延期）
@@ -144,8 +158,7 @@ v3：baseline strict 1/3、verifier 2/3；pruning 2/3、2/3；hybrid 2/3、3/3�
 - [x] Agent 以 task description 驱动 query-aware Repo Map。
 - [x] `file_write` / `file_edit` / `edit` 成功后失效缓存，同一 run 可见新内容。
 - [x] 内容命中、路径/符号命中、空 query、选择性失效和写后刷新均有测试。
-- [x] 正式 retrieval 消融：static MRR 0.097、query-aware MRR 0.319；预算内目标召回
-  0.365 → 0.635。
+- [x] 正式 retrieval 消融：static MRR 0.097、query-aware MRR 0.319；预算内目标召回 0.365 → 0.635。
 - [x] 引用计数性能消融：优化前 median 35.118s，优化后 0.493s；语义等价，约 71.3×。
 
 证据：`context/repo_map.py`、`tests/test_repo_map_improvements.py`、
@@ -156,8 +169,7 @@ v3：baseline strict 1/3、verifier 2/3；pruning 2/3、2/3；hybrid 2/3、3/3�
 - `PARTIAL`：Repo Map cache identity 尚未显式包含 Git HEAD/working-tree fingerprint。
 - `PARTIAL`：框架文件工具写后刷新已覆盖；shell/git 引起的删除、重命名或写入未统一感知。
 - `PARTIAL`：解析失败存在 best-effort fallback，但“陈旧 map 不误导 Agent”的契约仍可强化。
-- `DEFERRED`：directory-tree-only baseline、first-effective-edit token 指标和更大规模真实 Agent
-  对照属于可选后续证据，不是本阶段完成门槛。
+- `DEFERRED`：directory-tree-only baseline、first-effective-edit token 指标和更大规模真实 Agent 对照属于可选后续证据，不是本阶段完成门槛。
 
 ## P1-6：自动 PR 与面试证据包 — PARTIAL
 
@@ -177,8 +189,7 @@ v3：baseline strict 1/3、verifier 2/3；pruning 2/3、2/3；hybrid 2/3、3/3�
 
 ## 下一批建议顺序
 
-1. P0-3：统一 Trace schema/version 与跨入口脱敏契约。
-2. P0-2：补齐四入口 hook/cancel 一致性矩阵。
-3. P1-4：用离线失败注入补全 Harness 可靠性任务集。
-4. P1-5 小尾项：仅在测试能稳定复现时补 shell/git 写入与删除/重命名失效。
-5. P1-6：整理可重复、不过度宣称的面试证据入口。
+1. P0-2：工具 Hook / permission / cancel 四入口一致性与阶段语义。
+2. P1-4：用离线失败注入补全 Harness 可靠性任务集。
+3. P1-6：整理可重复、不过度宣称的面试证据入口。
+4. P1-5 小尾项：仅在测试能稳定复现时再处理 shell/git 写入、删除/重命名与 cache identity。
