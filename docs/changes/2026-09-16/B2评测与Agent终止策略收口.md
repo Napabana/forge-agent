@@ -445,7 +445,7 @@ python -m pytest -q \
 
 按优先级：
 
-1. `2026-09-16-B2评测与Agent终止策略收口.md`
+1. `B2评测与Agent终止策略收口.md`
 2. `AGENTS.md`
 3. `agent/core.py`
 4. `agent/prompt.py`

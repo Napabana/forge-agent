@@ -558,8 +558,8 @@ python -m evals.context_policy_benchmark \
 
 文档同步另计：
 
-- `CONTEXT_COMPACTION_TODO.md`
-- B1 完成后新增 `2026-09-15-Context-Policy-B1改动内容.md`
+- `../../plans/archive/CONTEXT_COMPACTION_TODO.md`
+- B1 完成证据最终保存在 `../../../evals/results/context_policy_benchmark/report.json`，未另建原计划中的独立改动日志。
 
 ## 16. 明确不改
 

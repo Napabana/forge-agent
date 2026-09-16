@@ -1,4 +1,7 @@
-# Forge Agent Context Compaction 执行方案
+# Forge Agent Context Compaction 执行方案（历史归档）
+
+> 状态：C1-C5 与 B1/B2 已完成。本文件保留原始施工设计，仅供追溯；当前状态与后续优先级
+> 以仓库根目录 `TODO-P0-P1.md` 和 `Forge-Agent-P0-P1-实施计划.md` 为准。
 
 日期：2026-09-15
 

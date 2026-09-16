@@ -9,7 +9,6 @@ config/
 .claude
 .coverage
 htmlcov/
-docs/
 .yaml
 # Secrets — never commit API keys / tokens
 .env
@@ -18,5 +17,3 @@ docs/
 
 # TaskEngine state (SQLite WAL)
 .forge/
-*.md
-!README.md

@@ -1,4 +1,7 @@
-# Forge Agent Context Compaction TODO
+# Forge Agent Context Compaction TODO（历史归档）
+
+> 状态：C1-C5、B1 与 B2 已完成，C6 明确延期。本文件不再作为当前待办清单；当前状态以
+> 仓库根目录 `TODO-P0-P1.md` 为准。
 
 日期：2026-09-15
 
@@ -22,7 +25,7 @@
 - [x] canonical `ConversationHistory` 不再按 message count 破坏性删除。
 - [x] TokenBudget / Compaction 共用 HistoryUnit，Action/Observation 不拆。
 - [x] recent tail 改为 token-based。
-- [x] 交接：`2026-09-15-Context-Compaction-C1改动内容.md`。
+- [x] 交接：`../../changes/2026-09-15/Context-Compaction-C1改动内容.md`。
 
 ## C2：完整 Request Pressure 与 CompactionEntry
 
@@ -31,7 +34,7 @@
 - [x] 完整 request pressure：system/tool schema/history；Repo Map 仅诊断不重复计数。
 - [x] summary 不写回 canonical history；`history_override` 只影响下一模型调用。
 - [x] 独立 CompactionEntry / checkpoint / previous lineage。
-- [x] 交接：`2026-09-15-Context-Compaction-C2改动内容.md`。
+- [x] 交接：`../../changes/2026-09-15/Context-Compaction-C2改动内容.md`。
 
 ## C3：Repository fingerprint 与 Chat Round-Boundary Preflight
 
@@ -41,7 +44,7 @@
 - [x] Fresh Round 1 不 preflight；Round 2+ / resume 首次模型调用前检查 Context policy。
 - [x] resume/new/clear checkpoint lineage 正确恢复/重置。
 - [x] 真实 `agent chat` production wiring 已在 C4 前置补齐。
-- [x] 交接：`2026-09-15-Context-Compaction-C3改动内容.md`。
+- [x] 交接：`../../changes/2026-09-15/Context-Compaction-C3改动内容.md`。
 
 ## C4：Deterministic Tool-output Pruning
 
@@ -56,14 +59,14 @@
 - [x] CLI Chat 注入会话级 `TraceableCompaction`。
 - [x] 用户本地运行：`tests/test_tool_pruning.py tests/test_compaction.py` 全部通过。
 - [x] 用户本地运行：`tests/test_chat.py tests/test_session_store.py tests/test_day2.py` 全部通过。
-- [x] 交接：`2026-09-15-Context-Compaction-C4改动内容.md`。
+- [x] 交接：`../../changes/2026-09-15/Context-Compaction-C4改动内容.md`。
 
 ## C5：Hybrid Structured Compaction
 
 状态：已完成，用户本地 pytest 全部通过。
 
-设计：`2026-09-15-Context-Compaction-C5设计收口.md`。
-交接：`2026-09-15-Context-Compaction-C5改动内容.md`。
+设计：`../../changes/2026-09-15/Context-Compaction-C5设计收口.md`。
+交接：`../../changes/2026-09-15/Context-Compaction-C5改动内容.md`。
 
 ### 语义原则
 
@@ -164,7 +167,7 @@
 
 状态：设计已收口，等待实施范围确认。
 
-设计：`2026-09-15-Context-Policy-B1设计收口.md`。
+设计：`../../changes/2026-09-15/Context-Policy-B1设计收口.md`。
 
 目标：固定 history replay，不运行真实 Coding Agent；Context policy correctness 与 semantic model 随机性分层评估。
 

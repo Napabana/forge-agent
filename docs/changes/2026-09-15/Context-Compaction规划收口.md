@@ -59,8 +59,8 @@ Model-visible View
 
 具体方案见：
 
-- `CONTEXT_COMPACTION_EXECUTION_PLAN.md`
-- `CONTEXT_COMPACTION_TODO.md`
+- `../../plans/archive/CONTEXT_COMPACTION_EXECUTION_PLAN.md`
+- `../../plans/archive/CONTEXT_COMPACTION_TODO.md`
 
 ## 后续实施顺序
 
@@ -110,9 +110,9 @@ C. hybrid_compaction
 
 仅新增规划文档：
 
-- `CONTEXT_COMPACTION_EXECUTION_PLAN.md`
-- `CONTEXT_COMPACTION_TODO.md`
-- `2026-09-15-Context-Compaction规划收口.md`
+- `../../plans/archive/CONTEXT_COMPACTION_EXECUTION_PLAN.md`
+- `../../plans/archive/CONTEXT_COMPACTION_TODO.md`
+- `Context-Compaction规划收口.md`
 
 未修改：
 
