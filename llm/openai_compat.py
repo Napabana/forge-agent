@@ -302,6 +302,28 @@ def _non_negative_int(value: Any) -> int:
     return 0
 
 
+def _terminal_action_from_tool_call(
+    tool_name: str,
+    params: dict[str, Any],
+    thought: str,
+) -> Action | None:
+    """把兼容网关错误包装成 function call 的终止动作归一化。"""
+    normalized = tool_name.strip().lower()
+    if normalized not in {"finish", "give_up"}:
+        return None
+
+    keys = ("summary", "message", "reason")
+    message = next(
+        (str(params[key]).strip() for key in keys if params.get(key) is not None and str(params[key]).strip()),
+        "Task complete." if normalized == "finish" else "Agent gave up.",
+    )
+    return Action(
+        action_type=ActionType.FINISH if normalized == "finish" else ActionType.GIVE_UP,
+        thought="" if thought == "(no thought)" else thought,
+        message=message,
+    )
+
+
 def _parse_openai_response(choice: Any, thought: str) -> Action:
     """
     解析 OpenAI API 的 choice，返回 Action。
@@ -323,20 +345,30 @@ def _parse_openai_response(choice: Any, thought: str) -> Action:
         try:
             arguments = getattr(function, "arguments", "") or "{}"
             params = json.loads(arguments)
+            if not isinstance(params, dict):
+                params = {"raw": arguments}
         except (json.JSONDecodeError, TypeError):
             params = {"raw": getattr(function, "arguments", "")}
 
+        tool_name = getattr(function, "name", "") or "unknown_tool"
+        terminal = _terminal_action_from_tool_call(tool_name, params, thought)
+        if terminal is not None:
+            return terminal
         return Action(
             action_type=ActionType.TOOL_CALL,
             thought=thought,
-            tool_call=ToolCall(
-                name=getattr(function, "name", "") or "unknown_tool",
-                params=params,
-            ),
+            tool_call=ToolCall(name=tool_name, params=params),
         )
 
     if finish_reason == "stop":
         if thought and thought != "(no thought)":
+            if thought.strip().upper().startswith("GIVE_UP:"):
+                reason = thought.strip()[len("GIVE_UP:"):].strip()
+                return Action(
+                    action_type=ActionType.GIVE_UP,
+                    thought="",
+                    message=reason or "Agent gave up.",
+                )
             pseudo_call = _parse_pseudo_tool_call(thought)
             if pseudo_call is not None:
                 return pseudo_call
@@ -391,10 +423,16 @@ def _parse_pseudo_tool_call(text: str) -> Action | None:
     except (json.JSONDecodeError, TypeError):
         logger.warning("Malformed pseudo tool call from model: %s", text[:200])
         return None
+    if not isinstance(params, dict):
+        params = {}
+    tool_name = match.group(1)
+    terminal = _terminal_action_from_tool_call(tool_name, params, text.strip())
+    if terminal is not None:
+        return terminal
     return Action(
         action_type=ActionType.TOOL_CALL,
         thought=text.strip(),
-        tool_call=ToolCall(name=match.group(1), params=params),
+        tool_call=ToolCall(name=tool_name, params=params),
     )
 
 
@@ -496,10 +534,14 @@ def _try_parse_tool_json(json_str: str, thought: str) -> Action | None:
     if not tool_name or not isinstance(tool_name, str):
         return None
 
+    normalized_params = params if isinstance(params, dict) else {}
+    terminal = _terminal_action_from_tool_call(tool_name, normalized_params, thought)
+    if terminal is not None:
+        return terminal
     return Action(
         action_type=ActionType.TOOL_CALL,
         thought=thought,
-        tool_call=ToolCall(name=tool_name, params=params if isinstance(params, dict) else {}),
+        tool_call=ToolCall(name=tool_name, params=normalized_params),
     )
 
 
