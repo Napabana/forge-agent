@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from agent.task import RunResult, RunStatus
+from agent.event_log import EventLog
+from agent.task import EventType, RunResult, RunStatus, Task
 from entry import github_issue
 
 
@@ -14,7 +15,13 @@ _BRANCH = "agent/fix-issue-1"
 
 def _git(repo, *args):
     """在临时仓库执行测试所需的最小 Git 命令。"""
-    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
 
 
 def _repo(tmp_path, with_remote=True):
@@ -37,14 +44,26 @@ def _repo(tmp_path, with_remote=True):
 
 def _result(acceptance_status="passed"):
     """构造已完成 Agent 与可控独立验收状态。"""
-    return RunResult("delivery", RunStatus.SUCCESS, "done", 1, acceptance_status=acceptance_status)
+    return RunResult(
+        "delivery",
+        RunStatus.SUCCESS,
+        "done",
+        1,
+        acceptance_status=acceptance_status,
+    )
 
 
 def _deliver(result, repo, pr_creator):
     """使用固定交付参数调用被测入口。"""
     return github_issue.deliver_pull_request(
-        result, str(repo), _BRANCH, "fix: resolve issue #1", "owner/repo",
-        "Fix issue", "body", pr_creator=pr_creator,
+        result,
+        str(repo),
+        _BRANCH,
+        "fix: resolve issue #1",
+        "owner/repo",
+        "Fix issue",
+        "body",
+        pr_creator=pr_creator,
     )
 
 
@@ -71,7 +90,10 @@ def test_clone_uses_ephemeral_auth_and_tokenless_remote(tmp_path, monkeypatch):
     assert command_text == f"git clone https://github.com/owner/repo.git {target}"
     assert token not in command_text and token not in remote
     assert token not in captured["env"].values()
-    assert captured["env"]["GIT_CONFIG_COUNT"] == "1" and "GIT_TRACE_CURL" not in captured["env"]
+    assert (
+        captured["env"]["GIT_CONFIG_COUNT"] == "1"
+        and "GIT_TRACE_CURL" not in captured["env"]
+    )
 
 
 def test_clone_failure_does_not_expose_token(tmp_path, monkeypatch):
@@ -79,7 +101,12 @@ def test_clone_failure_does_not_expose_token(tmp_path, monkeypatch):
     token = "github_pat_fake_secret"
 
     def fake_run(command, **_kwargs):
-        return subprocess.CompletedProcess(command, 128, "", f"fatal: cannot clone {command[-2]}")
+        return subprocess.CompletedProcess(
+            command,
+            128,
+            "",
+            f"fatal: cannot clone {command[-2]}",
+        )
 
     monkeypatch.setenv("GITHUB_TOKEN", token)
     monkeypatch.setattr(github_issue.subprocess, "run", fake_run)
@@ -102,12 +129,24 @@ def test_issue_registry_uses_target_repo(tmp_path, monkeypatch, create_pr):
 
     target = str(tmp_path)
     monkeypatch.setattr("config.schema.load_config", lambda _path: AppConfig())
-    monkeypatch.setattr(github_issue, "fetch_issue", lambda *_args: ("title", "add tests", "url"))
+    monkeypatch.setattr(
+        github_issue,
+        "fetch_issue",
+        lambda *_args: ("title", "add tests", "url"),
+    )
     monkeypatch.setattr(github_issue, "clone_repo", lambda *_args: None)
-    monkeypatch.setattr(github_issue, "_run_git", lambda *_args, **_kwargs: (True, ""))
+    monkeypatch.setattr(
+        github_issue,
+        "_run_git",
+        lambda *_args, **_kwargs: (True, ""),
+    )
     monkeypatch.setattr(github_issue, "create_branch", lambda *_args: None)
     monkeypatch.setattr(router, "create_backend_from_config", lambda _config: object())
-    registry = ToolRegistry().register(NoopTool("git_add")).register(NoopTool("git_commit"))
+    registry = (
+        ToolRegistry()
+        .register(NoopTool("git_add"))
+        .register(NoopTool("git_commit"))
+    )
 
     def assert_registry(_config, **kwargs):
         assert kwargs == {"worktree_path": target, "workspace": target}
@@ -122,7 +161,13 @@ def test_issue_registry_uses_target_repo(tmp_path, monkeypatch, create_pr):
     monkeypatch.setattr(cli, "_build_registry", assert_registry)
     monkeypatch.setattr(runner_module, "ExecutionRunner", AssertRunner)
     with pytest.raises(RegistryReached):
-        github_issue.run_on_issue("owner/repo", 4, target, create_pr=create_pr, verify_command="python -V" if create_pr else None)
+        github_issue.run_on_issue(
+            "owner/repo",
+            4,
+            target,
+            create_pr=create_pr,
+            verify_command="python -V" if create_pr else None,
+        )
 
 
 def test_delivery_stops_when_no_diff(tmp_path):
@@ -181,4 +226,53 @@ def test_pr_retry_does_not_repeat_commit_or_push(tmp_path, monkeypatch):
     assert result.delivery_status == "delivered"
     assert len(push_calls) == 1 and len(pr_calls) == 2
     assert _git(repo, "rev-list", "--count", "HEAD") == "2"
-    assert _git(repo, "rev-parse", "HEAD") == _git(repo, "rev-parse", f"refs/remotes/origin/{_BRANCH}")
+    assert _git(repo, "rev-parse", "HEAD") == _git(
+        repo,
+        "rev-parse",
+        f"refs/remotes/origin/{_BRANCH}",
+    )
+
+
+def test_delivery_outcome_appends_to_existing_trace(tmp_path):
+    task = Task("issue", str(tmp_path), task_id="delivery-trace")
+    log = EventLog.create(
+        task,
+        log_dir=str(tmp_path / "logs"),
+        entrypoint="github_issue",
+    )
+    log.log_task_start(task)
+    trace_path = str(log.path)
+    log.close()
+
+    result = RunResult(
+        task.task_id,
+        RunStatus.SUCCESS,
+        "done",
+        2,
+        trace_path=trace_path,
+        acceptance_status="passed",
+        delivery_status="delivered",
+        termination_reason="completion_satisfied",
+    )
+    github_issue._record_delivery_trace(
+        result,
+        requested=True,
+        repo_name="owner/repo",
+        branch=_BRANCH,
+        issue_number=1,
+        pr_url="https://example.invalid/pr/1",
+    )
+
+    read_log = EventLog.open_existing(trace_path)
+    try:
+        events = read_log.replay()
+    finally:
+        read_log.close()
+    delivery = next(
+        event for event in events if event.event_type is EventType.DELIVERY
+    )
+    assert delivery.payload["entrypoint"] == "github_issue"
+    assert delivery.payload["run_id"] == events[0].payload["run_id"]
+    assert delivery.payload["run_span_id"] == events[0].payload["run_span_id"]
+    assert delivery.payload["status"] == "delivered"
+    assert delivery.payload["pr_url"] == "https://example.invalid/pr/1"
