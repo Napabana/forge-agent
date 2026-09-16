@@ -124,13 +124,23 @@ Before your next action:
 A second no-progress cycle will terminate this run.\
 """
 
-STEP_BUDGET_WARNING = """\
-[STEP BUDGET] You have {remaining} model step{suffix} remaining, including this one.
-Stop broad exploration and prioritize completion:
-1. If the required edit is not done, make the smallest necessary edit now.
-2. If the edit is done, run only essential verification.
-3. Once the task is sufficiently verified, return the final summary immediately.
-4. Do not spend the remaining budget on optional cleanup, extra inspection, or git commits unless the task explicitly requires them.\
+RESOURCE_BUDGET_LOW = """\
+[RESOURCE BUDGET LOW]
+
+Execution resources are running low.
+Do not claim completion unless the actual completion requirements are satisfied.
+Prioritize the highest-value unresolved requirement.
+Avoid optional exploration, cleanup, redundant inspection, or unnecessary commits.
+If all required changes and verification are already complete, return the final result.
+Otherwise continue with the most important unresolved requirement.\
+"""
+
+COMPLETION_REJECTED = """\
+[COMPLETION REJECTED]
+Reason: {code}
+Detail: {detail}
+
+The completion requirements are not yet satisfied. Resolve the stated requirement and continue working.\
 """
 
 
@@ -146,14 +156,14 @@ def reflection_loop_detected(repeats: int, period: int = 1) -> str:
     return REFLECTION_LOOP_DETECTED.format(repeats=repeats, period=period)
 
 
-def step_budget_warning(remaining: int) -> str:
-    """生成仅供当前模型调用可见的收尾预算提示。"""
-    if remaining <= 0:
-        raise ValueError("remaining must be positive")
-    return STEP_BUDGET_WARNING.format(
-        remaining=remaining,
-        suffix="" if remaining == 1 else "s",
-    )
+def step_budget_warning() -> str:
+    """生成仅供当前模型调用可见、且不暴露精确余量的资源提示。"""
+    return RESOURCE_BUDGET_LOW
+
+
+def completion_rejected(code: str, detail: str) -> str:
+    """把结构化完成拒绝渲染为 canonical 控制消息。"""
+    return COMPLETION_REJECTED.format(code=code, detail=detail)
 
 
 # ---------------------------------------------------------------------------

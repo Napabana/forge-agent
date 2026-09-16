@@ -1,0 +1,52 @@
+{
+  "hybrid_compaction": {
+    "runs": 1,
+    "solved": 1,
+    "pass_at_1": 1.0,
+    "verifier_pass_rate": 1.0,
+    "max_steps_exhausted_rate": 0.0,
+    "false_finish_rate": 0.0,
+    "mean_agent_tokens": 62091,
+    "mean_input_tokens": 59932,
+    "mean_output_tokens": 2159,
+    "mean_semantic_tokens": 5360,
+    "mean_total_tokens_with_context": 67451,
+    "tokens_per_solved": 67451.0,
+    "mean_latency_seconds": 59.34917951699754,
+    "p95_latency_seconds": 59.34917951699754,
+    "tool_calls": 7,
+    "context_trigger_rate": 1.0,
+    "semantic_calls": 1,
+    "semantic_error_count": 0,
+    "mean_max_pressure_ratio": 0.9747058823529412,
+    "status_distribution": {
+      "success": 1
+    },
+    "termination_reason_distribution": {
+      "completion_satisfied": 1
+    },
+    "resource_reason_distribution": {
+      "unknown": 1
+    },
+    "completion_rejections": 0,
+    "completion_rejection_reasons": {}
+  },
+  "comparison_v2_v3": [
+    {
+      "case_id": "superseded-state",
+      "variant": "hybrid_compaction",
+      "v2_passed": false,
+      "v3_passed": true,
+      "v2_verifier_status": "passed",
+      "v3_verifier_status": "passed",
+      "v2_agent_status": "max_steps",
+      "v3_agent_status": "success",
+      "v3_termination_reason": "completion_satisfied",
+      "v3_resource_reason": null,
+      "v2_total_tokens": 123346,
+      "v3_total_tokens": 67451,
+      "v2_latency_seconds": 99.73146958199868,
+      "v3_latency_seconds": 59.34917951699754
+    }
+  ]
+}

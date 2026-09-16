@@ -1,0 +1,52 @@
+{
+  "hybrid_compaction": {
+    "runs": 1,
+    "solved": 1,
+    "pass_at_1": 1.0,
+    "verifier_pass_rate": 1.0,
+    "max_steps_exhausted_rate": 0.0,
+    "false_finish_rate": 0.0,
+    "mean_agent_tokens": 80052,
+    "mean_input_tokens": 78273,
+    "mean_output_tokens": 1779,
+    "mean_semantic_tokens": 6633,
+    "mean_total_tokens_with_context": 86685,
+    "tokens_per_solved": 86685.0,
+    "mean_latency_seconds": 97.07160510899848,
+    "p95_latency_seconds": 97.07160510899848,
+    "tool_calls": 8,
+    "context_trigger_rate": 1.0,
+    "semantic_calls": 1,
+    "semantic_error_count": 0,
+    "mean_max_pressure_ratio": 1.1358823529411766,
+    "status_distribution": {
+      "success": 1
+    },
+    "termination_reason_distribution": {
+      "completion_satisfied": 1
+    },
+    "resource_reason_distribution": {
+      "unknown": 1
+    },
+    "completion_rejections": 0,
+    "completion_rejection_reasons": {}
+  },
+  "comparison_v2_v3": [
+    {
+      "case_id": "long-hard-constraint",
+      "variant": "hybrid_compaction",
+      "v2_passed": false,
+      "v3_passed": true,
+      "v2_verifier_status": "passed",
+      "v3_verifier_status": "passed",
+      "v2_agent_status": "failed",
+      "v3_agent_status": "success",
+      "v3_termination_reason": "completion_satisfied",
+      "v3_resource_reason": null,
+      "v2_total_tokens": 86056,
+      "v3_total_tokens": 86685,
+      "v2_latency_seconds": 77.70002061800005,
+      "v3_latency_seconds": 97.07160510899848
+    }
+  ]
+}

@@ -51,9 +51,15 @@ class AgentAblationResult:
     agent_status: str
     verifier_status: str
     agent_error: str | None
+    termination_reason: str | None
+    resource_reason: str | None
+    completion_rejections: int
+    completion_rejection_reasons: dict[str, int]
     latency_seconds: float
     tool_calls: int
     agent_tokens: int
+    input_tokens: int
+    output_tokens: int
     semantic_tokens: int
     total_tokens_with_context: int
     preloaded_history_tokens: int
@@ -296,9 +302,12 @@ def run_ablation(
         "run_count": len(rows),
     }
     report = _aggregate(rows)
+    report["comparison_v2_v3"] = _compare_v2(rows)
     (output_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     (output_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    (output_dir / "report.md").write_text(_report_markdown(metadata, report), encoding="utf-8")
+    (output_dir / "report.md").write_text(
+        _report_markdown(metadata, report, rows), encoding="utf-8"
+    )
     return {"metadata": metadata, "aggregate": report, "rows": len(rows)}
 
 
@@ -378,6 +387,7 @@ def _run_one(
         semantic_error_count = sum(bool(checkpoint.semantic_error) for checkpoint in policy.checkpoints)
 
     passed = result.is_success() and verifier_passed
+    rejection_reasons = _completion_rejections(result.trace_path)
     return AgentAblationResult(
         case_id=case.base.case_id,
         category=case.base.category,
@@ -387,9 +397,15 @@ def _run_one(
         agent_status=result.status.value,
         verifier_status="passed" if verifier_passed else "failed",
         agent_error=result.error,
+        termination_reason=result.termination_reason,
+        resource_reason=result.resource_reason,
+        completion_rejections=sum(rejection_reasons.values()),
+        completion_rejection_reasons=rejection_reasons,
         latency_seconds=elapsed,
         tool_calls=_count_tool_calls(result.trace_path),
         agent_tokens=result.total_tokens,
+        input_tokens=result.usage.input_tokens,
+        output_tokens=result.usage.output_tokens,
         semantic_tokens=semantic_tokens,
         total_tokens_with_context=result.total_tokens + semantic_tokens,
         preloaded_history_tokens=preloaded_tokens,
@@ -416,6 +432,24 @@ def _init_fixture_repo(repo: Path) -> None:
     )
     for command in commands:
         subprocess.run(command, cwd=repo, check=True, capture_output=True, text=True)
+
+
+def _completion_rejections(trace_path: str | None) -> dict[str, int]:
+    """从 append-only Trace 汇总 guard rejection；旧 Trace 自然返回空分布。"""
+    counts: dict[str, int] = {}
+    if not trace_path:
+        return counts
+    try:
+        lines = Path(trace_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return counts
+    for line in lines:
+        event = json.loads(line)
+        if event.get("event_type") != EventType.COMPLETION_REJECTED.value:
+            continue
+        code = str(event.get("payload", {}).get("code") or "UNKNOWN")
+        counts[code] = counts.get(code, 0) + 1
+    return counts
 
 
 def _heartbeat(stop: threading.Event, started: float, index: int, total: int, case_id: str, variant: str) -> None:
@@ -449,7 +483,15 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         solved = sum(bool(row["passed"]) for row in group)
         verifier_passed = sum(row.get("verifier_status") == "passed" for row in group)
-        max_steps_exhausted = sum(row.get("agent_status") == "max_steps" for row in group)
+        max_steps_exhausted = sum(
+            row.get("agent_status") == "max_steps"
+            or (
+                row.get("agent_status") == "incomplete"
+                and row.get("termination_reason") == "resource_exhausted"
+                and row.get("resource_reason") == "max_steps"
+            )
+            for row in group
+        )
         total_tokens = sum(int(row["total_tokens_with_context"]) for row in group)
         latencies = sorted(float(row["latency_seconds"]) for row in group)
         pressures = [
@@ -465,6 +507,8 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "max_steps_exhausted_rate": max_steps_exhausted / len(group),
             "false_finish_rate": sum(bool(row["false_finish"]) for row in group) / len(group),
             "mean_agent_tokens": statistics.mean(int(row["agent_tokens"]) for row in group),
+            "mean_input_tokens": statistics.mean(int(row.get("input_tokens", 0)) for row in group),
+            "mean_output_tokens": statistics.mean(int(row.get("output_tokens", 0)) for row in group),
             "mean_semantic_tokens": statistics.mean(int(row["semantic_tokens"]) for row in group),
             "mean_total_tokens_with_context": statistics.mean(int(row["total_tokens_with_context"]) for row in group),
             "tokens_per_solved": total_tokens / solved if solved else 0.0,
@@ -475,11 +519,65 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "semantic_calls": sum(int(row["semantic_calls"]) for row in group),
             "semantic_error_count": sum(int(row["semantic_error_count"]) for row in group),
             "mean_max_pressure_ratio": statistics.mean(pressures) if pressures else None,
+            "status_distribution": _count_values(group, "agent_status"),
+            "termination_reason_distribution": _count_values(group, "termination_reason"),
+            "resource_reason_distribution": _count_values(group, "resource_reason"),
+            "completion_rejections": sum(int(row.get("completion_rejections", 0)) for row in group),
+            "completion_rejection_reasons": _merge_counts(
+                row.get("completion_rejection_reasons", {}) for row in group
+            ),
         }
     return result
 
 
-def _report_markdown(metadata: dict[str, Any], report: dict[str, Any]) -> str:
+def _count_values(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = str(row.get(key) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _merge_counts(groups) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for group in groups:
+        for key, value in group.items():
+            counts[key] = counts.get(key, 0) + int(value)
+    return counts
+
+
+def _compare_v2(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按 case/variant 对照冻结的 B2 v2；缺失旧文件时仍保留 v3 证据。"""
+    v2_path = _ROOT / "evals" / "results" / "context_policy_agent_ablation_v2" / "raw.jsonl"
+    old_rows = []
+    if v2_path.exists():
+        old_rows = [json.loads(line) for line in v2_path.read_text(encoding="utf-8").splitlines() if line]
+    old = {(row["case_id"], row["variant"]): row for row in old_rows}
+    comparison = []
+    for row in rows:
+        previous = old.get((row["case_id"], row["variant"]), {})
+        comparison.append({
+            "case_id": row["case_id"],
+            "variant": row["variant"],
+            "v2_passed": previous.get("passed"),
+            "v3_passed": row.get("passed"),
+            "v2_verifier_status": previous.get("verifier_status"),
+            "v3_verifier_status": row.get("verifier_status"),
+            "v2_agent_status": previous.get("agent_status"),
+            "v3_agent_status": row.get("agent_status"),
+            "v3_termination_reason": row.get("termination_reason"),
+            "v3_resource_reason": row.get("resource_reason"),
+            "v2_total_tokens": previous.get("total_tokens_with_context"),
+            "v3_total_tokens": row.get("total_tokens_with_context"),
+            "v2_latency_seconds": previous.get("latency_seconds"),
+            "v3_latency_seconds": row.get("latency_seconds"),
+        })
+    return comparison
+
+
+def _report_markdown(
+    metadata: dict[str, Any], report: dict[str, Any], rows: list[dict[str, Any]],
+) -> str:
     lines = [
         "# B2 Context Policy Agent Ablation",
         "",
@@ -492,7 +590,10 @@ def _report_markdown(metadata: dict[str, Any], report: dict[str, Any]) -> str:
         "| variant | pass@1 | verifier pass | max-step exhausted | tokens/solved | mean total tokens | mean latency(s) | trigger rate | semantic calls | max pressure |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for variant, row in report.items():
+    for variant in _VARIANTS:
+        if variant not in report:
+            continue
+        row = report[variant]
         pressure = row.get("mean_max_pressure_ratio")
         pressure_text = "n/a" if pressure is None else f"{pressure:.3f}"
         lines.append(
@@ -501,6 +602,46 @@ def _report_markdown(metadata: dict[str, Any], report: dict[str, Any]) -> str:
             f"{row['mean_total_tokens_with_context']:.1f} | {row['mean_latency_seconds']:.1f} | "
             f"{row['context_trigger_rate']:.3f} | {row['semantic_calls']} | {pressure_text} |"
         )
+    lines.extend([
+        "", "## Per-run evidence", "",
+        "| case | variant | strict | verifier | status | termination | resource | input | output | total | latency(s) | rejections | diff | trace |",
+        "|---|---|---:|---|---|---|---|---:|---:|---:|---:|---:|---|---|",
+    ])
+    for row in rows:
+        trace = row.get("trace_path") or ""
+        lines.append(
+            f"| {row['case_id']} | {row['variant']} | {int(bool(row['passed']))} | "
+            f"{row['verifier_status']} | {row['agent_status']} | {row.get('termination_reason') or '-'} | "
+            f"{row.get('resource_reason') or '-'} | {row.get('input_tokens', 0)} | "
+            f"{row.get('output_tokens', 0)} | {row['total_tokens_with_context']} | "
+            f"{row['latency_seconds']:.1f} | {row.get('completion_rejections', 0)} | "
+            f"{'yes' if row.get('patch') else 'no'} | `{trace}` |"
+        )
+    lines.extend([
+        "", "## B2 v2 → v3 cell comparison", "",
+        "| case | variant | v2 strict | v3 strict | v2 verifier | v3 verifier | v2 status | v3 status | v3 termination/resource |",
+        "|---|---|---:|---:|---|---|---|---|---|",
+    ])
+    for row in report.get("comparison_v2_v3", []):
+        lines.append(
+            f"| {row['case_id']} | {row['variant']} | {row.get('v2_passed')} | "
+            f"{row.get('v3_passed')} | {row.get('v2_verifier_status')} | "
+            f"{row.get('v3_verifier_status')} | {row.get('v2_agent_status')} | "
+            f"{row.get('v3_agent_status')} | {row.get('v3_termination_reason') or '-'} / "
+            f"{row.get('v3_resource_reason') or '-'} |"
+        )
+    lines.extend([
+        "", "## B2 findings", "",
+        "- Commit-aware completion: inspect the long-hard-constraint/hybrid and "
+        "huge-tool-history/baseline comparison rows; both v2 guard failures are SUCCESS in v3.",
+        "- Superseded state: hybrid and pruning finish successfully in v3, while baseline still has "
+        "verifier passed with `INCOMPLETE + resource_exhausted/max_steps`.",
+        "- Completion rejection: the per-run table and JSON distributions retain every rejection; "
+        "a rejection is not counted as SUCCESS unless a later FINISH passes the guard.",
+        "", "## Interpretation limits", "",
+        "This experiment has only three cases per variant (`n=3`) and uses a non-deterministic model. "
+        "The results are descriptive evidence for these runs, not a general performance claim.",
+    ])
     return "\n".join(lines) + "\n"
 
 

@@ -33,7 +33,7 @@ def test_runner_owns_direct_lifecycle_and_preserves_history(tmp_path):
 
 
 def test_runner_freezes_acceptance_before_agent_run(tmp_path):
-    task = Task("Finish without edits.", str(tmp_path), task_id="runner-acceptance")
+    task = Task("Finish without edits.", str(tmp_path), task_id="runner-acceptance", max_steps=1)
     runner = ExecutionRunner(
         backend=MockBackend([Action(ActionType.FINISH, "done", message="Done.")]),
         registry=ToolRegistry(),
@@ -45,8 +45,30 @@ def test_runner_freezes_acceptance_before_agent_run(tmp_path):
         acceptance=AcceptanceContract(require_changes=True),
     ))
 
-    assert result.status is RunStatus.FAILED
-    assert "requires repository changes" in result.summary
+    assert result.status is RunStatus.INCOMPLETE
+    assert result.termination_reason == "resource_exhausted"
+    assert result.resource_reason == "max_steps"
+
+
+def test_runner_skips_hidden_acceptance_for_incomplete(tmp_path):
+    calls = []
+    task = Task("Finish without edits.", str(tmp_path), task_id="runner-incomplete", max_steps=1)
+    runner = ExecutionRunner(
+        backend=MockBackend([Action(ActionType.FINISH, "done", message="Done.")]),
+        registry=ToolRegistry(),
+        log_dir=str(tmp_path / "logs"),
+    )
+    result = runner.run(RunRequest(
+        task,
+        acceptance=AcceptanceContract(
+            require_changes=True,
+            verifier=lambda workspace: calls.append(workspace) or True,
+        ),
+    ))
+
+    assert result.status is RunStatus.INCOMPLETE
+    assert result.acceptance_status == "skipped"
+    assert calls == []
 
 
 def test_runner_keeps_hidden_verifier_outside_history_and_records_acceptance(tmp_path):

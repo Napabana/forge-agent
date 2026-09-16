@@ -161,7 +161,8 @@ def test_agent_reflects_then_terminates_and_logs_structured_events(tmp_path):
     loop_events = [event for event in events if event.event_type == EventType.LOOP_DETECTED]
     reflections = [event for event in events if event.event_type == EventType.REFLECTION]
 
-    assert result.status == RunStatus.GAVE_UP
+    assert result.status == RunStatus.INCOMPLETE
+    assert result.termination_reason == "loop_detected"
     assert result.steps_taken == 6
     assert [event.payload["severity"] for event in loop_events] == ["reflect", "terminate"]
     assert all(event.payload["period"] == 1 for event in loop_events)

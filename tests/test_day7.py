@@ -382,7 +382,7 @@ class TestIntegration:
             task_id="statstest",
             description="fix",
             repo_path=str(tmp_path),
-            max_steps=10,
+            max_steps=3,
         )
         registry = (
             ToolRegistry()
@@ -402,12 +402,13 @@ class TestIntegration:
             result = agent.run(task, log)
             stats = summarize_run(log)
 
-        assert result.status == RunStatus.FAILED
+        assert result.status == RunStatus.INCOMPLETE
+        assert result.termination_reason == "resource_exhausted"
         assert stats["actions"] == 3
         assert stats["reflections"] == 1      # 测试失败触发一次
         assert stats["tool_calls"]["test"] == 1
         assert stats["tool_calls"]["shell"] == 1
-        assert stats["final_status"] == "task_failed"
+        assert stats["final_status"] == "task_incomplete"
 
 
 # ===========================================================================

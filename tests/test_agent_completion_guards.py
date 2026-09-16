@@ -59,9 +59,11 @@ def test_finish_rejected_after_failed_test(tmp_path):
         registry,
     )
 
-    assert result.status == RunStatus.FAILED
-    assert "latest test did not pass" in (result.error or "")
-    assert events[-1].event_type == EventType.TASK_FAILED
+    assert result.status == RunStatus.INCOMPLETE
+    assert result.termination_reason == "resource_exhausted"
+    assert result.resource_reason == "max_steps"
+    assert any(event.event_type == EventType.COMPLETION_REJECTED for event in events)
+    assert events[-1].event_type == EventType.TASK_INCOMPLETE
 
 
 def test_finish_allowed_after_successful_test(tmp_path):
@@ -98,14 +100,15 @@ def test_finish_rejected_when_write_follows_successful_test(tmp_path):
         .register(NoopTool("test", "2 passed"))
         .register(NoopTool("file_write", "written"))
     )
-    result, _, _ = _run(
+    result, _, events = _run(
         tmp_path,
         [_tool_action("test"), _tool_action("file_write"), _finish_action()],
         registry,
     )
 
-    assert result.status == RunStatus.FAILED
-    assert "final state is unverified" in (result.error or "")
+    assert result.status == RunStatus.INCOMPLETE
+    rejection = next(event for event in events if event.event_type == EventType.COMPLETION_REJECTED)
+    assert rejection.payload["code"] == "FINAL_STATE_UNVERIFIED"
 
 
 def test_repeated_fatal_infrastructure_error_aborts_early(tmp_path):
@@ -134,9 +137,8 @@ def test_finish_rejected_when_required_write_and_test_never_run(tmp_path):
         require_tests=True,
     )
 
-    assert result.status == RunStatus.FAILED
-    assert "no write tool" in (result.error or "")
-    assert events[-1].event_type == EventType.TASK_FAILED
+    assert result.status == RunStatus.INCOMPLETE
+    assert events[-1].event_type == EventType.TASK_INCOMPLETE
 
 
 def test_finish_rejected_when_required_test_never_run(tmp_path):
@@ -149,8 +151,7 @@ def test_finish_rejected_when_required_test_never_run(tmp_path):
         require_tests=True,
     )
 
-    assert result.status == RunStatus.FAILED
-    assert "no test tool" in (result.error or "")
+    assert result.status == RunStatus.INCOMPLETE
 
 
 def test_finish_allowed_when_required_write_was_committed(tmp_path):
@@ -211,7 +212,7 @@ def test_finish_allowed_when_required_write_was_committed(tmp_path):
     assert target.read_text(encoding="utf-8") == "after\n"
 
 
-def test_step_budget_warning_is_ephemeral_and_counts_down(tmp_path):
+def test_resource_budget_warning_is_ephemeral_and_hides_exact_steps(tmp_path):
     reflections = [
         Action(action_type=ActionType.REFLECTION, thought=f"reflect {index}")
         for index in range(3)
@@ -225,18 +226,98 @@ def test_step_budget_warning_is_ephemeral_and_counts_down(tmp_path):
     assert result.status == RunStatus.SUCCESS
     assert len(backend.received_messages) == 4
     assert not any(
-        "[STEP BUDGET]" in message.content
+        "[RESOURCE BUDGET LOW]" in message.content
         for message in backend.received_messages[0]
     )
 
-    for messages, remaining in zip(backend.received_messages[1:], (3, 2, 1)):
+    for messages in backend.received_messages[1:]:
         warnings = [
             message.content
             for message in messages
-            if "[STEP BUDGET]" in message.content
+            if "[RESOURCE BUDGET LOW]" in message.content
         ]
         assert len(warnings) == 1
-        assert f"You have {remaining} model step" in warnings[0]
+        assert "model step" not in warnings[0]
+        assert not any(token in warnings[0] for token in ("Step ", "3 remaining", "2 remaining", "1 remaining"))
+
+
+def test_premature_finish_rejection_is_canonical_then_recovers(tmp_path):
+    registry = (
+        ToolRegistry()
+        .register(NoopTool("file_write", "written"))
+        .register(NoopTool("test", "2 passed"))
+    )
+    result, backend, events = _run(
+        tmp_path,
+        [_tool_action("file_write"), _finish_action(), _tool_action("test"), _finish_action()],
+        registry,
+        require_tests=True,
+    )
+
+    assert result.status == RunStatus.SUCCESS
+    assert result.termination_reason == "completion_satisfied"
+    rejection = next(event for event in events if event.event_type == EventType.COMPLETION_REJECTED)
+    assert rejection.payload["code"] == "REQUIRED_TEST_MISSING"
+    assert any(
+        "[COMPLETION REJECTED]" in message.content
+        for message in backend.received_messages[2]
+    )
+
+
+def test_failed_test_rejection_then_successful_retest_recovers(tmp_path):
+    class FlakyTestTool(BaseTool):
+        calls = 0
+
+        @property
+        def name(self):
+            return "test"
+
+        @property
+        def description(self):
+            return "fails once"
+
+        @property
+        def parameters_schema(self):
+            return {"type": "object", "properties": {}}
+
+        def execute(self, params):
+            self.calls += 1
+            return ToolResult(success=self.calls > 1, output="passed" if self.calls > 1 else "failed")
+
+    result, _, events = _run(
+        tmp_path,
+        [_tool_action("test"), _finish_action(), _tool_action("test"), _finish_action()],
+        ToolRegistry().register(FlakyTestTool()),
+        require_tests=True,
+    )
+    assert result.status == RunStatus.SUCCESS
+    assert any(
+        event.event_type == EventType.COMPLETION_REJECTED
+        and event.payload["code"] == "LATEST_TEST_FAILED"
+        for event in events
+    )
+
+
+def test_write_after_test_rejection_then_retest_recovers(tmp_path):
+    registry = (
+        ToolRegistry()
+        .register(NoopTool("test", "passed"))
+        .register(NoopTool("file_write", "written"))
+    )
+    result, _, events = _run(
+        tmp_path,
+        [
+            _tool_action("test"), _tool_action("file_write"), _finish_action(),
+            _tool_action("test"), _finish_action(),
+        ],
+        registry,
+    )
+    assert result.status == RunStatus.SUCCESS
+    assert any(
+        event.event_type == EventType.COMPLETION_REJECTED
+        and event.payload["code"] == "FINAL_STATE_UNVERIFIED"
+        for event in events
+    )
 
 
 def test_infer_completion_requirements_for_coding_task():

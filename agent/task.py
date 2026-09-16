@@ -57,6 +57,8 @@ class EventType(str, Enum):
     CONTEXT_COMPACTION_STARTED = "context_compaction_started"
     CONTEXT_COMPACTION_FAILED = "context_compaction_failed"
     CONTEXT_COMPACTED = "context_compacted"
+    COMPLETION_REJECTED = "completion_rejected"
+    TASK_INCOMPLETE = "task_incomplete"
 
 
 class ActionType(str, Enum):
@@ -77,8 +79,9 @@ class ObservationStatus(str, Enum):
 class RunStatus(str, Enum):
     """整次 agent 运行的最终状态。"""
     SUCCESS     = "success"
+    INCOMPLETE  = "incomplete"  # 未证明完成，因资源或框架策略停止
     FAILED      = "failed"
-    MAX_STEPS   = "max_steps"    # 达到步数上限
+    MAX_STEPS   = "max_steps"    # 仅兼容读取旧结果；新运行使用 INCOMPLETE
     GAVE_UP     = "gave_up"      # agent 主动放弃
     CANCELED    = "canceled"     # 外部请求取消
 
@@ -285,6 +288,8 @@ class RunResult:
     acceptance_status: str = "not_requested"  # Runner 独立验收状态，与 Agent 终态分开
     acceptance_error: str | None = None         # 独立验收失败原因
     delivery_status: str = "not_requested"     # commit/push/PR 交付状态
+    termination_reason: str | None = None       # 结构化终止原因
+    resource_reason: str | None = None          # 资源终止子原因，例如 max_steps
 
     def __post_init__(self) -> None:
         if self.usage.total_tokens:

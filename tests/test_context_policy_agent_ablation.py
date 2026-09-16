@@ -100,6 +100,8 @@ def test_b2_aggregate_counts_semantic_cost_and_separates_verifier_from_completio
             "passed": False,
             "false_finish": False,
             "agent_status": "max_steps",
+            "termination_reason": None,
+            "resource_reason": None,
             "verifier_status": "passed",
             "agent_tokens": 80,
             "semantic_tokens": 0,
@@ -141,3 +143,19 @@ def test_b2_aggregate_counts_semantic_cost_and_separates_verifier_from_completio
     assert report["pruning_only"]["pass_at_1"] == 0.0
     assert report["pruning_only"]["verifier_pass_rate"] == 1.0
     assert report["pruning_only"]["max_steps_exhausted_rate"] == 1.0
+
+
+def test_b2_aggregate_accepts_v2_rows_and_counts_v3_incomplete():
+    rows = [{
+        "variant": "baseline", "passed": False, "false_finish": False,
+        "agent_status": "incomplete", "termination_reason": "resource_exhausted",
+        "resource_reason": "max_steps", "verifier_status": "passed",
+        "agent_tokens": 10, "semantic_tokens": 0, "total_tokens_with_context": 10,
+        "latency_seconds": 1.0, "tool_calls": 0, "context_checkpoints": 0,
+        "semantic_calls": 0, "semantic_error_count": 0, "max_pressure_ratio": None,
+        "completion_rejections": 1,
+        "completion_rejection_reasons": {"REQUIRED_TEST_MISSING": 1},
+    }]
+    report = _aggregate(rows)["baseline"]
+    assert report["max_steps_exhausted_rate"] == 1.0
+    assert report["completion_rejection_reasons"] == {"REQUIRED_TEST_MISSING": 1}

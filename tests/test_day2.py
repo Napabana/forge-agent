@@ -277,7 +277,9 @@ class TestAgentMaxSteps:
 
         result = agent.run(task, log)
 
-        assert result.status == RunStatus.MAX_STEPS
+        assert result.status == RunStatus.INCOMPLETE
+        assert result.termination_reason == "resource_exhausted"
+        assert result.resource_reason == "max_steps"
         assert result.steps_taken == 3
         log.close()
 
@@ -298,7 +300,7 @@ class TestAgentMaxSteps:
         agent.run(task, log)
 
         events = log.replay()
-        assert events[-1].event_type == EventType.TASK_FAILED
+        assert events[-1].event_type == EventType.TASK_INCOMPLETE
         assert "max_steps" in events[-1].payload["reason"]
         log.close()
 
@@ -326,7 +328,8 @@ class TestLoopDetection:
 
         result = agent.run(task, log)
 
-        assert result.status == RunStatus.GAVE_UP
+        assert result.status == RunStatus.INCOMPLETE
+        assert result.termination_reason == "loop_detected"
         assert "Loop detected" in result.summary
         log.close()
 

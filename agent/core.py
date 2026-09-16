@@ -35,6 +35,7 @@ from context.token_budget import TokenBudget
 from agent.prompt import (
     build_system_prompt,
     build_task_prompt,
+    completion_rejected,
     reflection_loop_detected,
     reflection_no_edit,
     reflection_test_failed,
@@ -238,6 +239,7 @@ class Agent:
                     steps_taken=step - 1,
                     total_tokens=total_tokens,
                     usage=usage.snapshot(),
+                    termination_reason="canceled",
                 )
 
             if step > 1:
@@ -255,7 +257,7 @@ class Agent:
             if remaining_steps <= 3:
                 messages.append(LLMMessage(
                     role="user",
-                    content=step_budget_warning(remaining_steps),
+                    content=step_budget_warning(),
                 ))
             tools = self._registry.get_schemas()
             llm_started = time.perf_counter()
@@ -307,6 +309,7 @@ class Agent:
                     total_tokens=total_tokens,
                     usage=usage.snapshot(),
                     error=str(exc),
+                    termination_reason="provider_error",
                 )
 
             log.log_trace(
@@ -339,12 +342,18 @@ class Agent:
                     if task.require_changes
                     else None
                 )
+                rejection_code: str | None = None
                 verification_error: str | None = None
                 if fatal_error_key is not None:
-                    verification_error = (
-                        f"Unresolved fatal infrastructure error: {fatal_error_key}"
+                    reason = f"Unresolved fatal infrastructure error: {fatal_error_key}"
+                    log.log_task_failed(steps=step, reason=reason)
+                    return RunResult(
+                        task_id=task.task_id, status=RunStatus.FAILED, summary=reason,
+                        steps_taken=step, total_tokens=total_tokens, usage=usage.snapshot(),
+                        patch=patch, error=reason, termination_reason="infrastructure_error",
                     )
                 elif task.require_changes and not successful_write:
+                    rejection_code = "REQUIRED_CHANGE_MISSING"
                     verification_error = (
                         "Task requires repository changes, but no write tool completed successfully."
                     )
@@ -353,14 +362,17 @@ class Agent:
                     and initial_repo_state is not None
                     and final_repo_state == initial_repo_state
                 ):
+                    rejection_code = "REPOSITORY_UNCHANGED"
                     verification_error = (
                         "Task requires repository changes, but the repository state did not change."
                     )
                 elif task.require_tests and not test_attempted:
+                    rejection_code = "REQUIRED_TEST_MISSING"
                     verification_error = (
                         "Task requires test verification, but no test tool was run."
                     )
                 elif test_attempted and last_test_passed is not True:
+                    rejection_code = "LATEST_TEST_FAILED"
                     verification_error = (
                         "Agent attempted verification, but the latest test did not pass."
                     )
@@ -372,22 +384,27 @@ class Agent:
                         or last_successful_test_step < last_write_step
                     )
                 ):
+                    rejection_code = "FINAL_STATE_UNVERIFIED"
                     verification_error = (
                         "Files changed after the latest successful test; the final state is unverified."
                     )
 
                 if verification_error is not None:
-                    log.log_task_failed(steps=step, reason=verification_error)
-                    return RunResult(
-                        task_id=task.task_id,
-                        status=RunStatus.FAILED,
-                        summary=verification_error,
-                        steps_taken=step,
-                        total_tokens=total_tokens,
-                        usage=usage.snapshot(),
-                        patch=patch,
-                        error=verification_error,
+                    rejection_event_ref = log.log_completion_rejected(
+                        step, rejection_code or "COMPLETION_REQUIREMENT_UNMET", verification_error
                     )
+                    history.add(LLMMessage(
+                        role="assistant", content=self._format_action_for_history(action),
+                        event_ref=action_event_ref,
+                    ))
+                    history.add(LLMMessage(
+                        role="user",
+                        content=completion_rejected(
+                            rejection_code or "COMPLETION_REQUIREMENT_UNMET", verification_error
+                        ),
+                        event_ref=rejection_event_ref,
+                    ))
+                    continue
                 log.log_task_complete(steps=step, summary=summary)
                 return RunResult(
                     task_id=task.task_id,
@@ -397,6 +414,7 @@ class Agent:
                     total_tokens=total_tokens,
                     usage=usage.snapshot(),
                     patch=patch,
+                    termination_reason="completion_satisfied",
                 )
 
             if action.action_type == ActionType.GIVE_UP:
@@ -409,6 +427,7 @@ class Agent:
                     steps_taken=step,
                     total_tokens=total_tokens,
                     usage=usage.snapshot(),
+                    termination_reason="agent_gave_up",
                 )
 
             if action.action_type == ActionType.TOOL_CALL and action.tool_call:
@@ -423,6 +442,7 @@ class Agent:
                         steps_taken=step,
                         total_tokens=total_tokens,
                         usage=usage.snapshot(),
+                        termination_reason="canceled",
                     )
 
                 tc = action.tool_call
@@ -509,6 +529,7 @@ class Agent:
                             usage=usage.snapshot(),
                             patch=self._get_git_diff(task.repo_path),
                             error=reason,
+                            termination_reason="infrastructure_error",
                         )
                 else:
                     runtime_tools = {"shell", "test", "pytest", "git"}
@@ -555,14 +576,17 @@ class Agent:
                             f"{loop_signal.repeats} times without progress"
                         )
                         logger.warning(reason)
-                        log.log_task_failed(steps=step, reason=reason)
+                        log.log_task_incomplete(
+                            steps=step, reason=reason, termination_reason="loop_detected"
+                        )
                         return RunResult(
                             task_id=task.task_id,
-                            status=RunStatus.GAVE_UP,
+                            status=RunStatus.INCOMPLETE,
                             summary=reason,
                             steps_taken=step,
                             total_tokens=total_tokens,
                             usage=usage.snapshot(),
+                            termination_reason="loop_detected",
                         )
 
                     reflect_prompt = reflection_loop_detected(
@@ -608,14 +632,19 @@ class Agent:
                 ))
 
         reason = f"Reached max_steps limit ({task.max_steps})"
-        log.log_task_failed(steps=task.max_steps, reason=reason)
+        log.log_task_incomplete(
+            steps=task.max_steps, reason=reason,
+            termination_reason="resource_exhausted", resource_reason="max_steps",
+        )
         return RunResult(
             task_id=task.task_id,
-            status=RunStatus.MAX_STEPS,
+            status=RunStatus.INCOMPLETE,
             summary=reason,
             steps_taken=task.max_steps,
             total_tokens=total_tokens,
             usage=usage.snapshot(),
+            termination_reason="resource_exhausted",
+            resource_reason="max_steps",
         )
 
     @staticmethod
@@ -673,7 +702,7 @@ class Agent:
             log.log_task_failed(steps=step - 1, reason=reason)
             return RunResult(
                 task.task_id, RunStatus.CANCELED, reason, step - 1,
-                total_tokens, usage.snapshot()
+                total_tokens, usage.snapshot(), termination_reason="canceled"
             )
 
         system_content, repo_map_content, schemas = self._render_request_parts(
@@ -708,7 +737,8 @@ class Agent:
             log.log_task_failed(steps=step - 1, reason=reason)
             return RunResult(
                 task.task_id, RunStatus.FAILED, reason, step - 1,
-                total_tokens, usage.snapshot(), error=reason
+                total_tokens, usage.snapshot(), error=reason,
+                termination_reason="infrastructure_error"
             )
 
         refreshed = bool(prepared and prepared.refresh_repo_map)
@@ -735,7 +765,7 @@ class Agent:
             log.log_task_failed(steps=step - 1, reason=reason)
             return RunResult(
                 task.task_id, RunStatus.CANCELED, reason, step - 1,
-                total_tokens, usage.snapshot()
+                total_tokens, usage.snapshot(), termination_reason="canceled"
             )
         if prepared is not None and prepared.messages:
             history.add_many(list(prepared.messages))

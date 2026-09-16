@@ -210,6 +210,32 @@ class EventLog:
                 "progress": False,
             },
         ))
+
+    def log_completion_rejected(self, step: int, code: str, detail: str) -> str:
+        """记录一次可恢复的完成声明拒绝。"""
+        event = Event(
+            event_type=EventType.COMPLETION_REJECTED,
+            task_id=self._current_task_id,
+            payload={"step": step, "code": code, "detail": detail},
+        )
+        self._append(event)
+        return event.event_id
+
+    def log_task_incomplete(
+        self, steps: int, reason: str, *, termination_reason: str, resource_reason: str | None = None,
+    ) -> None:
+        """记录未证明完成的框架终止，避免与系统失败混淆。"""
+        self._append(Event(
+            event_type=EventType.TASK_INCOMPLETE,
+            task_id=self._current_task_id,
+            payload={
+                "steps": steps,
+                "reason": reason,
+                "termination_reason": termination_reason,
+                "resource_reason": resource_reason,
+            },
+        ))
+
     def log_task_complete(self, steps: int, summary: str) -> None:
         """任务成功完成。"""
         self._append(Event(
@@ -483,7 +509,9 @@ def summarize_run(log: EventLog) -> dict:
         elif event.event_type == EventType.REFLECTION:
             stats["reflections"] += 1
 
-        elif event.event_type in (EventType.TASK_COMPLETE, EventType.TASK_FAILED):
+        elif event.event_type in (
+            EventType.TASK_COMPLETE, EventType.TASK_FAILED, EventType.TASK_INCOMPLETE,
+        ):
             stats["final_status"] = event.event_type.value
 
         if event.event_type in (
