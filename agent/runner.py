@@ -308,7 +308,10 @@ class ExecutionRunner:
                 del self.agent._repo_map_cache
 
         token_budget = TokenBudget(total=config.budget_tokens)
-        repo_map = getattr(self.agent, "_repo_map_instance", self.agent._new_repo_map(task.repo_path))
+        repo_map = getattr(self.agent, "_repo_map_instance", None)
+        if repo_map is None:
+            repo_map = self.agent._new_repo_map(task.repo_path)
+            self.agent._repo_map_instance = repo_map
         return self.agent._prepare_next_turn(
             task,
             1,

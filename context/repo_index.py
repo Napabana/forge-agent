@@ -135,7 +135,11 @@ class PersistentRepoIndex:
                 "SELECT owners.file_path, SUM(symbol_references.occurrences) "
                 "FROM owners JOIN symbol_references "
                 "ON symbol_references.referenced_symbol = owners.name "
-                "AND symbol_references.source_file <> owners.file_path "
+                "WHERE NOT EXISTS ("
+                "  SELECT 1 FROM symbols AS source_definition "
+                "  WHERE source_definition.file_path = symbol_references.source_file "
+                "  AND source_definition.name = owners.name"
+                ") "
                 "GROUP BY owners.file_path"
             )
         }
