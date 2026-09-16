@@ -355,7 +355,6 @@ async def orchestrate_run(
             summary=reason,
             steps_taken=0,
             error=reason,
-            termination_reason="infrastructure_error",
         )
     except BaseException as exc:  # noqa: BLE001 — 含 KeyboardInterrupt
         run_error = exc
