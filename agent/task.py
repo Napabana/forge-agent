@@ -59,6 +59,10 @@ class EventType(str, Enum):
     CONTEXT_COMPACTED = "context_compacted"
     COMPLETION_REJECTED = "completion_rejected"
     TASK_INCOMPLETE = "task_incomplete"
+    # Trace v2 的 Runner / product 生命周期。旧 JSONL 不包含这些事件也可照常读取。
+    RUN_TERMINATED = "run_terminated"
+    ACCEPTANCE = "acceptance"
+    DELIVERY = "delivery"
 
 
 class ActionType(str, Enum):
@@ -246,6 +250,7 @@ class Event:
         reason ∈ {"normal", "exception", "preflight_failed"}
     - PERMISSION_DECISION: {"tool": str, "decision": str, "reason": str, "params": dict}
         decision ∈ {"allow","deny","confirm"}
+    - RUN_TERMINATED / ACCEPTANCE / DELIVERY: Trace v2 Runner/product lifecycle.
     """
     event_type: EventType
     task_id: str
