@@ -13,7 +13,7 @@ from typing import Callable
 from agent.core import Agent, AgentConfig, PrepareNextTurn
 from agent.event_log import EventLog
 from agent.orchestrate import orchestrate_run
-from agent.task import RunResult, Task
+from agent.task import RunResult, RunStatus, Task
 from agent.trace_v2 import bind_trace_context
 from context.history import ConversationHistory
 from context.repo_map import RepoMap
@@ -184,6 +184,7 @@ class ExecutionRunner:
                     )
                 raise
 
+            _normalize_isolated_failure(result)
             result.trace_path = trace_path
             _apply_independent_acceptance(
                 acceptance,
@@ -313,6 +314,21 @@ class ExecutionRunner:
             0,
             SessionUsage(),
         )
+
+
+def _normalize_isolated_failure(result: RunResult) -> None:
+    """Fill the one structured classification orchestrator cannot currently emit.
+
+    Sandbox preflight is a deterministic framework/runtime startup failure that happens
+    before Agent.run. Keep orchestrator APIs unchanged, but make the product Runner
+    expose the same ``infrastructure_error`` termination taxonomy as direct runs.
+    """
+    if (
+        result.status is RunStatus.FAILED
+        and result.termination_reason is None
+        and (result.error or "").startswith("Sandbox preflight failed:")
+    ):
+        result.termination_reason = "infrastructure_error"
 
 
 def _resolve_entrypoint(request: RunRequest) -> str:
