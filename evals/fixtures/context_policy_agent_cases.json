@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "defaults": {
+    "budget_tokens": 12000,
+    "max_steps": 8,
+    "threshold": 0.8,
+    "target_ratio": 0.5,
+    "keep_recent_tokens": 1200,
+    "max_summary_chars": 1600
+  },
+  "cases": [
+    {
+      "id": "long-hard-constraint",
+      "category": "long_history_constraint",
+      "prompt": "Fix normalize_title() so ordinary titles are trimmed and lowercase. Preserve the established compatibility behavior from this session.",
+      "files": {
+        "textops.py": "def normalize_title(value):\n    if value is None:\n        return \"\"\n    return value.strip()\n",
+        "api.py": "from textops import normalize_title\n\ndef display_title(value):\n    return normalize_title(value)\n"
+      },
+      "verifier": "import inspect; from pathlib import Path; from textops import normalize_title; assert normalize_title('  HELLO World ') == 'hello world'; assert normalize_title(None) is None; assert list(inspect.signature(normalize_title).parameters) == ['value']; assert Path('api.py').read_text(encoding='utf-8') == 'from textops import normalize_title\\n\\ndef display_title(value):\\n    return normalize_title(value)\\n'",
+      "target_files": ["textops.py"],
+      "target_symbols": ["normalize_title"],
+      "history_spec": [
+        {
+          "kind": "user",
+          "content": "兼容性约束：normalize_title(None) 必须继续返回 None；公开签名只能保留一个 value 参数；只能修改 textops.py，不要修改 api.py。"
+        },
+        {
+          "kind": "user_repeat",
+          "count": 180,
+          "template": "历史讨论 {i}: 我们继续分析文本处理模块的边界、调用链、错误恢复和测试策略，这些背景信息不能覆盖最早确认的兼容性约束。"
+        }
+      ]
+    },
+    {
+      "id": "huge-tool-history",
+      "category": "large_tool_history",
+      "prompt": "Implement slugify() for lowercase URL slugs, collapsing punctuation and whitespace to single hyphens.",
+      "files": {
+        "slug.py": "def slugify(value):\n    raise NotImplementedError\n"
+      },
+      "verifier": "from slug import slugify; assert slugify(' Hello,  Forge Agent! ') == 'hello-forge-agent'; assert slugify('A___B') == 'a-b'; assert slugify('  multi---space___case  ') == 'multi-space-case'",
+      "target_files": ["slug.py"],
+      "target_symbols": ["slugify"],
+      "history_spec": [
+        {
+          "kind": "tool",
+          "tool": "file_read",
+          "params": {"path": "legacy_reference.py"},
+          "status": "SUCCESS",
+          "output_template": "legacy file payload line {j}: historical implementation details that are no longer needed for the current slug task",
+          "output_repeat": 240
+        },
+        {
+          "kind": "tool",
+          "tool": "shell",
+          "params": {"command": "python legacy_probe.py"},
+          "status": "SUCCESS",
+          "output_template": "legacy stdout line {j}: verbose diagnostic output from an already completed historical investigation",
+          "output_repeat": 220
+        },
+        {
+          "kind": "tool",
+          "tool": "pytest",
+          "params": {"path": "tests/test_legacy.py"},
+          "status": "SUCCESS",
+          "output_template": "legacy test line {j}: passed historical verification output retained only for traceability",
+          "output_repeat": 180
+        },
+        {
+          "kind": "user_repeat",
+          "count": 24,
+          "template": "过渡讨论 {i}: 旧工具输出已经完成使命，现在继续新的 slugify 编码任务。"
+        }
+      ]
+    },
+    {
+      "id": "superseded-state",
+      "category": "superseded_verification_state",
+      "prompt": "Finish apply_discount() according to the established session behavior. Use the latest verified state rather than superseded failure notes.",
+      "files": {
+        "pricing.py": "def apply_discount(price):\n    return round(price * 0.8, 2)\n"
+      },
+      "verifier": "from pricing import apply_discount; assert apply_discount(200) == 180.0; assert apply_discount(100) == 90.0; assert apply_discount(99) == 99; assert apply_discount(12.345) == 12.35",
+      "target_files": ["pricing.py"],
+      "target_symbols": ["apply_discount"],
+      "history_spec": [
+        {
+          "kind": "user",
+          "content": "已经确定的业务规则：价格达到 100 时打九折，低于 100 不打折；结果统一 round(..., 2)。后续如果出现旧失败记录，不要把它当成新规则。"
+        },
+        {
+          "kind": "tool",
+          "tool": "pytest",
+          "params": {"path": "tests/test_pricing.py"},
+          "status": "ERROR",
+          "output": "OLD_TEST_FAILURE_MARKER: historical assertion failed while an obsolete 20% discount implementation was still present"
+        },
+        {
+          "kind": "user_repeat",
+          "count": 150,
+          "template": "中间分析 {i}: 继续排查历史测试与实现差异，已确认旧失败只是过渡状态，业务规则本身没有变化。"
+        },
+        {
+          "kind": "tool",
+          "tool": "pytest",
+          "params": {"path": "tests/test_pricing.py"},
+          "status": "SUCCESS",
+          "output": "LATEST_TEST_SUCCESS: historical verification passed after the obsolete failure was resolved"
+        },
+        {
+          "kind": "user_repeat",
+          "count": 28,
+          "template": "后续讨论 {i}: 最新历史验证已经通过，旧失败不应继续作为阻塞状态。"
+        }
+      ]
+    }
+  ]
+}
