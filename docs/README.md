@@ -70,6 +70,7 @@
 - [`changes/2026-09-16/B2终止语义与v3评测改动内容.md`](changes/2026-09-16/B2终止语义与v3评测改动内容.md)：B2 实现、测试和 v3 结果。
 - [`changes/2026-09-16/文档与TODO状态整理改动内容.md`](changes/2026-09-16/文档与TODO状态整理改动内容.md)：状态对齐和文档归档。
 - [`changes/2026-09-16/Trace-v2收口改动内容.md`](changes/2026-09-16/Trace-v2收口改动内容.md)：P0-3 Trace v2 schema、correlation、redaction、token breakdown、兼容与本地验证命令。
+- [`changes/2026-09-16/P0-2-Tool-Hook-Permission-Cancel收口改动内容.md`](changes/2026-09-16/P0-2-Tool-Hook-Permission-Cancel收口改动内容.md)：P0-2 Tool lifecycle、错误分类、cooperative cancel、四入口/direct-isolate 一致性与 Trace v2 对齐。
 
 ## 评测证据
 
