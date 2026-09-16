@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
+import subprocess
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -70,11 +72,9 @@ class PruningOnlyPolicy:
         self.threshold = threshold
         self.keep_recent_tokens = keep_recent_tokens
         self.pruner = DeterministicToolPruner()
-        self.call_count = 0
         self.pruned_units = 0
 
     def __call__(self, context):
-        self.call_count += 1
         raw = context.history.to_dicts()
         pressure = context.token_budget.request_pressure(
             system_text=context.system_content,
@@ -97,12 +97,24 @@ class PruningOnlyPolicy:
         return PrepareNextTurnResult(history_override=pruning.messages)
 
 
+class CountingPolicy:
+    """只统计 prepare_next_turn 实际调用次数，不改变被测 Context Policy 行为。"""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.call_count = 0
+
+    def __call__(self, context):
+        self.call_count += 1
+        return self.inner(context)
+
+
 def load_manifest(path: str | Path = _MANIFEST) -> tuple[dict[str, Any], list[AgentContextCase]]:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if raw.get("schema_version") != 1:
         raise ValueError("unsupported B2 manifest schema")
     cases: list[AgentContextCase] = []
-    for item in raw.get("cases", ()): 
+    for item in raw.get("cases", ()):
         base = EvalCase(
             case_id=item["id"],
             category=item["category"],
@@ -202,7 +214,8 @@ def run_ablation(
     case_ids: tuple[str, ...] = (),
     variants: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    defaults, cases = load_manifest(manifest)
+    manifest_path = Path(manifest).resolve()
+    defaults, cases = load_manifest(manifest_path)
     selected_cases = [case for case in cases if not case_ids or case.base.case_id in case_ids]
     selected_variants = [variant for variant in _VARIANTS if not variants or variant in variants]
     if case_ids:
@@ -251,6 +264,8 @@ def run_ablation(
 
     metadata = {
         "schema_version": 1,
+        "runner_revision": _git_revision(_ROOT),
+        "fixture_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
         "model": cfg.llm.model,
         "provider": cfg.llm.provider,
         "protocol": cfg.llm.protocol,
@@ -282,6 +297,7 @@ def _run_one(
     history = build_history(case, repo)
     preloaded_tokens = estimate_messages_tokens(history.to_dicts())
     policy = _build_policy(variant, defaults, backend)
+    policy_probe = CountingPolicy(policy) if policy is not None else None
     registry = _build_registry(cfg, worktree_path=str(repo), workspace=str(repo))
     agent_config = AgentConfig(
         max_steps=int(defaults["max_steps"]),
@@ -314,7 +330,7 @@ def _run_one(
     heartbeat.start()
     try:
         result = runner.run(
-            RunRequest(task=task, history=history, prepare_next_turn=policy),
+            RunRequest(task=task, history=history, prepare_next_turn=policy_probe),
             on_event=lambda event: _print_event(event, case.base.case_id, variant),
         )
     finally:
@@ -328,7 +344,7 @@ def _run_one(
     semantic_calls = 0
     semantic_error_count = 0
     checkpoints = 0
-    policy_calls = int(getattr(policy, "call_count", 0)) if policy is not None else 0
+    policy_calls = policy_probe.call_count if policy_probe is not None else 0
     pruned_units = int(getattr(policy, "pruned_units", 0)) if policy is not None else 0
     if isinstance(policy, TraceableCompaction):
         pending = policy.consume_usage()
@@ -338,7 +354,6 @@ def _run_one(
         checkpoints = len(policy.checkpoints)
         pruned_units = sum(checkpoint.pruned_units for checkpoint in policy.checkpoints)
         semantic_error_count = sum(bool(checkpoint.semantic_error) for checkpoint in policy.checkpoints)
-        policy_calls = len(policy.checkpoints) + (1 if getattr(policy, "_active_view", None) is not None else 0)
 
     passed = result.is_success() and verifier_passed
     return AgentAblationResult(
@@ -420,6 +435,8 @@ def _report_markdown(metadata: dict[str, Any], report: dict[str, Any]) -> str:
     lines = [
         "# B2 Context Policy Agent Ablation",
         "",
+        f"- runner revision: `{metadata['runner_revision']}`",
+        f"- fixture sha256: `{metadata['fixture_sha256']}`",
         f"- model: `{metadata['model']}`",
         f"- runs: {metadata['run_count']}",
         f"- cases: {', '.join(metadata['cases'])}",
@@ -434,6 +451,15 @@ def _report_markdown(metadata: dict[str, Any], report: dict[str, Any]) -> str:
             f"{row['context_trigger_rate']:.3f} | {row['semantic_calls']} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _git_revision(repo: Path) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
 
 
 def main() -> None:
