@@ -21,7 +21,7 @@ jobs:
           python-version: '3.11'
       - name: Install test dependencies
         run: python -m pip install -e '.[dev]'
-      - name: Apply final Repo Map runner fix
+      - name: Apply final Repo Map semantic fixes
         run: python scripts/p2_repo_map_finalize_transform.py
       - name: Targeted Repo Map tests
         run: |
@@ -29,20 +29,21 @@ jobs:
           pytest -q tests/test_repo_map_ablation.py
           pytest -q tests/test_repo_map_persistent.py tests/test_repo_map_prompt_layout.py
           pytest -q tests/test_repo_map_product_behavior.py
+          pytest -q tests/test_repo_map_reference_semantics.py
           pytest -q tests/test_repo_map_agent_ablation.py
           pytest -q tests/test_repo_map_persistent_benchmark.py
       - name: Full pytest
         run: pytest -q
-      - name: Commit validated runner fix locally
+      - name: Commit validated semantic fixes locally
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          if git diff --quiet -- agent/runner.py; then
-            echo 'Runner fix already committed'
+          git add agent/runner.py context/repo_index.py
+          if git diff --cached --quiet; then
+            echo 'Semantic fixes already committed'
           else
-            git add agent/runner.py
-            git commit -m 'fix: reuse persistent Repo Map at chat boundary'
+            git commit -m 'fix: preserve persistent Repo Map semantics'
           fi
       - name: Run persistent Repo Map benchmark
         run: |
