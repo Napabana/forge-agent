@@ -1,6 +1,6 @@
 # Forge Agent Evidence Pack
 
-本目录是 P1-6 的统一证据入口。目标是让简历和面试中的技术主张能够回链到当前 `dev` 的实现、确定性回归、冻结 benchmark、真实模型小样本或真实端到端案例，同时明确每类证据不能证明什么。
+本目录是 P1-6 / P2 的统一证据入口。目标是让简历和面试中的技术主张能够回链到当前 `dev` 的实现、确定性回归、冻结 benchmark、真实模型小样本或真实端到端案例，同时明确每类证据不能证明什么。
 
 默认离线校验：
 
@@ -31,6 +31,11 @@ python -m evals.verify_evidence_pack
 | Context Compaction 保留 canonical history，模型视图支持 deterministic pruning + structured semantic compaction + checkpoint lineage | Implementation Fact + Frozen Benchmark + Small Sample | `context/compaction.py`, `context/tool_pruning.py`, `context/structured_compaction.py`, B1/B2 结果 | `python -m evals.verify_evidence_pack` | B1 frozen replay 中 hybrid `7/7`，hard-constraint / recent-raw recall 均 `1.0` | B1 semantic 是 fixture；B2 只有 9 个真实模型 run，不能宣称稳定总体收益 |
 | Query-aware Repo Map 改善冻结 commit-history 检索排序 | Frozen Offline Benchmark | `context/repo_map.py`, `evals/repo_map_ablation.py`, `evals/results/repo_map_ablation/report.json` | `python -m evals.verify_evidence_pack` | 12-case：MRR `0.096954 → 0.318750`；budget target recall `0.364914 → 0.635251` | 只代表 12 个冻结 commit-history case，不代表 coding task success rate |
 | Repo Map reference counting 热点被优化 | Frozen Offline Performance Experiment | `context/repo_map.py`, `evals/repo_map_ablation.py`, frozen report | `python -m evals.verify_evidence_pack` | 同一冻结协议中 median `35.1176s → 0.4928s`，`71.26×`，semantic hash 等价 | 仅是 reference-count 子步骤和该机器/快照；不是 Agent 端到端 71× |
+| Repo Map 已拆成 persistent structural index 与 Query-aware view | Implementation Fact + Regression | `context/repo_index.py`, `context/incremental_repo_map.py`, `context/repository_state.py`, `agent/core.py` | Repo Map P2 tests | SQLite index 可跨进程 warm reuse；Query change 只 rerank；已知 changed path 只更新目标文件 | cold build 当前没有加速；实现事实不代表 Agent success rate |
+| Persistent Repo Map 保持冻结 Query-aware ranking / rendering 语义 | Frozen Offline Benchmark + Regression | `evals/repo_map_persistent_benchmark.py`, `evals/results/repo_map_persistent_benchmark/report.json` | `python -m evals.verify_evidence_pack` | strict 12-case：semantic/ranking/visible/rendering 全等价，正式 retrieval 指标 delta=`0` | 只证明冻结协议语义不退化 |
+| Persistent Repo Map 的 warm / incremental phase 降低了本次 snapshot 的索引阶段耗时 | Frozen Offline Performance Experiment | `evals/results/repo_map_persistent_benchmark/report.json` | `python -m evals.verify_evidence_pack` | 5-run median：legacy `0.6097s`、cold `0.9605s`、warm `0.2967s`、single `0.1700s`、multi `0.1766s`、full rebuild `0.8045s` | 机器/快照相关；cold build 反而更慢；不是 Agent E2E latency |
+| Repo Map A/B/C/D Real Coding Agent harness 已接 production path | Implementation Fact + Deterministic Harness Validation | `evals/repo_map_agent_ablation.py`, `evals/fixtures/repo_map_agent_cases.json`, `tests/test_repo_map_agent_ablation.py` | `python -m evals.repo_map_agent_ablation --validate-only --output /tmp/forge-repo-map-agent-ablation` | No/Static/Query-aware/Incremental 四组固定 fixture/harness 已就绪 | CI 无 provider credential；冻结 report 为 `rows=0`，不能写任何 success/token/latency 对比 |
+| Repo Map prompt layout 把 stable rules/tool schema 放在 dynamic repository context 之前 | Implementation Fact + Regression | `agent/prompt.py`, `tests/test_repo_map_prompt_layout.py` | `pytest tests/test_repo_map_prompt_layout.py -q` | 为 prefix reuse 提供结构条件 | 没有真实 provider cached-token 对照，不能宣称 cache hit 提升 |
 | Session 持久化支持 resume、版本迁移、冲突检测、secret redaction 和 stale pending recovery | Implementation Fact + Regression | `agent/session.py`, `agent/session_store.py`, `entry/chat.py`, `tests/test_session_store.py` | `pytest tests/test_session_store.py -q` | session state 是恢复真相源；双进程 stale revision 只允许一个 writer 成功 | Trace 不是 Session recovery state；不代表分布式 session service |
 | Independent Acceptance 在 Agent history 之外冻结 required/forbidden paths 与 hidden verifier | Implementation Fact + Regression | `agent/runner.py`, `tests/test_runner.py` | `pytest tests/test_runner.py -q` | Agent status 与 acceptance status 分离；Agent 非 success 时 verifier skipped | verifier 失败目前不自动回灌模型继续修复 |
 | GitHub Issue → Agent → acceptance → deterministic commit/push/PR 已实现 | Implementation Fact + Regression + Real E2E Case | `entry/github_issue.py`, `tests/test_github_issue_delivery.py`, `docs/changes/2026-09-15/pr-test真实PR改动内容.md`, `Napabana/pr-test#5` | 离线 contract：`pytest tests/test_github_issue_delivery.py -q`；真实案例只检查冻结证据 | acceptance gate、push/pr failure 和 PR retry idempotence 有回归；1 个真实 merged PR | 真实案例只有 1 个，不能写自动 PR 总体成功率；仍由人审合并，无 auto-merge |
@@ -47,7 +52,6 @@ python -m evals.verify_evidence_pack
 - `7 cases × 3 variants = 21 rows`；semantic mode 为 `fixture`。
 - hybrid：`7/7` passed；mean hard-constraint recall=`1.0`；mean recent-raw recall=`1.0`。
 - `summary_total_tokens=0` 是 fixture summarizer 的结果，不应解读为真实模型总结“零成本”。
-- pytest 默认只跑代表性 smoke / contract，不把完整 7×3 正式 benchmark 写回结果目录。
 
 机器校验锚点：**B1: 7 cases × 3 variants = 21 rows**
 
@@ -63,6 +67,40 @@ python -m evals.verify_evidence_pack
 机器校验锚点：**Repo Map MRR: 0.096954 → 0.318750**  
 机器校验锚点：**Repo Map budget target recall: 0.364914 → 0.635251**  
 机器校验锚点：**Repo Map reference-count median: 35.1176s → 0.4928s (71.26×)**
+
+### Repo Map P2 — Persistent / Incremental Strict Evidence
+
+证据：`context/repo_index.py`、`context/incremental_repo_map.py`、`context/repository_state.py`、`evals/repo_map_persistent_benchmark.py`、`evals/results/repo_map_persistent_benchmark/report.json` 和 `docs/changes/2026-09-16/P2-RepoMap-增量索引与真实任务消融改动内容.md`。
+
+strict 12-case：semantic、full ranking、Token Budget visible-set、rendered Repo Map 均 `12/12` 等价；与冻结 Query-aware 的 MRR / budget recall / recall@1 / recall@3 / recall@5 / mean target rank delta 全为 `0`。
+
+5-run CI phase median：legacy build=`0.6097s`、persistent cold build=`0.9605s`、warm load=`0.2967s`、query rerank=`0.2080s`、single-file update=`0.1700s`、two-file update=`0.1766s`、explicit full rebuild=`0.8045s`。
+
+同时 warm load 重新 parse `0` 文件、single-file update 只 parse `1` 文件、two-file update 只 parse `2` 文件，benchmark 后 working tree clean。
+
+边界：cold build **没有加速**；phase timing 不是 Agent E2E latency；时间值只属于冻结 CI machine/snapshot。
+
+机器校验锚点：**P2 Repo Map equivalence: 12/12 frozen retrieval cases**  
+机器校验锚点：**P2 Repo Map phase medians: legacy 0.6097s; cold 0.9605s; warm 0.2967s; single-file 0.1700s; multi-file 0.1766s; full rebuild 0.8045s**
+
+### Repo Map P2 — Real Coding Agent Harness Status
+
+证据：`evals/results/repo_map_agent_ablation/report.json`。
+
+四组已经固定：`no_repo_map`、`static_repo_map`、`query_aware_repo_map`、`incremental_query_aware_repo_map`。
+
+冻结状态：
+
+```text
+execution_status = not_executed
+real_model_executed = false
+rows = 0
+reason = provider_credentials_not_available_in_ci
+```
+
+这个 artifact 只证明 fixture、四组 variant、production-path harness 和指标采集协议存在；没有提供 Coding Agent solved rate、token、latency 或 cache-hit 结论。
+
+机器校验锚点：**P2 Repo Map Agent ablation: not executed; rows=0**
 
 ### Context Policy B2 v3 — Real-model Small Sample
 
@@ -95,7 +133,11 @@ python -m evals.verify_evidence_pack
 | Error Recovery / Failure Harness | “对 transient provider retry、工具失败 Observation、循环/完成性失败和基础设施异常做了确定性故障回归。” | `tests/test_failure_harness*.py` | “Fault tolerance 达到生产级”“故障恢复成功率 X%” |
 | Trace v2 | “用 append-only JSONL 记录 run/step/tool/acceptance/delivery correlation，并在落盘边界递归脱敏。” | `agent/event_log.py`, `agent/trace_v2.py`, trace tests | “Trace 可以确定性重放 Agent 执行” |
 | Context Compaction | “canonical history 不被覆盖，模型视图做 deterministic pruning + structured compaction，并有 checkpoint lineage。” | implementation + B1/B2 | “B2 证明稳定提升 2 倍成功率”“总结成本为 0” |
-| Repo Map | “query-aware ranking 在 12-case commit-history 冻结集上把 MRR 0.097 提到 0.319，预算内 target recall 0.365 提到 0.635。” | formal report/script/fixture | “因此 coding task success rate 提升 X%”“整个 Agent 快 71×” |
+| Repo Map retrieval | “query-aware ranking 在 12-case commit-history 冻结集上把 MRR 0.097 提到 0.319，预算内 target recall 0.365 提到 0.635。” | formal report/script/fixture | “因此 coding task success rate 提升 X%” |
+| Repo Map persistent/index | “把 Repo Map 拆成持久化 SQLite 结构索引和 Query-aware 视图；Query 改变只 rerank，changed file 做增量更新，并用 12-case strict equivalence 锁住旧 ranking/rendering 语义。” | `context/repo_index.py`, `context/incremental_repo_map.py`, P2 report | “首次索引更快”“整个 Agent 快 4×/5×/71×” |
+| Repo Map phase timing | “当前冻结 CI snapshot 中 warm load / single-file / two-file update 中位约 0.297s / 0.170s / 0.177s，full rebuild 约 0.805s；cold persistent build 约 0.961s，比 legacy 0.610s 更慢。” | P2 frozen report | “所有仓库固定有相同比例加速”“E2E latency 等于这些数” |
+| Repo Map Agent ablation | “A/B/C/D production-path harness 已完成，但 CI 无凭据，所以真实模型实验还没执行。” | agent ablation script/report | “四组成功率已经有结论” |
+| Prompt Cache layout | “把稳定 tool schema 放到动态 Repo Map 之前，等待真实 provider cached-token 实验。” | prompt layout test | “缓存命中率已提升 X%” |
 | Session | “Chat session 独立持久化 history/round/usage/checkpoint，带 revision conflict、migration、redaction 和 stale pending recovery。” | session store tests | “EventLog 就是 session 数据库”“支持分布式强一致 session” |
 | Independent Acceptance | “Runner 在模型不可见的独立阶段执行 path contract / hidden verifier，并把 acceptance 与 Agent status 分开。” | `agent/runner.py`, runner tests | “隐藏 verifier 失败后会自动让 Agent 继续修复” |
 | GitHub PR delivery | “实现 Issue→Agent→独立验收→确定性 commit/push/PR，并有 1 个真实 merged PR 案例。” | delivery tests + PR #5 case log | “自动 PR 成功率 100%”“已是生产级 bot”“支持 auto-merge” |
@@ -110,18 +152,33 @@ python -m evals.verify_evidence_pack
 | Error recovery | REWORD | “实现 transient provider retry、typed failure Observation、loop/completion guard，并用 Failure Harness 做确定性故障回归。” | Failure Harness；不要说生产级容错率 |
 | Loop detection | KEEP | “对重复 Action/Observation 指纹与无进展循环做检测和终止/恢复控制。” | `agent/loop_detector.py`, loop tests | 只能写 contract，不写效果百分比 |
 | Context compaction | REWORD | “实现 canonical-history-preserving 的 pruning + structured compaction，并用 7-case frozen replay 与 9-run real-model 小样本审计。” | B1/B2；明确小样本边界 |
-| Repo Map | KEEP | “query-aware Repo Map 在 12-case frozen commit-history benchmark 上 MRR 0.097→0.319、budget target recall 0.365→0.635。” | 可写数字，但必须带 12-case/frozen 范围 |
+| Repo Map retrieval | KEEP | “query-aware Repo Map 在 12-case frozen commit-history benchmark 上 MRR 0.097→0.319、budget target recall 0.365→0.635。” | 可写数字，但必须带 12-case/frozen 范围 |
+| Repo Map persistent index | KEEP | “将 Repo Map 拆为持久化 SQLite 结构索引与 Query-aware 视图，代码修改按 changed file 增量更新，并以 strict equivalence regression 保证旧排序/渲染语义。” | P2 implementation + 12-case strict report；phase 时间只在追问时使用 |
 | Trace | KEEP | “Trace v2 记录 run/step/tool/acceptance/delivery correlation 与脱敏审计事件。” | Trace tests；不要写 deterministic replay |
 | Git Worktree | REWORD | “用 Git Worktree 提供独立 checkout 与成果保留/清理生命周期。” | worktree/orchestrate tests；不能称安全沙箱 |
 | Docker isolation | REWORD | “提供 Docker Runtime，默认资源限制与断网，并支持只读根和受控挂载。” | runtime/sandbox tests；不要写“完全安全”，真实 PR case 未覆盖 Docker |
 | acceptance verifier | KEEP | “在 Agent history 外执行独立 AcceptanceContract / hidden verifier，再决定 delivery gate。” | runner tests + real PR case |
 | GitHub Issue → PR | KEEP | “实现确定性交付 contract，并完成 1 个真实 Issue→merged PR 案例。” | delivery tests + PR #5；不能写总体成功率 |
-| benchmark 数字 | KEEP WITH SCOPE | 只使用本页冻结 B1 / Repo Map / B2 数字，并同时写 case/run/protocol 范围 | 不把不同证据层混成一个 Agent 指标 |
+| benchmark 数字 | KEEP WITH SCOPE | 只使用本页冻结 B1 / Repo Map / P2 / B2 数字，并同时写 case/run/protocol 范围 | 不把不同证据层混成一个 Agent 指标 |
 | “Agent 总体成功率 X%” | **INSUFFICIENT EVIDENCE** | 不写 | 当前没有足够规模的独立真实任务 benchmark |
-| “生产级可靠性 / production ready” | **INSUFFICIENT EVIDENCE** | 不写 | regression coverage ≠ production reliability |
+| “Repo Map 让 Agent 成功率提升 X%” | **INSUFFICIENT EVIDENCE** | 不写 | P2 A/B/C/D real-model report 当前 `rows=0` |
+| “Prompt Cache 命中率提升 X%” | **INSUFFICIENT EVIDENCE** | 不写 | 只有 layout regression，没有真实 provider usage 对照 |
+| “production ready / 生产级可靠性” | **INSUFFICIENT EVIDENCE** | 不写 | regression coverage ≠ production reliability |
 | “自动 PR 成功率 100%” | **INSUFFICIENT EVIDENCE** | 不写 | 只有 1 个真实案例，且同案例经历 4 次调试尝试 |
 | “B2 证明 Context Policy 稳定提升成功率” | **INSUFFICIENT EVIDENCE** | 不写 | n=3 cases / variant、每 cell 单次、模型非 deterministic |
 
 ## 证据使用规则
 
-任何简历或面试数字必须同时携带它所属的证据层和样本范围。`Implementation Fact ≠ Regression Coverage ≠ Offline Benchmark ≠ Real-model Experiment ≠ Production / Overall Success Rate`。如果未来新增证据，应先冻结 fixture/protocol/result，再更新本索引与只读校验器；不得为了简历表述反向制造 benchmark 数字。
+任何简历或面试数字必须同时携带它所属的证据层和样本范围。`Implementation Fact ≠ Regression Coverage ≠ Offline Benchmark ≠ Real-model Experiment ≠ Production / Overall Success Rate`。
+
+Repo Map 额外遵守：
+
+```text
+retrieval quality
+≠
+index phase performance
+≠
+Agent E2E success / latency
+```
+
+如果未来新增证据，应先冻结 fixture/protocol/result，再更新本索引与只读校验器；不得为了简历表述反向制造 benchmark 数字。

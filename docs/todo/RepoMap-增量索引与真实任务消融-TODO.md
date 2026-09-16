@@ -1,194 +1,12 @@
 # Repo Map 增量索引与真实任务消融 TODO
 
-## 背景
+状态更新时间：2026-09-16
 
-当前 Forge Agent 的 Repo Map 已经完成从静态仓库摘要到 Query-aware 排序的重构，但现有实现仍处于“内存扫描缓存 + Query 重排 + 写后全量失效”的中间形态。
+当前基线：`dev`
 
-最初需要解决的问题是：
+## 1. 当前结论
 
-1. 大仓库首次生成完整 Repo Map 成本较高；
-2. 很多任务只涉及局部模块，没有必要把整个仓库结构都注入模型；
-3. Repo Map 又希望尽量保持稳定，以利于 system prompt 前缀复用和 provider cache；
-4. 对话过程中用户需求可能变化；
-5. Agent 或用户修改代码后，旧的仓库结构快照可能失效。
-
-当前实现已经解决了其中一部分，但还没有完成持久化增量索引，也没有做 Repo Map 对真实 Coding Agent 成功率与成本影响的正式消融。
-
----
-
-## 当前真实实现
-
-### 1. Query-aware Repo Map
-
-`context/repo_map.py` 当前会先扫描仓库并提取结构信息，再根据任务描述进行动态排序。
-
-Query relevance 主要使用：
-
-- 文件路径；
-- 代码符号；
-- 源码正文；
-- import / reference 等结构信号；
-- snake_case / camelCase 拆词；
-- 简单词形归一；
-- 高频通用词降权。
-
-最终通过 Token Budget 截断，只把预算范围内的高相关仓库结构放入 prompt，而不是把完整仓库地图全部注入模型。
-
-### 2. 仓库扫描与任务视图已经部分解耦
-
-同一个 `Agent` 在同一个仓库中执行不同任务时：
-
-- 仓库未变化时，可以复用 `RepoMap` 内存中的扫描结果；
-- `task.description` 变化时，会更新 Query 并重新生成排序后的 Repo Map 文本；
-- 不需要仅因为用户问题变化就重新读取和解析整个仓库。
-
-因此当前逻辑可以理解为：
-
-```text
-仓库文件
-   ↓
-结构扫描快照
-   ↓
-任务 Query 重排
-   ↓
-Token Budget 截断
-   ↓
-模型侧 Repo Map
-```
-
-### 3. Chat 中的需求变化
-
-`entry/chat.py` 中每个用户轮次都会创建新的 `Task(description=user_input)`，同时复用：
-
-- 同一个 Agent；
-- 同一个 backend / registry；
-- 跨轮 ConversationHistory。
-
-因此，对话轮次之间用户改变需求时，会使用新的任务描述重新排序 Repo Map。
-
-当前不支持单个 `Agent.run()` 执行过程中实时注入新的用户目标。若用户需要中途改变当前正在执行的任务，只能等当前 round 结束，或先 cancel 再开启新 round。
-
-### 4. 代码修改后的 Repo Map 刷新
-
-当前同一 Run 中，如果 `file_write`、`file_edit` 或 `edit` 成功：
-
-```text
-成功写代码
-   ↓
-invalidate_repo_map_cache()
-   ↓
-_repo_map_force_refresh = True
-   ↓
-下一 step repo_map.build(force_refresh=True)
-   ↓
-重新扫描整个仓库
-```
-
-也就是说，当前“写后刷新”是仓库级全量刷新，不是 changed-file 增量更新。
-
-Chat 两轮之间还会用 `repository_fingerprint()` 检查仓库状态变化。当前 fingerprint 由：
-
-- Git HEAD；
-- working-tree 状态；
-- changed/untracked 文件内容 hash
-
-共同组成，用于判断仓库是否发生变化。
-
----
-
-## 当前设计的优点
-
-1. 不再把整个仓库摘要无差别塞给模型，而是按任务动态排序；
-2. Query 变化和仓库结构变化被区分开，任务变化不必重新 parse 仓库；
-3. 同一 Run 内未修改代码时可以复用 Repo Map 文本；
-4. 代码修改后会主动失效缓存，避免 Agent 继续使用已经过期的仓库视图；
-5. 已经有冻结的 12-case commit-history retrieval benchmark，可验证 Query-aware ranking 相比 static ranking 的检索质量。
-
-已有正式结果：
-
-- MRR：`0.097 → 0.319`
-- 固定 Token 预算下目标文件召回率：`36.5% → 63.5%`
-- reference counting 子步骤中位耗时：`35.1s → 0.49s`
-
-注意：`35.1s → 0.49s` 仅是 reference counting 子步骤，不代表整个 Repo Map 首次构建耗时。
-
----
-
-## 当前未解决的问题
-
-### 1. 写代码后仍会全量重建
-
-这是当前最明显的性能边界。
-
-如果 Agent 只修改了一个文件，下一 step 仍然会重新：
-
-- discover files；
-- read source；
-- tree-sitter parse；
-- extract symbols；
-- calculate import/reference；
-- rerank；
-- render Repo Map。
-
-在大仓库中，这种策略会放大每次代码编辑后的额外成本。
-
-### 2. 没有持久化索引
-
-当前扫描缓存主要是进程内状态。
-
-新进程、新 session 或重新启动后，无法直接复用之前已经完成的仓库结构解析结果。
-
-### 3. Repo Map 的真实 Agent 收益还没有正式证明
-
-目前的正式实验主要证明：
-
-```text
-Static ranking
-vs
-Query-aware ranking
-```
-
-在 commit-history retrieval case 上，Query-aware 排序能够提高目标文件排名和预算内召回。
-
-当前没有正式证明：
-
-```text
-No Repo Map
-vs
-Static Repo Map
-vs
-Query-aware Repo Map
-```
-
-在真实 Coding Agent 任务上是否提高：
-
-- task solved / verifier pass；
-- 首次定位正确文件的 step；
-- 总读取文件数；
-- input / total Token；
-- latency；
-- Agent 总体成功率。
-
-因此简历和面试中不能把当前 Repo Map retrieval benchmark 直接表述为 Agent 成功率提升。
-
-### 4. Prompt Cache 仍有进一步优化空间
-
-当前 Repo Map 位于 system prompt 的 Repository 区域，而工具说明位于其后。
-
-只要 Query 变化导致 Repo Map 文本变化，后续 prompt prefix 也会变化，因此：
-
-- 底层扫描缓存可以复用；
-- 但 provider prefix cache 不一定能够完整复用。
-
-Repo Map 构建性能与 Prompt Cache 是两个不同问题，需要分别优化。
-
----
-
-## 建议的下一阶段设计
-
-目标：将 Repo Map 从“可缓存摘要”升级为“持久化结构索引 + 增量更新 + Query-aware 渲染”。
-
-推荐分层：
+P2 的生产代码主链已经完成：
 
 ```text
 Repository State Detector
@@ -204,309 +22,12 @@ Token Budget Rendering
 Model-visible Repo Map
 ```
 
-### A. Repository State Detector
-
-职责：只判断仓库发生了什么变化，不负责仓库理解。
-
-Git 仓库优先使用：
-
-```text
-HEAD / old HEAD
-+ git status
-+ git diff --name-status
-```
-
-需要覆盖：
-
-- added；
-- modified；
-- deleted；
-- renamed；
-- staged；
-- unstaged；
-- untracked。
-
-非 Git 目录可回退到：
-
-```text
-mtime + size
-→ 必要时 content hash
-```
-
-### B. Persistent Structural Index
-
-建议先用 SQLite，不引入 FAISS、Embedding 或向量数据库。
-
-最小持久化字段：
-
-```text
-file
-- path
-- content_hash
-- mtime
-- language
-
-symbol
-- file
-- name
-- kind
-- line
-
-import
-- source_file
-- target/module
-
-reference
-- source_file
-- symbol
-```
-
-首次运行：
-
-```text
-full scan
-→ tree-sitter parse
-→ build index
-→ persist
-```
-
-后续启动：
-
-```text
-load index
-→ detect changed files
-→ only update changed files
-```
-
-### C. Changed-file Incremental Update
-
-如果 Forge 自己执行 `file_write/file_edit`，实际上已经知道具体 changed file，因此不需要先重新扫描整个仓库。
-
-理想流程：
-
-```text
-file_edit("agent/core.py")
-        ↓
-重新 parse agent/core.py
-        ↓
-删除其旧 symbol/import/reference 数据
-        ↓
-写入新的结构数据
-        ↓
-局部更新受影响关系
-        ↓
-重新 ranking
-```
-
-用户在 Forge 外部改文件时，再通过 Git diff / repository fingerprint 找 changed files。
-
-### D. Reference Graph 增量维护
-
-单文件变更可能改变其他文件与该 symbol 的关系，因此需要避免只更新单文件自身信息。
-
-建议显式维护：
-
-```text
-file → definitions
-file → references
-symbol → defining files
-symbol → referencing files
-```
-
-更新文件时：
-
-1. 删除旧 definitions / references；
-2. 加入新 definitions / references；
-3. 找出受影响 symbol；
-4. 只重算相关 reference edge。
-
-无需每次重新做全仓 symbol × file reference counting。
-
-### E. Query-aware View
-
-Query 改变时：
-
-```text
-Persistent Index 不变
-→ 重新计算 query relevance
-→ rerank
-→ Token Budget render
-```
-
-需求变化不应触发仓库重新解析。
-
-### F. Prompt Cache Layout
-
-后续可单独评估 system prompt 结构。
-
-目标是把稳定内容尽量放到前缀：
-
-```text
-stable system rules
-stable tool schema
-...
-query-dependent repo context
-current conversation
-```
-
-避免动态 Repo Map 位于过早位置导致后面的稳定工具 schema 也失去 prefix cache 复用机会。
-
-该项必须通过真实 provider 的 cached token 数据验证，不应仅凭结构推断宣称收益。
-
----
-
-## 建议的真实 Coding Agent 消融实验
-
-### 实验目标
-
-正式回答：Repo Map 是否真的改善 Agent 的任务完成能力与探索成本，而不只是 retrieval benchmark 指标。
-
-### Variants
-
-```text
-A. No Repo Map
-   仅依赖 find_files / search / file_read
-
-B. Static Repo Map
-   使用静态 importance，不使用任务 Query
-
-C. Query-aware Repo Map
-   当前实现
-
-D. Incremental Query-aware Repo Map
-   完成持久化增量索引后加入
-```
-
-### 控制变量
-
-固定：
-
-- model；
-- provider；
-- temperature / sampling；
-- max_steps；
-- Token Budget；
-- tool set；
-- completion guard；
-- independent verifier；
-- task fixtures；
-- repo revision。
-
-真实模型有随机性时，正式结论应尽量做多次重复，而不是单次结果。
-
-### 指标
-
-至少记录：
-
-1. task solved / verifier pass；
-2. 首次读取 ground-truth 目标文件的 step；
-3. 读取文件数量；
-4. search / find_files 调用次数；
-5. input tokens；
-6. total tokens；
-7. total latency；
-8. Repo Map initial build time；
-9. Repo Map incremental update time；
-10. cached input tokens / cache hit ratio（provider 支持时）。
-
-### 建议任务集
-
-优先使用固定真实代码仓库中的：
-
-- 单文件 bug；
-- 跨文件 bug；
-- 模块级功能修改；
-- 文件名无法直接暴露目标位置的任务；
-- 需要通过 symbol/reference 定位的任务；
-- 中途至少产生一次代码修改并继续探索的任务。
-
-这样才能同时测到：
-
-- 初次定位能力；
-- 写后索引更新成本；
-- Query-aware ranking；
-- 长链路执行成本。
-
----
-
-## 推荐实施顺序
-
-### P2-RM1：建立 baseline
-
-- [ ] 增加 No Repo Map / Static / Query-aware 三组真实 Agent 消融；
-- [ ] 固定 task、model、budget 和 verifier；
-- [ ] 记录定位 step、文件读取数、Token、latency、verifier pass；
-- [ ] 不修改现有 Repo Map 逻辑，先得到 baseline。
-
-原因：如果当前 Repo Map 对真实 Agent 帮助不明显，应先知道问题在 ranking、prompt layout 还是 Agent 自身探索策略，而不是直接投入较大的增量索引重构。
-
-### P2-RM2：Persistent per-file index
-
-- [ ] SQLite 建立 file/symbol/import/reference 基础表；
-- [ ] 首次 full scan 写入 index；
-- [ ] 重启后复用 index；
-- [ ] content hash / mtime 失效策略；
-- [ ] 保持 Query-aware ranking 结果与现实现语义一致。
-
-### P2-RM3：Changed-file incremental update
-
-- [ ] file_write/file_edit 后只更新目标文件；
-- [ ] Git diff 检测外部修改；
-- [ ] 支持 add / modify / delete / rename；
-- [ ] 增量维护 reference relationships；
-- [ ] 增加 full rebuild fallback，保证索引异常时正确性优先。
-
-### P2-RM4：Prompt Cache layout
-
-- [ ] 记录当前不同 round 的 cached tokens；
-- [ ] 比较 Repo Map 位于 system prompt 前部/后部的 cache 行为；
-- [ ] 保证 prompt 语义和工具能力不变化；
-- [ ] 只有真实 provider usage 显示收益后再写正式结论。
-
-### P2-RM5：最终消融
-
-- [ ] 加入 Incremental Query-aware variant；
-- [ ] 与 P2-RM1 使用完全一致协议；
-- [ ] 单独报告 retrieval quality、index performance 和 Agent E2E 指标；
-- [ ] 不混淆子步骤性能、检索指标和 Agent 成功率。
-
----
-
-## 简历 / 面试证据边界
-
-当前可以说：
-
-> 将仓库结构扫描与任务相关视图部分解耦，缓存扫描结果，并根据任务描述对路径、符号和源码内容动态排序，在 Token Budget 内优先注入高相关文件；在 12 个真实 commit-history case 中，MRR 从 0.097 提升到 0.319，预算内目标文件召回率从 36.5% 提升到 63.5%。
-
-当前不应说：
-
-- Repo Map 让 Coding Agent 成功率提升 X%；
-- Repo Map 将完整仓库扫描耗时从 35.1s 降到 0.49s；
-- 当前已经是增量索引；
-- 当前只扫描任务相关模块；
-- 当前实现已经解决所有大仓库首次索引问题；
-- 当前 Prompt Cache 因 Repo Map 获得稳定 X% 命中率。
-
-如果未来 P2-RM1～RM5 完成，再根据真实报告更新 Evidence Pack 和简历口径。
-
----
-
-## 设计结论
-
-当前 Repo Map 的核心方向是正确的：
-
-```text
-任务变化 ≠ 仓库变化
-```
-
-因此两者不应共用同一个失效机制。
-
-长期更合理的结构是：
+现在的核心语义是：
 
 ```text
 仓库变化
 → changed-file detection
-→ incremental persistent index update
+→ persistent index update
 
 用户需求变化
 → query rerank
@@ -515,6 +36,361 @@ D. Incremental Query-aware Repo Map
 
 即：
 
-> Repo Map 不应继续被实现为“每次需要时重新生成的一段仓库文本”，而应逐步拆成“持久化仓库结构索引”和“面向当前任务动态生成的模型视图”两个独立层。
+> 任务变化不再等价于仓库变化。
 
-该方向属于 P2 性能与大仓库扩展，不影响当前 P0/P1 已完成状态。
+剩余工作主要是 Real-model Agent ablation 和真实 provider cache evidence，不是继续扩 Repo Map 功能面。
+
+---
+
+## 2. P2 状态总表
+
+| Milestone | 状态 | 当前结果 |
+| --- | --- | --- |
+| P2-RM1：No / Static / Query-aware Agent baseline | **PARTIAL** | 4-case production-path harness 已完成；CI 无 provider credential，因此真实模型 rows=`0` |
+| P2-RM2：Persistent per-file index | **DONE** | SQLite file/symbol/import/reference index、schema/version、warm reuse、repo 外 cache、corruption fallback 已完成 |
+| P2-RM3：Changed-file incremental update | **DONE** | write/edit 已知 path 直接更新；外部 Git change 支持 add/modify/delete/rename/staged/unstaged/untracked/HEAD；reference 语义有 strict regression |
+| P2-RM4：Prompt Cache layout | **PARTIAL** | stable rules/tool schema 已移到 dynamic Repo Map 前；尚无真实 provider cached-token 对照 |
+| P2-RM5：最终消融 | **PARTIAL** | Incremental variant、strict retrieval equivalence、phase benchmark 已完成；真实模型 E2E 尚未执行 |
+
+因此：
+
+- **实现层：RM2 / RM3 已完成。**
+- **离线正确性与性能证据：已完成。**
+- **Real-model Agent success / token / latency 结论：未完成。**
+- **真实 Provider cache-hit 结论：未完成。**
+
+---
+
+## 3. 当前真实实现
+
+### 3.1 Query-aware View
+
+`context/repo_map.py` 保持原 Query-aware ranking 语义。
+
+任务 Query 会影响 path / symbol / source text / import-reference structural signals 和 Token Budget 内最终可见文件。
+
+Query 改变时，不应重新 parse 仓库。
+
+### 3.2 Persistent Structural Index
+
+`context/repo_index.py` 使用 SQLite 持久化 file、symbol、import、reference 以及 repository state metadata。
+
+索引默认位于仓库外部 cache 目录。
+
+### 3.3 Incremental Repo Map
+
+`context/incremental_repo_map.py` 提供 `PersistentRepoMap`。
+
+首次：
+
+```text
+full scan
+→ tree-sitter parse
+→ build index
+→ persist
+```
+
+后续进程：
+
+```text
+load index
+→ detect repository changes
+→ unchanged: warm load
+→ changed: update changed files
+```
+
+Query change：
+
+```text
+index unchanged
+→ rerank
+→ render
+```
+
+### 3.4 Repository State Detector
+
+`context/repository_state.py` 中 P2 change detection 与原 P1 `repository_fingerprint()` 保持职责分离。
+
+Git 场景覆盖 HEAD、staged、unstaged、untracked、add、modify、delete、rename，以及 dirty file 在相同 status code 下继续变化。
+
+非 Git 目录发生变化时使用安全 full-rebuild fallback。
+
+### 3.5 Agent 接线
+
+`agent/core.py` 的 Repo Map mode：
+
+```text
+none
+static
+query_aware
+incremental
+```
+
+生产默认 `incremental`。
+
+成功 `file_write` / `file_edit` / `edit`：
+
+```text
+known changed path
+→ update_paths([path])
+→ rerank/render
+```
+
+如果不能可靠得到 changed path，则标记下一 render boundary 做 repository sync。
+
+### 3.6 Chat 跨轮
+
+同一 Agent / repo 下，Query 改变会让 rendered Repo Map 失效，但 `PersistentRepoMap` 结构索引实例继续复用，不重新 parse 未变化文件。
+
+`agent/runner.py` 已修复 shared-history boundary 中 eager default 创建额外 PersistentRepoMap 的问题。
+
+### 3.7 Prompt layout
+
+`agent/prompt.py` 当前将 stable system rules / tool schemas 放在 dynamic repository context 之前。
+
+这只是结构优化；没有真实 provider `cached_input_tokens` 对照前，不宣称 cache hit 提升。
+
+---
+
+## 4. 正确性 contract
+
+Persistent / Incremental 实现必须保持原 Query-aware 语义。
+
+当前 strict contract：
+
+1. structural semantic hash 等价；
+2. full ranking 等价；
+3. Token Budget visible file set 等价；
+4. rendered Repo Map 等价；
+5. 正式 retrieval 指标与冻结 Query-aware report delta 为 0。
+
+第一次 strict benchmark 曾发现一个真实 reference semantic bug：同名 symbol 在多个文件定义、且 source file 自身也定义该 symbol 时，SQLite 初版只排除 self-edge，而 legacy 逻辑会跳过该 source 对此 symbol 的全部跨文件计数。
+
+最终修改 `context/repo_index.py`，使用 owner-aware `NOT EXISTS` 语义恢复旧行为，并加入 regression。
+
+不能通过调整 tolerance 或修改 ground truth 绕过 equivalence failure。
+
+---
+
+## 5. 正式冻结结果
+
+### 5.1 Static → Query-aware Retrieval
+
+来源：`evals/results/repo_map_ablation/report.json`
+
+12 个真实 commit-history case：
+
+```text
+MRR:
+0.096954 → 0.318750
+
+Token Budget 内 target recall:
+0.364914 → 0.635251
+```
+
+reference-count hotspot：
+
+```text
+median:
+35.1176s → 0.4928s
+
+speedup:
+71.26×
+```
+
+注意：该 `71.26×` 只属于旧 reference-count 子步骤，不是完整 Repo Map，也不是 Agent E2E。
+
+### 5.2 Persistent Strict Equivalence
+
+来源：`evals/results/repo_map_persistent_benchmark/report.json`
+
+12/12：semantic、ranking、visible-set、rendering 全部 equivalent。
+
+与冻结 Query-aware 指标相比：MRR、budget recall、recall@1、recall@3、recall@5、mean target rank 的 delta 全部为 `0`。
+
+### 5.3 Phase Benchmark
+
+5-run GitHub Actions 中位数：
+
+| Phase | Median |
+| --- | ---: |
+| legacy build | `0.6097s` |
+| persistent cold build | `0.9605s` |
+| warm load | `0.2967s` |
+| query rerank | `0.2080s` |
+| single-file incremental update | `0.1700s` |
+| two-file incremental update | `0.1766s` |
+| explicit full rebuild | `0.8045s` |
+
+额外 contract：warm start reparsed files=`0`，single-file update parsed files=`1`，two-file update parsed files=`2`，benchmark 后 working tree clean。
+
+重要结论：当前收益主要是 warm reuse / changed-file update，不是 cold start。Persistent cold build 当前比 legacy build 更慢，因为需要建立 SQLite 持久化状态。
+
+---
+
+## 6. Real Coding Agent Ablation
+
+脚本：
+
+- `evals/repo_map_agent_ablation.py`
+- `evals/fixtures/repo_map_agent_cases.json`
+
+Variants：
+
+```text
+A. no_repo_map
+B. static_repo_map
+C. query_aware_repo_map
+D. incremental_query_aware_repo_map
+```
+
+走生产路径 `ExecutionRunner → Agent → Tool lifecycle → Completion Guard → Independent Acceptance → Trace v2`。
+
+采集 solved、hidden verifier、first target read step、files read、search/find calls、input/output/total/cached tokens、latency 和 Repo Map phase telemetry。
+
+当前冻结状态：
+
+```text
+execution_status = not_executed
+real_model_executed = false
+rows = 0
+reason = provider_credentials_not_available_in_ci
+```
+
+因此 P2 当前不能给出 Coding Agent success-rate 对比。
+
+---
+
+## 7. 已完成测试覆盖
+
+关键测试：
+
+- `tests/test_repo_map_improvements.py`
+- `tests/test_repo_map_ablation.py`
+- `tests/test_repo_map_persistent.py`
+- `tests/test_repo_map_product_behavior.py`
+- `tests/test_repo_map_prompt_layout.py`
+- `tests/test_repo_map_agent_ablation.py`
+- `tests/test_repo_map_persistent_benchmark.py`
+
+覆盖 initial full build、warm restart、Query-only rerank、single/multi-file change、add/modify/delete/rename、staged/unstaged/untracked、HEAD、dirty content、non-Git fallback、corrupt/schema mismatch、symbol cleanup、reference graph、duplicate symbol definitions、index outside repo、Chat cross-round query change、prompt layout、A/B/C/D harness protocol 和 phase benchmark contract。
+
+最新正式 CI 成功轮次包含：
+
+```text
+801 passed, 1 skipped
+```
+
+随后新增的 duplicate-symbol regression 也在最终 strict run 中通过。
+
+---
+
+## 8. 当前简历 / 面试证据边界
+
+可以说：
+
+> Query-aware Repo Map 在 12-case frozen commit-history benchmark 上将 MRR 从 0.097 提升到 0.319、Token Budget 内 target recall 从 0.365 提升到 0.635；随后将 Repo Map 拆为持久化 SQLite 结构索引与 Query-aware 任务视图，Query 改变只 rerank、代码修改按 changed file 增量更新，并用 12-case strict equivalence regression 保证排序/渲染语义不变。
+
+技术追问时可补充：
+
+> 当前 CI snapshot 中 warm load、单文件和双文件增量更新中位约 0.297s、0.170s、0.177s，explicit full rebuild 约 0.805s；首次 persistent cold build 约 0.961s，比 legacy 0.610s 更慢，因此优化目标是复用和增量更新，而不是 cold-start 加速。
+
+不可以说：
+
+- Repo Map 让 Coding Agent 成功率提升 X%；
+- 首次 persistent indexing 更快；
+- 整个 Agent 快 71×；
+- 只扫描任务相关模块；
+- Prompt Cache 命中率提升 X%；
+- A/B/C/D real-model ablation 已跑完。
+
+---
+
+## 9. 剩余 TODO
+
+### P2-RM1 / P2-RM5：真实模型实验
+
+- [x] 冻结 4-case fixture；
+- [x] A/B/C/D variant；
+- [x] production-path harness；
+- [x] hidden verifier；
+- [x] exploration / token / latency telemetry；
+- [ ] 使用同一 model/provider/config 执行真实模型；
+- [ ] 最好每个 cell 多次重复；
+- [ ] 冻结 report 后再决定是否新增 success/token/latency 简历结论。
+
+### P2-RM4：Provider Prompt Cache
+
+- [x] stable tool schema 前置；
+- [x] dynamic Repo Map 后置；
+- [ ] 使用真实 provider usage 记录 cached input tokens；
+- [ ] 对比旧 / 新 layout；
+- [ ] 只有真实 usage 显示差异后再写 cache 结论。
+
+### Optional：Cold Build
+
+当前不是 correctness blocker。未来进入超大仓库场景时，再评估 lazy persistence、parser batching、hash/stat 快路径或 prebuilt index。
+
+---
+
+## 10. 本地验收
+
+优先：
+
+```bash
+pytest -q \
+  tests/test_repo_map_improvements.py \
+  tests/test_repo_map_ablation.py \
+  tests/test_repo_map_persistent.py \
+  tests/test_repo_map_product_behavior.py \
+  tests/test_repo_map_prompt_layout.py \
+  tests/test_repo_map_agent_ablation.py \
+  tests/test_repo_map_persistent_benchmark.py
+
+python -m evals.verify_evidence_pack
+```
+
+完整：
+
+```bash
+pytest -q
+```
+
+重新跑 phase benchmark 时不要覆盖冻结目录：
+
+```bash
+python -m evals.repo_map_persistent_benchmark \
+  --repo . \
+  --output /tmp/forge-repo-map-benchmark \
+  --repetitions 5 \
+  --strict
+```
+
+无 provider credential 时，只验证 Agent harness：
+
+```bash
+python -m evals.repo_map_agent_ablation \
+  --validate-only \
+  --output /tmp/forge-repo-map-agent-ablation
+```
+
+有 provider credential 时，再执行真实模型实验：
+
+```bash
+python -m evals.repo_map_agent_ablation \
+  --output /tmp/forge-repo-map-agent-ablation \
+  --repetitions 1
+```
+
+---
+
+## 11. 完成定义
+
+P2 代码主链的 Done 条件已经满足：persistent index 可跨进程 reuse、changed-file incremental update 可用、Query-only rerank 不重新 parse、external Git changes 可检测、未知状态有 full rebuild fallback、frozen Query-aware retrieval/ranking/rendering 语义不退化、production Agent 默认可使用 incremental Repo Map、deterministic regression 覆盖主要 correctness contract。
+
+P2 作为“带真实 Agent 效果结论的完整实验项目”尚未完全 Done，原因仅剩：
+
+1. Real-model A/B/C/D 尚未执行；
+2. Provider cache-hit 对照尚未执行。
+
+这两个未完成项必须继续保留为明确边界，不能用离线 benchmark 代替。
