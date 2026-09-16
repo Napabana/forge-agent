@@ -421,7 +421,7 @@ def test_acceptance_and_delivery_trace_statuses(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("request", "expected"),
+    ("run_request", "expected"),
     [
         (RunRequest(Task("cli", ".")), "cli"),
         (RunRequest(Task("chat", "."), history=ConversationHistory()), "chat"),
@@ -432,8 +432,8 @@ def test_acceptance_and_delivery_trace_statuses(tmp_path):
         ),
     ],
 )
-def test_four_entrypoints_resolve_to_one_trace_schema(request, expected):
-    assert _resolve_entrypoint(request) == expected
+def test_four_entrypoints_resolve_to_one_trace_schema(run_request, expected):
+    assert _resolve_entrypoint(run_request) == expected
 
 
 def test_trace_context_propagates_into_nested_event_log_create(tmp_path):
