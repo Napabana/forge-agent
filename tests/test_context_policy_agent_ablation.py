@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import subprocess
 from types import SimpleNamespace
 
 from context.token_budget import TokenBudget, estimate_messages_tokens
 from evals.context_policy_agent_ablation import (
     PruningOnlyPolicy,
     _aggregate,
+    _init_fixture_repo,
     build_history,
     load_manifest,
 )
@@ -20,7 +22,7 @@ def test_b2_manifest_has_three_long_history_cases_and_current_task_once(tmp_path
         "huge-tool-history",
         "superseded-state",
     ]
-    assert defaults["budget_tokens"] == 12_000
+    assert defaults["budget_tokens"] == 8_000
 
     for case in cases:
         repo = materialize_case(case.base, tmp_path / case.base.case_id)
@@ -28,6 +30,27 @@ def test_b2_manifest_has_three_long_history_cases_and_current_task_once(tmp_path
         visible = "\n".join(message.content for message in history.to_list())
         assert visible.count(case.base.prompt) == 1
         assert estimate_messages_tokens(history.to_dicts()) > 2_000
+
+
+def test_b2_fixture_repo_is_standalone_and_tracks_changes(tmp_path):
+    _, cases = load_manifest()
+    case = cases[0]
+    repo = materialize_case(case.base, tmp_path / case.base.case_id)
+
+    _init_fixture_repo(repo)
+
+    top = subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], cwd=repo, text=True
+    ).strip()
+    assert top == str(repo.resolve())
+    assert subprocess.check_output(
+        ["git", "status", "--porcelain"], cwd=repo, text=True
+    ) == ""
+
+    (repo / "textops.py").write_text("def normalize_title(value):\n    return value\n", encoding="utf-8")
+    assert "textops.py" in subprocess.check_output(
+        ["git", "status", "--porcelain"], cwd=repo, text=True
+    )
 
 
 def test_pruning_only_policy_prunes_old_large_tool_output_but_keeps_current_task(tmp_path):
@@ -67,6 +90,7 @@ def test_b2_aggregate_counts_semantic_side_call_tokens_in_total_cost():
             "context_checkpoints": 0,
             "semantic_calls": 0,
             "semantic_error_count": 0,
+            "max_pressure_ratio": None,
         },
         {
             "variant": "hybrid_compaction",
@@ -80,6 +104,7 @@ def test_b2_aggregate_counts_semantic_side_call_tokens_in_total_cost():
             "context_checkpoints": 1,
             "semantic_calls": 1,
             "semantic_error_count": 0,
+            "max_pressure_ratio": 1.2,
         },
     ]
 
@@ -89,3 +114,4 @@ def test_b2_aggregate_counts_semantic_side_call_tokens_in_total_cost():
     assert report["hybrid_compaction"]["tokens_per_solved"] == 90
     assert report["hybrid_compaction"]["mean_semantic_tokens"] == 20
     assert report["hybrid_compaction"]["context_trigger_rate"] == 1.0
+    assert report["hybrid_compaction"]["mean_max_pressure_ratio"] == 1.2
