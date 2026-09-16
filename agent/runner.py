@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -13,6 +14,7 @@ from agent.core import Agent, AgentConfig, PrepareNextTurn, PrepareNextTurnConte
 from agent.event_log import EventLog
 from agent.orchestrate import orchestrate_run
 from agent.task import RunResult, Task
+from agent.trace_v2 import bind_trace_context
 from context.history import ConversationHistory
 from context.repo_map import RepoMap
 from context.token_budget import TokenBudget
@@ -20,6 +22,8 @@ from harness import Hooks, PermissionManager, ToolExecutor
 from runtime.worktree import WorktreeResultPolicy
 from task.engine import TaskEngine
 from tools.base import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,9 @@ class RunRequest:
     result_policy: WorktreeResultPolicy | str = WorktreeResultPolicy.KEEP_IF_CHANGED
     acceptance: AcceptanceContract | None = None
     session_id: str | None = None
+    # Product entrypoints may set this explicitly. None keeps current callers
+    # compatible and resolves from the existing request shape.
+    entrypoint: str | None = None
 
 
 class ExecutionRunner:
@@ -106,8 +113,15 @@ class ExecutionRunner:
     ) -> RunResult:
         acceptance = request.acceptance or AcceptanceContract.from_task(request.task)
         task = acceptance.apply(request.task)
-        contract_paths, path_error = _normalize_contract_paths(acceptance.required_paths + acceptance.forbidden_paths)
-        path_baseline, snapshot_error = (None, None) if request.isolate or path_error else _snapshot_paths(Path(task.repo_path), contract_paths)
+        entrypoint = _resolve_entrypoint(request)
+        contract_paths, path_error = _normalize_contract_paths(
+            acceptance.required_paths + acceptance.forbidden_paths
+        )
+        path_baseline, snapshot_error = (
+            (None, None)
+            if request.isolate or path_error
+            else _snapshot_paths(Path(task.repo_path), contract_paths)
+        )
         acceptance_setup_error = path_error or snapshot_error
         config = dataclasses.replace(
             self.config,
@@ -123,6 +137,7 @@ class ExecutionRunner:
                 else self.config.prepare_next_turn
             ),
         )
+
         if request.isolate:
             if request.history is not None:
                 raise ValueError("isolated runs do not support shared history")
@@ -137,21 +152,54 @@ class ExecutionRunner:
                 if on_log_created is not None:
                     on_log_created(task_id, path)
 
-            result = asyncio.run(orchestrate_run(
-                backend=self.backend,
-                task=task,
-                engine=engine,
-                registry_builder=self.registry_builder,
-                bus=self.bus,
-                log_dir=self.log_dir,
-                sandbox=request.sandbox,
-                config=config,
-                confirm_callback=self.confirm_callback,
-                result_policy=request.result_policy,
-                on_log_created=log_created,
-            ))
+            try:
+                # ContextVar propagation lets orchestrate_run/EventLog.create inherit
+                # product metadata without adding product concerns to orchestrator APIs.
+                with bind_trace_context(
+                    entrypoint=entrypoint,
+                    session_id=request.session_id,
+                ):
+                    result = asyncio.run(orchestrate_run(
+                        backend=self.backend,
+                        task=task,
+                        engine=engine,
+                        registry_builder=self.registry_builder,
+                        bus=self.bus,
+                        log_dir=self.log_dir,
+                        sandbox=request.sandbox,
+                        config=config,
+                        confirm_callback=self.confirm_callback,
+                        result_policy=request.result_policy,
+                        on_log_created=log_created,
+                    ))
+            except BaseException as exc:
+                if trace_path:
+                    _record_exception_trace(
+                        trace_path,
+                        task_id=task.task_id,
+                        entrypoint=entrypoint,
+                        session_id=request.session_id,
+                        error=exc,
+                    )
+                raise
+
             result.trace_path = trace_path
-            _apply_independent_acceptance(acceptance, task, result, contract_paths, path_baseline, acceptance_setup_error)
+            _apply_independent_acceptance(
+                acceptance,
+                task,
+                result,
+                contract_paths,
+                path_baseline,
+                acceptance_setup_error,
+            )
+            if trace_path:
+                _record_post_run_trace(
+                    trace_path,
+                    result=result,
+                    acceptance_requested=acceptance.has_independent_checks(),
+                    entrypoint=entrypoint,
+                    session_id=request.session_id,
+                )
             return result
 
         executor = ToolExecutor(
@@ -175,7 +223,9 @@ class ExecutionRunner:
             task,
             log_dir=self.log_dir,
             session_id=request.session_id,
+            entrypoint=entrypoint,
         )
+        log.configure_trace(entrypoint=entrypoint, session_id=request.session_id)
         if on_log_created is not None:
             on_log_created(task.task_id, str(log.path))
         if on_event is not None:
@@ -190,8 +240,26 @@ class ExecutionRunner:
             )
             result = self.agent.run(task, log, history=request.history)
             result.trace_path = str(log.path)
-            _apply_independent_acceptance(acceptance, task, result, contract_paths, path_baseline, acceptance_setup_error)
+            _apply_independent_acceptance(
+                acceptance,
+                task,
+                result,
+                contract_paths,
+                path_baseline,
+                acceptance_setup_error,
+            )
+            _record_post_run_trace_log(
+                log,
+                result=result,
+                acceptance_requested=acceptance.has_independent_checks(),
+            )
             return result
+        except BaseException as exc:
+            try:
+                log.log_run_exception(task_id=task.task_id, error=exc)
+            except Exception as trace_exc:  # noqa: BLE001 — trace is best-effort
+                logger.warning("Failed to record runner exception trace: %s", trace_exc)
+            raise
         finally:
             if on_event is not None:
                 log.on_append(None)
@@ -215,7 +283,6 @@ class ExecutionRunner:
         if history is None or history.message_count <= 1 or callback is None:
             return
 
-        # 与 Agent.run 的仓库/query 缓存语义对齐，避免 preflight 与正式请求看到两套 Repo Map。
         self.agent._current_repo_path = task.repo_path
         self.agent._repo_map_query = task.description
         cache_key = task.repo_path
@@ -257,9 +324,84 @@ class ExecutionRunner:
             self.agent._prepared_history_override = prepared.history_override
 
 
+def _resolve_entrypoint(request: RunRequest) -> str:
+    """Resolve the four product entrypoints without breaking existing callers."""
+    if request.entrypoint:
+        return request.entrypoint
+    if request.task.issue_url:
+        return "github_issue"
+    if request.cancel_event is not None:
+        return "api"
+    if request.history is not None or request.session_id is not None:
+        return "chat"
+    return "cli"
+
+
+def _record_post_run_trace_log(
+    log: EventLog,
+    *,
+    result: RunResult,
+    acceptance_requested: bool,
+) -> None:
+    """Trace must never replace the execution result."""
+    try:
+        log.log_acceptance(result, requested=acceptance_requested)
+        log.log_run_termination(result)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to record runner completion trace: %s", exc)
+
+
+def _record_post_run_trace(
+    trace_path: str,
+    *,
+    result: RunResult,
+    acceptance_requested: bool,
+    entrypoint: str,
+    session_id: str | None,
+) -> None:
+    try:
+        with EventLog.open_existing(
+            trace_path,
+            task_id=result.task_id,
+            entrypoint=entrypoint,
+            session_id=session_id,
+        ) as trace_log:
+            _record_post_run_trace_log(
+                trace_log,
+                result=result,
+                acceptance_requested=acceptance_requested,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to append isolated runner trace: %s", exc)
+
+
+def _record_exception_trace(
+    trace_path: str,
+    *,
+    task_id: str,
+    entrypoint: str,
+    session_id: str | None,
+    error: BaseException,
+) -> None:
+    try:
+        with EventLog.open_existing(
+            trace_path,
+            task_id=task_id,
+            entrypoint=entrypoint,
+            session_id=session_id,
+        ) as trace_log:
+            trace_log.log_run_exception(task_id=task_id, error=error)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to append isolated exception trace: %s", exc)
+
+
 def _apply_independent_acceptance(
-    contract: AcceptanceContract, task: Task, result: RunResult, contract_paths: set[str],
-    path_baseline: dict[str, str] | None, setup_error: str | None,
+    contract: AcceptanceContract,
+    task: Task,
+    result: RunResult,
+    contract_paths: set[str],
+    path_baseline: dict[str, str] | None,
+    setup_error: str | None,
 ) -> None:
     """在 Agent 返回后执行路径约束和隐藏 verifier，并保留两层独立状态。"""
     if not contract.has_independent_checks():
@@ -272,13 +414,23 @@ def _apply_independent_acceptance(
         result.acceptance_status, result.acceptance_error = "failed", setup_error
         return
 
-    workspace = Path(result.worktree.path) if result.worktree and result.worktree.path else Path(task.repo_path)
+    workspace = (
+        Path(result.worktree.path)
+        if result.worktree and result.worktree.path
+        else Path(task.repo_path)
+    )
     if result.worktree and result.worktree.path is None:
-        result.acceptance_status, result.acceptance_error = "failed", "worktree is unavailable for independent acceptance"
+        result.acceptance_status = "failed"
+        result.acceptance_error = "worktree is unavailable for independent acceptance"
         return
 
     if contract.required_paths or contract.forbidden_paths:
-        changed_paths, error = _changed_paths(result, workspace, contract_paths, path_baseline)
+        changed_paths, error = _changed_paths(
+            result,
+            workspace,
+            contract_paths,
+            path_baseline,
+        )
         if error:
             result.acceptance_status, result.acceptance_error = "failed", error
             return
@@ -287,32 +439,50 @@ def _apply_independent_acceptance(
         missing = sorted(required_paths - changed_paths)
         forbidden = sorted(forbidden_paths & changed_paths)
         if missing or forbidden:
-            reasons = ([f"required paths not changed: {', '.join(missing)}"] if missing else []) + ([f"forbidden paths changed: {', '.join(forbidden)}"] if forbidden else [])
-            result.acceptance_status, result.acceptance_error = "failed", "; ".join(reasons)
+            reasons = (
+                [f"required paths not changed: {', '.join(missing)}"] if missing else []
+            ) + (
+                [f"forbidden paths changed: {', '.join(forbidden)}"] if forbidden else []
+            )
+            result.acceptance_status = "failed"
+            result.acceptance_error = "; ".join(reasons)
             return
 
     if contract.verifier is not None:
         try:
             verified = bool(contract.verifier(workspace))
         except Exception as exc:
-            result.acceptance_status, result.acceptance_error = "failed", f"hidden verifier raised {type(exc).__name__}: {exc}"
+            result.acceptance_status = "failed"
+            result.acceptance_error = (
+                f"hidden verifier raised {type(exc).__name__}: {exc}"
+            )
             return
         if not verified:
-            result.acceptance_status, result.acceptance_error = "failed", "hidden verifier returned false"
+            result.acceptance_status = "failed"
+            result.acceptance_error = "hidden verifier returned false"
             return
     result.acceptance_status = "passed"
 
 
 def _changed_paths(
-    result: RunResult, workspace: Path, contract_paths: set[str], path_baseline: dict[str, str] | None,
+    result: RunResult,
+    workspace: Path,
+    contract_paths: set[str],
+    path_baseline: dict[str, str] | None,
 ) -> tuple[set[str], str | None]:
     """隔离运行读取产物，普通运行只比较契约文件的前后内容指纹。"""
     if result.worktree is not None:
-        return {path.replace("\\", "/") for path in result.worktree.changed_files}, None
+        return {
+            path.replace("\\", "/") for path in result.worktree.changed_files
+        }, None
     current, error = _snapshot_paths(workspace, contract_paths)
     if error:
         return set(), error
-    return {path for path in contract_paths if path_baseline and path_baseline[path] != current[path]}, None
+    return {
+        path
+        for path in contract_paths
+        if path_baseline and path_baseline[path] != current[path]
+    }, None
 
 
 def _normalize_contract_paths(paths: tuple[str, ...]) -> tuple[set[str], str | None]:
@@ -337,7 +507,11 @@ def _snapshot_paths(root: Path, paths: set[str]) -> tuple[dict[str, str], str | 
         if target.is_dir():
             return {}, f"acceptance path must be a file: {relative}"
         try:
-            states[relative] = hashlib.sha256(target.read_bytes()).hexdigest() if target.exists() else "missing"
+            states[relative] = (
+                hashlib.sha256(target.read_bytes()).hexdigest()
+                if target.exists()
+                else "missing"
+            )
         except OSError as exc:
             return {}, f"cannot inspect acceptance path {relative}: {exc}"
     return states, None
