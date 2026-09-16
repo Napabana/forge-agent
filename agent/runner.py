@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from agent.core import Agent, AgentConfig, PrepareNextTurn, PrepareNextTurnContext
+from agent.core import Agent, AgentConfig, PrepareNextTurn
 from agent.event_log import EventLog
 from agent.orchestrate import orchestrate_run
 from agent.task import RunResult, Task
@@ -19,6 +19,7 @@ from context.history import ConversationHistory
 from context.repo_map import RepoMap
 from context.token_budget import TokenBudget
 from harness import Hooks, PermissionManager, ToolExecutor
+from llm.usage import SessionUsage
 from runtime.worktree import WorktreeResultPolicy
 from task.engine import TaskEngine
 from tools.base import ToolRegistry
@@ -231,14 +232,18 @@ class ExecutionRunner:
         if on_event is not None:
             log.on_append(on_event)
         try:
-            self._prepare_shared_history_boundary(
+            preparation_result = self._prepare_shared_history_boundary(
                 task=task,
                 history=request.history,
                 callback=config.prepare_next_turn,
                 log=log,
                 config=config,
             )
-            result = self.agent.run(task, log, history=request.history)
+            result = (
+                preparation_result
+                if preparation_result is not None
+                else self.agent.run(task, log, history=request.history)
+            )
             result.trace_path = str(log.path)
             _apply_independent_acceptance(
                 acceptance,
@@ -274,14 +279,15 @@ class ExecutionRunner:
         callback: PrepareNextTurn | None,
         log: EventLog,
         config: AgentConfig,
-    ) -> None:
-        """已有共享历史的新 run 在第一次模型调用前复用同一 Context policy。
+    ) -> RunResult | None:
+        """已有共享历史的新 run 在第一次模型调用前复用 Agent prepare 生命周期。
 
         Fresh task / fresh Chat round 只有当前 user message，不进入该路径；Agent.run
-        内部原有 step>1 prepare_next_turn 生命周期保持不变。
+        内部 step>1 继续调用相同的 ``Agent._prepare_next_turn``。因此首轮共享历史
+        与后续 turn 对 prepare failure / cancel / Trace 使用同一生产语义。
         """
         if history is None or history.message_count <= 1 or callback is None:
-            return
+            return None
 
         self.agent._current_repo_path = task.repo_path
         self.agent._repo_map_query = task.description
@@ -297,31 +303,16 @@ class ExecutionRunner:
 
         token_budget = TokenBudget(total=config.budget_tokens)
         repo_map = getattr(self.agent, "_repo_map_instance", RepoMap(task.repo_path))
-        system_content, repo_map_content, schemas = self.agent._render_request_parts(
-            token_budget,
+        return self.agent._prepare_next_turn(
+            task,
+            1,
+            history,
             repo_map,
+            token_budget,
+            log,
+            0,
+            SessionUsage(),
         )
-        context = PrepareNextTurnContext(
-            task=task,
-            step=1,
-            history=history,
-            repo_map=repo_map,
-            token_budget=token_budget,
-            cancel_event=config.cancel_event,
-            event_log=log,
-            system_content=system_content,
-            repo_map_content=repo_map_content,
-            tool_schemas=schemas,
-        )
-        prepared = callback(context)
-        if prepared is None:
-            return
-        if prepared.refresh_repo_map:
-            self.agent.invalidate_repo_map_cache(task.repo_path)
-        if prepared.messages:
-            history.add_many(list(prepared.messages))
-        if prepared.history_override is not None:
-            self.agent._prepared_history_override = prepared.history_override
 
 
 def _resolve_entrypoint(request: RunRequest) -> str:
