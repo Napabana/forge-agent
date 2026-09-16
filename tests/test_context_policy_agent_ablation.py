@@ -23,6 +23,7 @@ def test_b2_manifest_has_three_long_history_cases_and_current_task_once(tmp_path
         "superseded-state",
     ]
     assert defaults["budget_tokens"] == 8_000
+    assert defaults["max_steps"] == 12
 
     for case in cases:
         repo = materialize_case(case.base, tmp_path / case.base.case_id)
@@ -76,12 +77,14 @@ def test_pruning_only_policy_prunes_old_large_tool_output_but_keeps_current_task
     assert policy.pruned_units >= 1
 
 
-def test_b2_aggregate_counts_semantic_side_call_tokens_in_total_cost():
+def test_b2_aggregate_counts_semantic_cost_and_separates_verifier_from_completion():
     rows = [
         {
             "variant": "baseline",
             "passed": True,
             "false_finish": False,
+            "agent_status": "success",
+            "verifier_status": "passed",
             "agent_tokens": 100,
             "semantic_tokens": 0,
             "total_tokens_with_context": 100,
@@ -93,9 +96,27 @@ def test_b2_aggregate_counts_semantic_side_call_tokens_in_total_cost():
             "max_pressure_ratio": None,
         },
         {
+            "variant": "pruning_only",
+            "passed": False,
+            "false_finish": False,
+            "agent_status": "max_steps",
+            "verifier_status": "passed",
+            "agent_tokens": 80,
+            "semantic_tokens": 0,
+            "total_tokens_with_context": 80,
+            "latency_seconds": 4.0,
+            "tool_calls": 3,
+            "context_checkpoints": 0,
+            "semantic_calls": 0,
+            "semantic_error_count": 0,
+            "max_pressure_ratio": 1.1,
+        },
+        {
             "variant": "hybrid_compaction",
             "passed": True,
             "false_finish": False,
+            "agent_status": "success",
+            "verifier_status": "passed",
             "agent_tokens": 70,
             "semantic_tokens": 20,
             "total_tokens_with_context": 90,
@@ -115,3 +136,8 @@ def test_b2_aggregate_counts_semantic_side_call_tokens_in_total_cost():
     assert report["hybrid_compaction"]["mean_semantic_tokens"] == 20
     assert report["hybrid_compaction"]["context_trigger_rate"] == 1.0
     assert report["hybrid_compaction"]["mean_max_pressure_ratio"] == 1.2
+    assert report["baseline"]["verifier_pass_rate"] == 1.0
+    assert report["baseline"]["max_steps_exhausted_rate"] == 0.0
+    assert report["pruning_only"]["pass_at_1"] == 0.0
+    assert report["pruning_only"]["verifier_pass_rate"] == 1.0
+    assert report["pruning_only"]["max_steps_exhausted_rate"] == 1.0
