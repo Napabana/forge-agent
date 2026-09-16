@@ -31,7 +31,13 @@ from agent.loop_detector import LoopDetector, LoopSeverity, snapshot_repository
 from context.history import ConversationHistory
 from context.repo_map import RepoMap
 from context.repository_state import repository_fingerprint
-from context.token_budget import TokenBudget
+from context.token_budget import (
+    TokenBudget,
+    estimate_message_tokens,
+    estimate_messages_tokens,
+    estimate_tokens,
+    estimate_tool_schemas_tokens,
+)
 from agent.prompt import (
     build_system_prompt,
     build_task_prompt,
@@ -254,12 +260,20 @@ class Agent:
             messages = self._build_messages(history, token_budget, repo_map)
             # Step 上限是最坏情况熔断器；最后三轮给模型显式收尾信号，避免突然硬切。
             remaining_steps = task.max_steps - step + 1
+            injected_messages: list[LLMMessage] = []
             if remaining_steps <= 3:
-                messages.append(LLMMessage(
+                warning = LLMMessage(
                     role="user",
                     content=step_budget_warning(),
-                ))
+                )
+                messages.append(warning)
+                injected_messages.append(warning)
             tools = self._registry.get_schemas()
+            token_breakdown = self._trace_token_breakdown(
+                messages,
+                tools,
+                injected_messages=injected_messages,
+            )
             llm_started = time.perf_counter()
             llm_span = log.log_trace(
                 EventType.LLM_CALL_STARTED,
@@ -268,6 +282,7 @@ class Agent:
                 provider=type(self._backend).__name__,
                 message_count=len(messages),
                 tool_schema_count=len(tools),
+                token_breakdown=token_breakdown,
             )
             llm_retries = 0
 
@@ -279,6 +294,7 @@ class Agent:
                     step,
                     span_id=llm_span,
                     attempt=attempt,
+                    retry_count=llm_retries,
                     error_type=error.kind.value,
                     status_code=error.status_code,
                     retry_after=error.retry_after,
@@ -296,8 +312,11 @@ class Agent:
                     model=self._backend.model_name,
                     provider=type(self._backend).__name__,
                     retries=llm_retries,
+                    retry_count=llm_retries,
+                    token_breakdown=token_breakdown,
                     error_type=error.kind.value,
                     status_code=error.status_code,
+                    error=str(exc),
                 )
                 logger.error("LLM call failed at step %d after retries: %s", step, exc)
                 log.log_task_failed(steps=step, reason=f"LLM error: {exc}")
@@ -320,7 +339,12 @@ class Agent:
                 model=self._backend.model_name,
                 provider=type(self._backend).__name__,
                 retries=llm_retries,
+                retry_count=llm_retries,
+                token_breakdown=token_breakdown,
+                # ``usage`` is kept for B1/B2 readers; provider_usage is the
+                # explicit Trace v2 name and represents provider-reported usage.
                 usage=response.usage.to_dict(),
+                provider_usage=response.usage.to_dict(),
             )
             usage.record(response.usage)
             total_tokens = usage.total_tokens
@@ -463,6 +487,7 @@ class Agent:
                         duration_ms=(time.perf_counter() - tool_started) * 1000,
                         result_bytes=0,
                         error_type=type(exc).__name__,
+                        error=str(exc),
                     )
                     raise
 
@@ -479,6 +504,7 @@ class Agent:
                     duration_ms=(time.perf_counter() - tool_started) * 1000,
                     result_bytes=len(result.output.encode("utf-8")),
                     error_type=result.error_type.value if result.error_type else None,
+                    error=result.error,
                     diagnostics=list(result.diagnostics),
                 )
                 observation = result.to_observation(tc.name)
@@ -731,6 +757,7 @@ class Agent:
                 span_id=prepare_span,
                 duration_ms=(time.perf_counter() - prepare_started) * 1000,
                 error_type=type(exc).__name__,
+                error=str(exc),
             )
             reason = f"prepare_next_turn failed: {type(exc).__name__}: {exc}"
             logger.exception("prepare_next_turn failed before step %d", step)
@@ -838,6 +865,60 @@ class Agent:
                 tool_call_id=item.get("tool_call_id"),
             ))
         return messages
+
+    def _trace_token_breakdown(
+        self,
+        messages: list[LLMMessage],
+        tools: list[LLMToolSchema],
+        *,
+        injected_messages: list[LLMMessage] | None = None,
+    ) -> dict[str, int]:
+        """Estimate why a provider request is large without claiming billing truth.
+
+        ``system_tokens`` excludes the Repo Map estimate so the diagnostic
+        partitions can be added without double-counting. ``provider_usage`` on
+        the finished model span remains the source of actual provider usage.
+        """
+
+        def as_dict(message: LLMMessage) -> dict:
+            data = {"role": message.role, "content": message.content}
+            if message.tool_call_id:
+                data["tool_call_id"] = message.tool_call_id
+            return data
+
+        message_dicts = [as_dict(message) for message in messages]
+        system_message_tokens = (
+            estimate_message_tokens(message_dicts[0]) if message_dicts else 0
+        )
+        repo_map_tokens = estimate_tokens(getattr(self, "_repo_map_cache", ""))
+        repo_map_tokens = min(repo_map_tokens, system_message_tokens)
+        system_tokens = max(0, system_message_tokens - repo_map_tokens)
+        tool_schema_tokens = estimate_tool_schemas_tokens(tools)
+
+        injected_dicts = [
+            as_dict(message) for message in (injected_messages or [])
+        ]
+        injected_tokens = estimate_messages_tokens(injected_dicts)
+        non_system_tokens = estimate_messages_tokens(message_dicts[1:])
+        history_tokens = max(0, non_system_tokens - injected_tokens)
+        pending_tokens = 0
+        context_tokens = history_tokens + injected_tokens + pending_tokens
+        estimated_input_tokens = (
+            system_tokens
+            + repo_map_tokens
+            + tool_schema_tokens
+            + context_tokens
+        )
+        return {
+            "system_tokens": system_tokens,
+            "tool_schema_tokens": tool_schema_tokens,
+            "repo_map_tokens": repo_map_tokens,
+            "history_tokens": history_tokens,
+            "context_tokens": context_tokens,
+            "pending_tokens": pending_tokens,
+            "injected_tokens": injected_tokens,
+            "estimated_input_tokens": estimated_input_tokens,
+        }
 
     def _format_action_for_history(self, action: Action) -> str:
         """把 Action 格式化为 assistant 消息，写入对话历史。"""
