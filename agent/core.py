@@ -30,6 +30,7 @@ from agent.event_log import EventLog
 from agent.loop_detector import LoopDetector, LoopSeverity, snapshot_repository
 from context.history import ConversationHistory
 from context.repo_map import RepoMap
+from context.repository_state import repository_fingerprint
 from context.token_budget import TokenBudget
 from agent.prompt import (
     build_system_prompt,
@@ -37,6 +38,7 @@ from agent.prompt import (
     reflection_loop_detected,
     reflection_no_edit,
     reflection_test_failed,
+    step_budget_warning,
 )
 from agent.task import (
     Action, ActionType, Event, EventType,
@@ -107,7 +109,7 @@ class AgentConfig:
     llm_retry_jitter: float = 0.0          # 随机抖动比例（0=关闭）
     stream: bool = False                   # 是否启用流式输出
     stream_callback: object = None         # StreamCallback，最终回答流式回调
-    thought_callback: object = None        # StreamCallback，推理过程流式回调（推理模型专用）
+    thought_callback: object = None        # StreamCallback，推理模型专用
     confirm_dangerous: bool = False        # 是否对危险命令要求用户确认
     confirm_callback: object = None        # ConfirmCallback，None=跳过确认
     cancel_event: object = None            # threading.Event-like；set 后协作取消
@@ -248,6 +250,13 @@ class Agent:
             logger.debug("Step %d/%d", step, task.max_steps)
 
             messages = self._build_messages(history, token_budget, repo_map)
+            # Step 上限是最坏情况熔断器；最后三轮给模型显式收尾信号，避免突然硬切。
+            remaining_steps = task.max_steps - step + 1
+            if remaining_steps <= 3:
+                messages.append(LLMMessage(
+                    role="user",
+                    content=step_budget_warning(remaining_steps),
+                ))
             tools = self._registry.get_schemas()
             llm_started = time.perf_counter()
             llm_span = log.log_trace(
@@ -913,29 +922,9 @@ class Agent:
         except Exception:
             return None
 
-    def _get_repo_state(self, repo_path: str) -> str | None:
-        """Return a baseline-comparable snapshot of repository changes."""
-        import subprocess
-        try:
-            status = subprocess.run(
-                ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=repo_path,
-            )
-            diff = subprocess.run(
-                ["git", "diff", "--binary", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=repo_path,
-            )
-            if status.returncode != 0 or diff.returncode != 0:
-                return None
-            return status.stdout + "\0--diff--\0" + diff.stdout
-        except Exception:
-            return None
+    def _get_repo_state(self, repo_path: str) -> str:
+        """返回 HEAD + working-tree 指纹，提交后的 clean 状态也能与基线区分。"""
+        return repository_fingerprint(repo_path)
 
 
 def _default_executor(
