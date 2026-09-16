@@ -1,71 +1,14 @@
 {
-  "variants": {
-    "no_repo_map": {
-      "runs": 4,
-      "observed_solved": 3,
-      "observed_verifier_passes": 4,
-      "observed_false_finishes": 0,
-      "mean_first_target_read_step": 4,
-      "mean_files_read": 1.75,
-      "mean_search_text_calls": 0,
-      "mean_find_files_calls": 0,
-      "mean_input_tokens": 62551.75,
-      "mean_total_tokens": 65055.25,
-      "mean_cached_input_tokens": 26048,
-      "mean_latency_seconds": 70.44753804325006,
-      "mean_repo_map_build_seconds": 2.633500116644427e-06,
-      "mean_repo_map_incremental_update_seconds": 0.0
-    },
-    "static_repo_map": {
-      "runs": 4,
-      "observed_solved": 0,
-      "observed_verifier_passes": 4,
-      "observed_false_finishes": 0,
-      "mean_first_target_read_step": 2,
-      "mean_files_read": 1.5,
-      "mean_search_text_calls": 0,
-      "mean_find_files_calls": 0.25,
-      "mean_input_tokens": 92885.25,
-      "mean_total_tokens": 96704.25,
-      "mean_cached_input_tokens": 39776,
-      "mean_latency_seconds": 96.96836330624996,
-      "mean_repo_map_build_seconds": 2.2972842994999496,
-      "mean_repo_map_incremental_update_seconds": 0.0
-    },
-    "query_aware_repo_map": {
-      "runs": 4,
-      "observed_solved": 3,
-      "observed_verifier_passes": 4,
-      "observed_false_finishes": 0,
-      "mean_first_target_read_step": 2.25,
-      "mean_files_read": 4.75,
-      "mean_search_text_calls": 0,
-      "mean_find_files_calls": 0,
-      "mean_input_tokens": 64452,
-      "mean_total_tokens": 67349.25,
-      "mean_cached_input_tokens": 26752,
-      "mean_latency_seconds": 70.39974505924994,
-      "mean_repo_map_build_seconds": 2.0738852277499973,
-      "mean_repo_map_incremental_update_seconds": 0.0
-    },
-    "incremental_query_aware_repo_map": {
-      "runs": 4,
-      "observed_solved": 4,
-      "observed_verifier_passes": 4,
-      "observed_false_finishes": 0,
-      "mean_first_target_read_step": 2.3333333333333335,
-      "mean_files_read": 3.5,
-      "mean_search_text_calls": 0,
-      "mean_find_files_calls": 0,
-      "mean_input_tokens": 57405,
-      "mean_total_tokens": 59541,
-      "mean_cached_input_tokens": 21728,
-      "mean_latency_seconds": 64.71446809549997,
-      "mean_repo_map_build_seconds": 1.4645104209998863,
-      "mean_repo_map_incremental_update_seconds": 0.7212169154999515
-    }
-  },
-  "run_count": 16,
-  "execution_status": "executed",
-  "claim_boundary": "Observed results are a small real-model sample. They are not a stable pass@1 estimate and must not be generalized beyond this fixture/model run."
+  "execution_status": "not_executed",
+  "real_model_executed": false,
+  "reason": "provider_credentials_not_available_in_ci",
+  "variants": [
+    "no_repo_map",
+    "static_repo_map",
+    "query_aware_repo_map",
+    "incremental_query_aware_repo_map"
+  ],
+  "case_count": 4,
+  "rows": 0,
+  "claim_boundary": "This artifact proves the production-path ablation harness and frozen fixtures exist. It does not provide Coding Agent success-rate evidence."
 }

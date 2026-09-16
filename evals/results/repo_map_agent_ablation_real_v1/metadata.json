@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "runner_revision": "840f158f10b7cda6298870532ee6fdf5aef11598",
+  "runner_revision": "af7160a15e508e379db74ed7c7e84316ee86b906",
   "fixture_sha256": "44688bb0782a2351f682d3dfd9241b3047524b612d7cfc5d321772882c25304d",
-  "python": "3.11.16",
-  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "python": "3.11.0rc1",
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
   "case_count": 4,
   "cases": [
     "serializer-envelope-version",
@@ -20,10 +20,12 @@
   "max_steps": 12,
   "budget_tokens": 40000,
   "require_tests": false,
-  "evidence_level": "Real-model Small Sample (infrastructure only; not executed)",
-  "real_model_executed": false,
-  "execution_status": "not_executed",
-  "not_executed_reason": "provider_credentials_not_available_in_ci",
-  "repetitions": 0,
-  "run_count": 0
+  "evidence_level": "Real-model Small Sample",
+  "real_model_executed": true,
+  "execution_status": "executed",
+  "provider": "openai",
+  "protocol": "auto",
+  "model": "deepseek-v4.1-flash",
+  "repetitions": 1,
+  "run_count": 16
 }
