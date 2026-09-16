@@ -1,5 +1,6 @@
 """Regression tests for completion verification and infrastructure aborts."""
 
+import subprocess
 from types import SimpleNamespace
 
 from agent.core import Agent, AgentConfig
@@ -8,7 +9,7 @@ from agent.task import (
     Action, ActionType, EventType, RunStatus, Task, ToolCall, infer_completion_requirements,
 )
 from llm.base import MockBackend
-from tools.base import FailingTool, NoopTool, ToolRegistry
+from tools.base import BaseTool, FailingTool, NoopTool, ToolRegistry, ToolResult
 
 
 def _tool_action(name: str) -> Action:
@@ -150,6 +151,92 @@ def test_finish_rejected_when_required_test_never_run(tmp_path):
 
     assert result.status == RunStatus.FAILED
     assert "no test tool" in (result.error or "")
+
+
+def test_finish_allowed_when_required_write_was_committed(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "value.txt"
+    target.write_text("before\n", encoding="utf-8")
+    for command in (
+        ("git", "init", "-q"),
+        ("git", "config", "user.email", "forge-agent-test@example.invalid"),
+        ("git", "config", "user.name", "Forge Agent Test"),
+        ("git", "add", "value.txt"),
+        ("git", "commit", "-qm", "baseline"),
+    ):
+        subprocess.run(command, cwd=repo, check=True, capture_output=True, text=True)
+
+    class CommitWriteTool(BaseTool):
+        @property
+        def name(self) -> str:
+            return "file_write"
+
+        @property
+        def description(self) -> str:
+            return "write and commit a fixture change"
+
+        @property
+        def parameters_schema(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        def execute(self, params: dict) -> ToolResult:
+            target.write_text("after\n", encoding="utf-8")
+            subprocess.run(("git", "add", "value.txt"), cwd=repo, check=True)
+            subprocess.run(
+                ("git", "commit", "-qm", "agent change"),
+                cwd=repo,
+                check=True,
+            )
+            return ToolResult(success=True, output="written and committed")
+
+    task = Task(
+        description="change value.txt",
+        repo_path=str(repo),
+        max_steps=2,
+        require_changes=True,
+    )
+    log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
+    backend = MockBackend([_tool_action("file_write"), _finish_action()])
+    try:
+        result = Agent(
+            backend,
+            ToolRegistry().register(CommitWriteTool()),
+            AgentConfig(),
+        ).run(task, log)
+    finally:
+        log.close()
+
+    assert result.status == RunStatus.SUCCESS
+    assert target.read_text(encoding="utf-8") == "after\n"
+
+
+def test_step_budget_warning_is_ephemeral_and_counts_down(tmp_path):
+    reflections = [
+        Action(action_type=ActionType.REFLECTION, thought=f"reflect {index}")
+        for index in range(3)
+    ]
+    result, backend, _ = _run(
+        tmp_path,
+        [*reflections, _finish_action()],
+        ToolRegistry(),
+    )
+
+    assert result.status == RunStatus.SUCCESS
+    assert len(backend.received_messages) == 4
+    assert not any(
+        "[STEP BUDGET]" in message.content
+        for message in backend.received_messages[0]
+    )
+
+    for messages, remaining in zip(backend.received_messages[1:], (3, 2, 1)):
+        warnings = [
+            message.content
+            for message in messages
+            if "[STEP BUDGET]" in message.content
+        ]
+        assert len(warnings) == 1
+        assert f"You have {remaining} model step" in warnings[0]
 
 
 def test_infer_completion_requirements_for_coding_task():
