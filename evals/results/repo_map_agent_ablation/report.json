@@ -1,0 +1,14 @@
+{
+  "execution_status": "not_executed",
+  "real_model_executed": false,
+  "reason": "provider_credentials_not_available_in_ci",
+  "variants": [
+    "no_repo_map",
+    "static_repo_map",
+    "query_aware_repo_map",
+    "incremental_query_aware_repo_map"
+  ],
+  "case_count": 4,
+  "rows": 0,
+  "claim_boundary": "This artifact proves the production-path ablation harness and frozen fixtures exist. It does not provide Coding Agent success-rate evidence."
+}
