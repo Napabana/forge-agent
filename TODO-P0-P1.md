@@ -1,15 +1,12 @@
 # Forge Agent P0/P1 当前状态
 
-> 状态基线：2026-09-16。P1-4 Failure Harness 已在 `dev` 完成实现收口；代码实现基线为
-> `aeac887b61d4e463dd47e2f4d270ce0f547072f3`，最终交接以当前 `dev` 最新 HEAD 为准。
-> 历史过程见 [`docs/README.md`](docs/README.md)。
+> 状态基线：2026-09-16。P0/P1 主线已完成收口；P1-6 Evidence Pack 已落地并完成本地离线回归与全量 pytest 验证。最终交接以当前 `dev` 最新 HEAD 为准。
+> 历史过程见 [`docs/README.md`](docs/README.md)，统一证据入口见 [`docs/evidence/README.md`](docs/evidence/README.md)。
 
 状态定义：`DONE` 已有代码与对应回归覆盖；`PARTIAL` 核心能力存在但仍有明确缺口；
 `TODO` 尚未实施；`DEFERRED` 已有意延后，不属于当前主线验收。
 
-> 测试说明：P1-4 新增 deterministic offline failure regression，但当前 GitHub connector 无仓库执行环境，
-> 且容器无法解析 `github.com`，因此本轮远程会话没有真正执行 pytest。用户 pull 后必须按文末命令本地验证；
-> 任一 P1-4/P0-2/P0-3 回归失败都应立即 reopen 对应条目，禁止把“测试代码已提交”写成“测试已通过”。
+> 测试说明：P1-6 收口后，用户已在本地执行 Evidence Pack 自检、Failure Harness、Trace/Runner、Context/Repo Map benchmark reader 与全量 `pytest`，并确认全部通过。本文件不虚构具体 passed 数量；若未来回归失败，应按失败节点 reopen 对应条目。
 
 ## 状态总览
 
@@ -23,7 +20,7 @@
 | P1-3 Session 加固 | DONE | 并发占用、恢复与共享历史边界已有实现和测试 |
 | P1-4 Failure Harness / deterministic failure injection | DONE | Provider/Hook/Permission/Tool/Cancel/Context/termination/acceptance/delivery 已有默认离线 deterministic regression；无第二套 Agent loop |
 | P1-5 Repo Map 核心能力 | DONE | query-aware 排序、同 run 写后刷新和正式消融已完成 |
-| P1-6 面试证据包 | PARTIAL | 真实 PR、Trace、报告齐备，统一可复现入口与叙事仍可精简 |
+| P1-6 面试证据包 | DONE | Evidence Index、默认离线校验入口、Resume Claim→Evidence Mapping 与声明边界已完成并通过本地回归 |
 
 ## P0-1：`prepare_next_turn` 与共享历史边界 — DONE
 
@@ -164,7 +161,7 @@ EventLog / Trace v2 / RunResult
 - LLMBackend 契约要求返回 `LLMResponse`；所谓 malformed/empty response 在现有 abstraction 中以 provider parser exception 注入，不新增“返回任意坏对象”的正式 Backend 契约。
 - isolate sandbox preflight 原始 orchestrator `RunResult` 仍是历史结构；产品 `ExecutionRunner` composition root 在 post-orchestrate 边界补齐既有 `infrastructure_error` taxonomy，没有重写 orchestrator 生命周期。
 - 本轮没有新增 failure CLI/eval report，因为 pytest 已能表达 correctness source；避免维护第二套结果框架。
-- 本轮远程 pytest **未执行**。若用户本地验证失败，P1-4 状态立即改回 PARTIAL。
+- P1-6 收口前后用户已完成本地回归；当前 P1-4 状态保持 DONE。
 
 证据：`agent/runner.py`、`tests/test_failure_harness.py`、`tests/test_failure_harness_isolate.py`、
 `tests/test_tool_lifecycle_p0_2.py`、`tests/test_llm_retry_improvements.py`、`tests/test_prepare_next_turn.py`、
@@ -178,13 +175,19 @@ EventLog / Trace v2 / RunResult
 
 边界：cache identity、shell/git 写入/删除/重命名感知、parser fallback 契约属于条件执行尾项，不影响本阶段 DONE。
 
-## P1-6：自动 PR 与面试证据包 — PARTIAL
+## P1-6：面试证据包 — DONE
 
-已完成真实 PR、独立 verifier、Trace、失败样本与 benchmark 报告。剩余工作只做证据产品化：
+已完成：
 
-- [ ] 提供一个可重复执行、默认离线的 evidence index / 命令入口。
-- [ ] 将实现事实、单样本案例、正式消融、仍未知拆成稳定面试表述。
-- [ ] 不把一次真实 PR、`n=3` Agent ablation 或 fixture benchmark 外推为总体成功率。
+- [x] `docs/evidence/README.md` 建立统一 Evidence Index，将 Claim 回链到实现、回归、冻结 benchmark、真实模型小样本或真实 E2E case。
+- [x] `python -m evals.verify_evidence_pack` 提供默认离线、只读复现入口；不调用 Provider/GitHub，不重跑付费实验，不改 fixture/result/repo。
+- [x] Evidence 分类固定为 Implementation Fact、Deterministic Offline Regression、Frozen Offline Benchmark、Real-model Small Sample、Real End-to-End Case。
+- [x] Resume Claim → Evidence Mapping 与“面试可说 / 不可说”边界已整理。
+- [x] Context B1、Repo Map、B2 v3、真实 PR #5 的数字与限制均来自现有冻结结果，不新增或美化 benchmark 数字。
+- [x] 总体 Agent success rate、production-ready、100% 自动 PR、`n=3` 稳定收益等无证据主张明确标为 `INSUFFICIENT EVIDENCE`。
+- [x] 用户已执行 Evidence Pack 自测、Failure Harness、Trace/Runner、Context/Repo Map reader 与全量 pytest，并确认全部通过。
+
+证据：`docs/evidence/README.md`、`evals/verify_evidence_pack.py`、`tests/test_evidence_pack.py`、`docs/changes/2026-09-16/P1-6-Evidence-Pack改动内容.md`。
 
 ## 明确延期或不在当前计划
 
@@ -195,44 +198,27 @@ EventLog / Trace v2 / RunResult
 - `DEFERRED`：tree-structured session、自动 merge、无人监督发布。
 - `DEFERRED`：为提升指标而静默重跑、调整 benchmark 或扩大付费调用范围。
 
-## 下一批建议顺序
+## P0/P1 阶段结论
 
-1. P1-6：整理可重复、不过度宣称的面试证据入口；不要提前把 P1-4 failure case 包装成 benchmark 成功率。
-2. P1-5 小尾项：仅在最小测试能稳定复现 cache / shell/git stale-map 问题时处理。
+P0-1 至 P0-3、P1-1 至 P1-6 均为 `DONE`。当前阶段不再为了简历继续扩 Agent 功能面；后续只有在真实使用或新 benchmark 暴露明确缺口时，才重新打开对应条目。Repo Map cache identity、shell/git stale-map 等仍属于条件执行尾项，不阻塞本阶段收口。
 
-## P1-4 本地验证
+## 本地验证基线
 
-先跑默认离线 failure regression：
-
-```bash
-pytest tests/test_failure_harness*.py -q
-```
-
-然后跑生命周期 / Runner / Trace / 四入口回归：
+P1-6 收口验证入口：
 
 ```bash
-pytest tests/test_tool_lifecycle_p0_2.py \
-  tests/test_harness.py \
-  tests/test_runner.py \
+python -m evals.verify_evidence_pack
+
+pytest -q \
+  tests/test_evidence_pack.py \
+  tests/test_failure_harness.py \
+  tests/test_failure_harness_isolate.py \
   tests/test_trace_v2.py \
-  tests/test_agent_completion_guards.py \
-  tests/test_compaction.py \
-  tests/test_chat.py \
-  tests/test_api.py \
-  tests/test_github_issue_delivery.py -q
-```
+  tests/test_runner.py \
+  tests/test_context_policy_benchmark.py \
+  tests/test_repo_map_ablation.py
 
-再跑冻结 Context Policy reader：
-
-```bash
-pytest tests/test_context_policy_benchmark.py \
-  tests/test_context_policy_agent_ablation.py -q
-```
-
-最后：
-
-```bash
 pytest -q
 ```
 
-本轮远程会话没有执行上述 pytest。若本地测试失败，保留真实失败输出并 reopen P1-4/P0-2/P0-3；禁止修改 B1/B2 fixture 或历史 `evals/results` 规避回归。
+用户已确认上述要求的验证全部通过；本状态文件不记录未经提供的 passed 数量或耗时。

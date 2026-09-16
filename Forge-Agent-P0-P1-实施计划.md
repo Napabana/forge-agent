@@ -1,7 +1,7 @@
 # Forge Agent P0/P1 实施计划（当前版）
 
 > 更新基线：2026-09-16。当前状态的唯一清单是 [`TODO-P0-P1.md`](TODO-P0-P1.md)；
-> 本文只说明已完成主线、下一批实施顺序和明确延期项。
+> 本文说明已完成主线、证据基线和明确延期项。统一证据入口见 [`docs/evidence/README.md`](docs/evidence/README.md)。
 
 ## 1. 当前结论
 
@@ -17,9 +17,10 @@ Forge Agent 当前已经完成这一阶段的三个 P0 生命周期基础项：
 - P1-2：Context Compaction；
 - P1-3：Session 加固；
 - P1-4：Failure Harness / deterministic failure injection；
-- P1-5：Repo Map 核心能力。
+- P1-5：Repo Map 核心能力；
+- P1-6：Evidence Pack / 面试证据产品化。
 
-当前主线下一批只剩 P1-6 面试证据包产品化；Repo Map 小尾项继续条件执行，不提前扩成功能开发。
+P0/P1 主线已经整体收口。当前不再为了简历继续扩 Agent 功能；Repo Map 小尾项及其它延期能力只在真实使用或新 benchmark 暴露明确缺口时重新打开。
 
 P0-2 冻结的中央 Tool lifecycle 仍保持：
 
@@ -48,9 +49,7 @@ cancel check
 
 Trace 继续使用 P0-3 schema；P1-4 没有增加 Trace v3 或 failure-only event family。
 
-> 验证状态：P1-4 回归代码已提交，但当前 GitHub connector 无仓库执行环境，容器也无法解析 `github.com`，
-> 因此本轮远程会话未真正执行 pytest。用户 pull 后运行第 4 节命令做最终本地验证；若出现失败，立即 reopen P1-4，
-> 不得修改 B1/B2 fixture 或历史 `evals/results` 规避失败。
+> 验证状态：P1-6 收口后，用户已在本地执行 Evidence Pack 自检、Failure Harness、Trace/Runner、Context/Repo Map benchmark reader 与全量 `pytest`，并确认全部通过。本文不补写未经提供的具体 passed 数量或耗时。
 
 ## 2. 已完成主线
 
@@ -105,71 +104,60 @@ ExecutionRunner
 - Provider、Hook、Permission、Tool/runtime、Cancel、prepare/context、completion/termination、acceptance/delivery、Trace correlation/redaction 均形成固定 regression contract。
 - 没有新增 production `FailureScenario` framework；pytest 是 correctness source，避免维护第二套 eval lifecycle。
 
-结论：P1-3、P1-4 已完成。P1-6 仍为 `PARTIAL`。
+结论：P1-3、P1-4 已完成。
 
-## 3. 下一批执行顺序
+### 2.5 Evidence Pack
 
-### Batch A：证据包产品化（P1-6）
+P1-6 已完成最小产品化，不新增 Agent 功能面：
 
-目标：把已经存在的实现、测试和实验整理成可复现、不过度宣称的面试证据，而不是继续给 Forge Agent 加新功能。
+- `docs/evidence/README.md` 建立统一 Evidence Index；
+- 证据固定分为 Implementation Fact、Deterministic Offline Regression、Frozen Offline Benchmark、Real-model Small Sample、Real End-to-End Case；
+- `python -m evals.verify_evidence_pack` 提供默认离线、只读校验入口；
+- `tests/test_evidence_pack.py` 将 Evidence Pack 一致性纳入 pytest；
+- Resume Claim → Evidence Mapping 与“可说 / 不可说”边界已形成；
+- B1、Repo Map、B2 v3、真实 PR #5 的数字只引用既有冻结结果；
+- 总体 Agent success rate、production-ready、100% 自动 PR、`n=3` 稳定收益等无证据主张保持 `INSUFFICIENT EVIDENCE`。
 
-开始 P1-6 时先审计现有证据，再决定是否需要很小的索引/脚本：
+结论：P1-6 已完成，P0/P1 阶段整体收口。
 
-1. 盘点可直接引用的 implementation evidence：Runner、Tool lifecycle、Trace v2、Context Policy、Repo Map、Failure Harness、GitHub delivery；
-2. 将证据分成：实现事实、确定性离线回归、冻结 fixture benchmark、小样本真实模型实验、单个真实 PR 案例；
-3. 为每类主张给出唯一可复现入口和输出位置；优先复用现有 pytest/evals，不新造 benchmark framework；
-4. 把“能证明什么 / 不能证明什么”写清，禁止把测试覆盖、单案例或 `n=3` 外推为总体成功率；
-5. 最终形成可直接用于简历项目深挖和面试回答的 evidence index。
+## 3. 阶段收口后的执行原则
 
-P1-6 不应重新打开 P1-4 failure semantics，也不应添加新 Provider、新 Agent 算法、多 Agent 或 Resource Manager。
+P0/P1 没有新的必做 Batch。后续工作按以下优先级处理：
 
-### Batch B：Repo Map 小尾项（条件执行）
+1. 面试与简历直接复用 `docs/evidence/README.md`，不为叙事新增功能或制造新数字；
+2. 若真实使用或新 benchmark 暴露明确缺口，再 reopen 对应 P0/P1 条目；
+3. Repo Map cache identity、shell/git stale-map 等只在最小测试能稳定复现时处理；
+4. 任何新的真实模型实验必须先冻结模型、fixture、预算、重复数和输出目录；
+5. 不把单元测试、fixture pass rate、一次 PR 或小样本运行包装为总体成功率。
 
-仅在最小测试能稳定复现时处理：
+## 4. P0/P1 收口验证命令
 
-- cache identity 未包含 Git HEAD/working-tree fingerprint 导致错误复用；
-- shell/git 写入、删除或重命名导致同 run map 陈旧；
-- parser fallback 导致 Agent 把陈旧 map 当成强事实。
-
-不为追求更漂亮指标追加付费实验。
-
-## 4. P1-4 本地验证命令
-
-用户 pull 后先运行默认离线 Failure Harness：
+Evidence Pack 默认离线校验：
 
 ```bash
-pytest tests/test_failure_harness*.py -q
+python -m evals.verify_evidence_pack
 ```
 
-然后运行生命周期 / Runner / Trace / 四入口回归：
+核心 closure regression：
 
 ```bash
-pytest tests/test_tool_lifecycle_p0_2.py \
-  tests/test_harness.py \
-  tests/test_runner.py \
+pytest -q \
+  tests/test_evidence_pack.py \
+  tests/test_failure_harness.py \
+  tests/test_failure_harness_isolate.py \
   tests/test_trace_v2.py \
-  tests/test_agent_completion_guards.py \
-  tests/test_compaction.py \
-  tests/test_chat.py \
-  tests/test_api.py \
-  tests/test_github_issue_delivery.py -q
+  tests/test_runner.py \
+  tests/test_context_policy_benchmark.py \
+  tests/test_repo_map_ablation.py
 ```
 
-再确认冻结 Context Policy reader：
-
-```bash
-pytest tests/test_context_policy_benchmark.py \
-  tests/test_context_policy_agent_ablation.py -q
-```
-
-最后：
+完整回归：
 
 ```bash
 pytest -q
 ```
 
-第一组只用 fake provider/tool/hook/permission/runtime 和临时目录，默认不访问在线模型、不依赖 Docker、不依赖 GitHub。
-本轮远程会话没有执行这些命令；本地失败时保留原始输出并 reopen 对应阶段。
+用户已确认上述要求的验证全部通过。若未来失败，保留原始失败输出并 reopen 对应阶段；不得修改 B1/B2 fixture 或历史 `evals/results` 规避失败。
 
 ## 5. P1-4 failure contract 基线
 
@@ -204,6 +192,7 @@ pytest -q
 | Repo Map retrieval | `evals/results/repo_map_ablation/report.json` | 固定 12-case 集上 MRR/recall 改善 |
 | Runner/PR | Trace、verifier、PR 记录 | 一个真实案例完成确定性交付闭环 |
 | termination | B2 tests、Failure Harness、Trace | completion rejection、INCOMPLETE、FAILED、GAVE_UP、CANCELED 已区分 |
+| Evidence Pack | `docs/evidence/README.md`、`evals/verify_evidence_pack.py`、`tests/test_evidence_pack.py` | 每条简历/面试主张可回链到对应证据类型与限制 |
 
 ## 7. 明确延期与非目标
 

@@ -72,22 +72,26 @@ python -m pytest -q
 - `runtime/worktree.py`、`agent/orchestrate.py`：隔离 worktree、成果检测和保留策略。
 - `tools/`：具体工具与 runtime 适配。
 - `tests/test_failure_harness.py`、`tests/test_failure_harness_isolate.py`：P1-4 默认离线 deterministic failure matrix；fake 只注入故障，不实现第二套 Agent loop。
+- `docs/evidence/README.md`：P1-6 统一 Evidence Index，记录 Claim→Evidence→Result→Limitation 与简历/面试表述边界。
+- `evals/verify_evidence_pack.py`：P1-6 默认离线只读证据校验入口。
 
 面试表述边界：
 
 - 同步的是 `Agent.run` 内核，asyncio 主要用于编排。
-- Worktree 隔离 checkout/index/branch；Docker 隔离进程、网络、资源和根文件系统。
+- Worktree 隔离 checkout/index/branch；Docker 隔离进程、网络、资源和根文件系统，但不能表述为“完全安全”。
 - cooperative cancellation 不等于能强杀任意正在执行的同步 Tool/provider/callback；已开始的调用在下一安全边界停止。
 - PostToolUse 是已发生 Tool 的观察边界；post-hook failure 不覆盖真实 ToolResult。
 - 保留 worktree 不等于已经 commit、merge、push 或创建 PR。
-- EventLog 是审计记录，不是确定性重放。
+- EventLog 是审计记录，不是确定性执行重放。
 - Trace v2 是 Forge 自有最小 schema，不是完整 OpenTelemetry implementation。
 - 本地 token breakdown 是诊断 estimate；provider usage 才是 provider 返回的真实 usage。
 - Failure Harness 证明的是冻结 failure contract 可 deterministic/offline 回归，不是线上可靠性、任务成功率或真实 Provider SLA。
+- B1 是 frozen fixture benchmark；B2 v3 只有 9 个真实模型 run；真实 GitHub delivery 当前正式案例只有 1 个。三者都不能外推总体 Agent success rate。
+- Repo Map `71.26×` 只对应冻结 reference-count 子步骤性能实验，不是 Agent 端到端提速。
 
 ## 当前状态（2026-09-16）
 
-当前唯一状态清单：`TODO-P0-P1.md`。当前实施顺序：`Forge-Agent-P0-P1-实施计划.md`。
+当前唯一状态清单：`TODO-P0-P1.md`。当前实施说明：`Forge-Agent-P0-P1-实施计划.md`。
 
 已完成：
 
@@ -99,10 +103,9 @@ python -m pytest -q
 - P1-3：Session 加固。
 - P1-4：Failure Harness / deterministic failure injection。
 - P1-5：Repo Map 核心能力与正式消融。
+- P1-6：Evidence Pack / 面试证据产品化。
 
-仍为 `PARTIAL`：
-
-- P1-6：面试证据包产品化。
+**P0/P1 主线已整体 DONE。**
 
 明确延期：完整 Resource Manager、强制终止任意同步 Tool 的通用 async runtime 重写、hidden-verifier feedback、C6 `context_recall(event_ref)`、MCP、多 Agent、multi-tool call、tree-structured session、自动 merge/无人监督发布。
 
@@ -159,54 +162,66 @@ python -m pytest -q
 
 完整说明：`docs/changes/2026-09-16/P1-4-Failure-Harness收口改动内容.md`。
 
+### P1-6 Evidence Pack 当前事实
+
+- Evidence Index：`docs/evidence/README.md`。
+- 默认只读离线入口：`python -m evals.verify_evidence_pack`。
+- Evidence 分类：Implementation Fact / Deterministic Offline Regression / Frozen Offline Benchmark / Real-model Small Sample / Real End-to-End Case。
+- Context B1：7 cases × 3 variants = 21 frozen rows；hybrid 7/7，只代表 fixture benchmark。
+- Repo Map：12-case commit-history benchmark；MRR 0.097→0.319，预算内 target recall 0.365→0.635；reference-count 71.26× 仅代表该子步骤。
+- B2 v3：`deepseek-v4.1-flash`，3 cases × 3 variants × 1 run = 9 real-model runs；非 deterministic，无 repeat/seed。
+- GitHub delivery：当前正式可引用真实案例为 1 个 Issue→merged PR；不能计算或宣称总体自动 PR 成功率。
+- Resume Claim → Evidence Mapping 已落文档；无证据主张标记 `INSUFFICIENT EVIDENCE`。
+
+完整说明：`docs/evidence/README.md`、`docs/changes/2026-09-16/P1-6-Evidence-Pack改动内容.md`。
+
 ### 当前分支与远程事实
 
 - 远程工作分支：`dev`。
-- 用户确认的 P0-2 冻结提交：`1b567f5630c5176d09d274ecd1499f20b32612ef`。
-- P1-4 代码实现基线：`aeac887b61d4e463dd47e2f4d270ce0f547072f3`；最终交接以当前 `dev` 最新 HEAD 为准。
-- 本轮通过 GitHub connector 直接提交到 `dev`；用户本地尚未 pull/执行 P1-4 pytest。
+- P1-6 Evidence Pack 实现提交：`915850016cd43cdc289732540db04628eacd6794`；后续测试契约修正已继续推进 `dev`，最终交接始终以当前最新 HEAD 为准。
+- 用户已在本地完成 P1-6 要求的 Evidence Pack、Failure Harness、Trace/Runner、benchmark reader 与全量 pytest，并确认全部通过。
 - `config/default.yaml` 未修改。
 - B1/B2 fixture 未修改，`evals/results` 未重写。
-- 当前会话无法真正运行 pytest：容器 `git clone` 失败于 `Could not resolve host: github.com`，仓库也没有可用 `.github/workflows`。不得把“测试代码已补齐”写成“测试通过”。
+- GitHub connector 当前仍不能直接执行用户本机 pytest；本轮 DONE 判断基于用户明确提供的本地验证结果，不虚构测试数量或耗时。
 
 ## 已知问题与下一步
 
-P1-4 已实现收口，下一批只做 P1-6，不提前扩 Agent 功能：
+P0/P1 主线已整体收口，不再把“继续加功能”作为默认下一步。
 
-1. 先盘点已有 implementation/test/eval/PR evidence，不先写新 benchmark。
-2. 把实现事实、deterministic offline regression、fixture benchmark、真实模型小样本、单个真实 PR 案例分开。
-3. 为每类主张给出可复现命令、源文件和输出位置。
-4. 明确每条证据能证明和不能证明的范围；不把 coverage 或单案例外推为成功率。
-5. 优先做 evidence index / 面试叙事，除非发现真实证据缺口，否则不扩功能。
+下一阶段优先：
 
-P1-6 不重新打开 P1-4 failure semantics；若本地 P1-4 pytest 失败，则先 reopen P1-4，修复后再进入 P1-6。
+1. 简历与面试直接使用 `docs/evidence/README.md` 的 Claim→Evidence Mapping；
+2. 只保留可回链到实现、测试、冻结 benchmark 或真实案例的技术主张；
+3. 不把一次 PR、fixture pass rate、单元测试数量或 B2 `n=3` 包装成总体成功率；
+4. 只有真实使用或新 benchmark 暴露明确缺口时，才 reopen 对应 P0/P1 条目；
+5. Repo Map cache identity / shell-git stale-map 等保持条件执行尾项，不阻塞当前阶段。
 
 不要为了简历堆功能。每个新增主张必须能指向实现、测试或可复现实验；测试覆盖率不等于 Agent 真实任务成功率。
 
-## P1-4 本地验证
+## P0/P1 收口验证
 
-用户 pull 后先运行：
+默认离线证据校验：
 
 ```bash
-pytest tests/test_failure_harness*.py -q
+python -m evals.verify_evidence_pack
+```
 
-pytest tests/test_tool_lifecycle_p0_2.py \
-  tests/test_harness.py \
-  tests/test_runner.py \
+核心 closure regression：
+
+```bash
+pytest -q \
+  tests/test_evidence_pack.py \
+  tests/test_failure_harness.py \
+  tests/test_failure_harness_isolate.py \
   tests/test_trace_v2.py \
-  tests/test_agent_completion_guards.py \
-  tests/test_compaction.py \
-  tests/test_chat.py \
-  tests/test_api.py \
-  tests/test_github_issue_delivery.py -q
-
-pytest tests/test_context_policy_benchmark.py \
-  tests/test_context_policy_agent_ablation.py -q
+  tests/test_runner.py \
+  tests/test_context_policy_benchmark.py \
+  tests/test_repo_map_ablation.py
 
 pytest -q
 ```
 
-若失败：保留原始失败输出，不修改 fixture 或历史 result；按失败节点重新打开 P1-4/P0-2/P0-3。
+用户已确认上述要求的验证全部通过。未来若失败：保留原始失败输出，不修改 fixture 或历史 result；按失败节点重新打开对应阶段。
 
 ## 每次结束：更新最后交接
 
@@ -218,26 +233,13 @@ pytest -q
 - 未提交修改、stash、分支和 remote 状态。
 - 明确的下一步或阻塞原因。
 
-### 最后交接（2026-09-16，P1-4 Failure Harness / deterministic failure injection）
+### 最后交接（2026-09-16，P1-6 Evidence Pack / P0-P1 阶段收口）
 
-- 本轮完成 P1-4 实现收口；代码基线为 `dev@aeac887b61d4e463dd47e2f4d270ce0f547072f3`，文档提交之后以 `dev` 最新 HEAD 为实际交接点。
-- 生产代码只修改 `agent/runner.py`：shared-history 首轮 prepare 复用 `Agent._prepare_next_turn`；isolate sandbox preflight 在 Runner composition root 归一为 `FAILED/infrastructure_error`。没有修改 `agent/core.py` 生命周期方向。
-- 新增 `tests/test_failure_harness.py`：deterministic scripted provider + fake hook/permission/tool/cancel，覆盖 Provider/Hook/Permission/Tool/Cancel/prepare/completion/acceptance/delivery/Trace 主矩阵。
-- 新增 `tests/test_failure_harness_isolate.py`：fake DockerRuntime + FakeWorktreeSession 验证 sandbox preflight，不访问 Docker、网络或 Provider。
-- P1-4 没有新增 production `FailureScenario` dataclass/framework；pytest fixture/helper 与断言分离已经足够，避免过度 framework。
-- P1-4 没有增加 eval CLI/report；默认回归命令为 `pytest tests/test_failure_harness*.py -q`，pytest 是 correctness source。
-- Context semantic side-call failure 继续复用 `tests/test_structured_compaction.py` 既有 fallback regression，本轮没有重开 P1-2。
-- P0-2/P0-3/B1/B2 语义与 fixture 保持不变；未修改 `config/default.yaml`，未修改 B1/B2 fixture，未重写 `evals/results`。
-- 当前会话无法真正执行 pytest：容器无法解析 `github.com`，且仓库无可用 GitHub Actions workflow。测试状态是“代码已提交，远程未执行”，不是“通过”。
-- 用户本地 pull 后必须依次执行上面的四组命令；任何 failure harness 或回归失败都应 reopen P1-4，不要修改 fixture 绕过。
-- 当前 connector 只能看到远端 `dev`；无法读取用户本地工作区 `git status` / stash，因此没有对本地未提交修改或 stash 做任何处理或断言。
-- 完整记录：`docs/changes/2026-09-16/P1-4-Failure-Harness收口改动内容.md`。
-- 下一对话 P1-6 从“盘点现有可证明的 implementation/test/eval/PR evidence，并建立不过度宣称的 evidence taxonomy”开始；不要先写新功能。
-
-### 最后交接（2026-09-16，ConversationHistory 测试契约修正）
-
-- 本轮将 `tests/test_day5.py` 中过时的滑动窗口测试改为验证 `ConversationHistory` 保留完整逻辑历史的当前语义。
-- 生产代码未修改；未修改评测 fixture 或历史结果。
-- WSL 验证通过：`python -m pytest tests/test_day5.py::TestConversationHistory::test_history_keeps_messages_beyond_max_hint -q`，结果为 `1 passed`。
-- Windows 默认 Python 缺少 pytest；未执行 commit、push 或 stash。
-- 变更日志：`docs/changes/2026-09-16/ConversationHistory测试契约修正.md`。
+- P1-6 Evidence Pack 已完成：统一 Evidence Index、只读离线校验入口、Evidence taxonomy、Resume Claim→Evidence Mapping 和“可说/不可说”边界均已落地。
+- 用户已在本地执行 P1-6 要求的 Evidence Pack 自测、Failure Harness、Trace/Runner、Context/Repo Map benchmark reader 与全量 pytest，并明确确认全部通过；未提供具体 passed 数量或耗时，因此文档不补写数字。
+- `TODO-P0-P1.md`、`Forge-Agent-P0-P1-实施计划.md`、`AGENTS.md` 已统一将 P1-6 标为 `DONE`；P0-1～P0-3、P1-1～P1-6 整体收口。
+- 本轮只更新状态/交接文档与 closure changelog；不修改 Agent runtime、B1/B2 fixture、`evals/results` 或 `config/default.yaml`。
+- P0/P1 后续默认不继续扩 MCP、Multi-Agent、parallel tools、Resource Manager 或新的 Context 策略；只有真实证据显示必要时才 reopen。
+- 简历与面试证据统一以 `docs/evidence/README.md` 为入口。Repo Map 12-case benchmark、B1 frozen fixture、B2 9-run small sample、1 个真实 merged PR 必须保持各自证据边界。
+- 当前 connector 只能确认远端 `dev`，无法读取用户本地未提交修改或 stash，因此不对本地工作区状态做额外断言。
+- 本轮更新日志：`docs/changes/2026-09-16/P1-6-Evidence-Pack收口-DONE.md`。
