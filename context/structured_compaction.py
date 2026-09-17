@@ -12,6 +12,12 @@ from context.history_evidence import (
     is_user_authored_message,
     iter_interactions,
 )
+from context.token_budget import (
+    ConservativeTokenCounter,
+    TokenBudget,
+    TokenCounter,
+    token_counter_for_model,
+)
 from llm.base import LLMBackend, LLMMessage, LLMToolSchema
 from llm.usage import TokenUsage
 
@@ -19,7 +25,7 @@ from llm.usage import TokenUsage
 _SUMMARY_TOOL_NAME = "record_context_summary"
 _MAX_SEMANTIC_ITEMS = 8
 _MAX_SEMANTIC_ITEM_CHARS = 500
-_DEFAULT_PACKET_CHARS = 60_000
+_DEFAULT_PACKET_TOKENS = 16_000
 _FRESHNESS_WARNING = (
     "Historical compacted context. Canonical Session/EventLog remain the audit source.\n"
     "Repository files, git diff/status and test results may have changed; "
@@ -77,18 +83,23 @@ class SemanticSummarizer(Protocol):
 
 
 class LLMSemanticSummarizer:
-    """复用 Forge 现有 Tool Calling 抽象传输结构化 semantic summary。"""
+    """复用 Forge Tool Calling，并让 semantic side-call 服从 Token Budget。"""
 
     def __init__(
         self,
         backend: LLMBackend,
         *,
-        max_packet_chars: int = _DEFAULT_PACKET_CHARS,
+        max_packet_tokens: int | None = None,
     ) -> None:
-        if max_packet_chars <= 0:
-            raise ValueError("max_packet_chars must be positive")
+        if max_packet_tokens is None:
+            max_packet_tokens = int(
+                getattr(backend, "semantic_packet_max_tokens", None)
+                or _DEFAULT_PACKET_TOKENS
+            )
+        if max_packet_tokens <= 0:
+            raise ValueError("max_packet_tokens must be positive")
         self.backend = backend
-        self.max_packet_chars = max_packet_chars
+        self.max_packet_tokens = max_packet_tokens
         self.call_count = 0
 
     def summarize(
@@ -98,21 +109,53 @@ class LLMSemanticSummarizer:
         old_messages: list[LLMMessage],
         recent_messages: list[LLMMessage],
         evidence: DeterministicEvidence,
+        token_budget: TokenBudget | None = None,
     ) -> SemanticSummaryResult:
+        counter = (
+            token_budget.counter
+            if token_budget is not None
+            else token_counter_for_model(self.backend.model_name)
+        )
+        schema = _summary_tool_schema()
+        system_prompt = _semantic_system_prompt()
+        fixed_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": ""},
+        ]
+        fixed_tokens = counter.count_messages(fixed_messages) + counter.count_tool_schemas([schema])
+        request_available = (
+            token_budget.available_input_tokens
+            if token_budget is not None
+            else _backend_available_input_tokens(self.backend)
+        )
+        if request_available is None:
+            # Direct/programmatic backend with no capability metadata: retain the bounded
+            # packet cap, but do not claim this estimate represents provider capacity.
+            request_available = fixed_tokens + self.max_packet_tokens
+        packet_budget = min(self.max_packet_tokens, max(0, request_available - fixed_tokens))
+        if packet_budget <= 0:
+            return SemanticSummaryResult(
+                fields=None,
+                usage=TokenUsage(),
+                packet_truncated=True,
+                error="semantic request fixed sections leave no packet token budget",
+            )
+
         packet, truncated = build_semantic_packet(
             task_description=task_description,
             old_messages=old_messages,
             recent_messages=recent_messages,
             evidence=evidence,
-            max_chars=self.max_packet_chars,
+            max_tokens=packet_budget,
+            token_counter=counter,
         )
         messages = [
-            LLMMessage(role="system", content=_semantic_system_prompt()),
+            LLMMessage(role="system", content=system_prompt),
             LLMMessage(role="user", content=packet),
         ]
         self.call_count += 1
         try:
-            response = self.backend.complete(messages, [_summary_tool_schema()])
+            response = self.backend.complete(messages, [schema])
         except Exception as exc:
             return SemanticSummaryResult(
                 fields=None,
@@ -128,6 +171,27 @@ class LLMSemanticSummarizer:
             packet_truncated=truncated,
             error=error,
         )
+
+
+def _backend_available_input_tokens(backend: LLMBackend) -> int | None:
+    """从 Backend 的 capability/policy 元数据计算 semantic side-call 输入空间。"""
+    capabilities = getattr(backend, "model_capabilities", None)
+    model_window = getattr(capabilities, "context_window", None)
+    context_cap = getattr(backend, "context_budget_cap", None)
+    if model_window is None:
+        effective_window = context_cap
+    elif context_cap is None:
+        effective_window = model_window
+    else:
+        effective_window = min(int(model_window), int(context_cap))
+    if effective_window is None:
+        return None
+
+    request_max = int(getattr(backend, "request_max_output_tokens", 0) or 0)
+    model_max = getattr(capabilities, "max_output_tokens", None)
+    reserved_output = min(request_max, int(model_max or request_max))
+    safety_margin = int(getattr(backend, "context_safety_margin_tokens", 0) or 0)
+    return max(0, int(effective_window) - reserved_output - safety_margin)
 
 
 def build_deterministic_evidence(
@@ -208,7 +272,6 @@ def build_deterministic_evidence(
             if message.event_ref is not None
         ]
     )
-    # 关键 failure/test ref 放在最前面，renderer 再做 bounded 展示。
     priority_refs = unresolved_refs + ([latest_test_ref] if latest_test_ref else [])
     refs = _ordered_unique([*priority_refs, *historical_refs])
     return DeterministicEvidence(
@@ -226,11 +289,24 @@ def build_semantic_packet(
     old_messages: list[LLMMessage],
     recent_messages: list[LLMMessage],
     evidence: DeterministicEvidence,
-    max_chars: int,
+    max_tokens: int | None = None,
+    token_counter: TokenCounter | None = None,
+    max_chars: int | None = None,
 ) -> tuple[str, bool]:
-    """构造 semantic packet；只总结将被压掉的旧历史，recent raw tail 保持原样。"""
-    # recent_messages 已由 model-visible tail 原样保留；再次送入 semantic summary 会造成当前输入重复。
+    """Build a token-bounded packet; user evidence selection is newest-first.
+
+    ``max_chars`` is only a source-compatible alias for older callers/tests. Packing is
+    always based on TokenCounter output.
+    """
     _ = recent_messages
+    if max_tokens is None:
+        if max_chars is None:
+            raise TypeError("max_tokens is required")
+        max_tokens = max_chars
+    if max_tokens <= 0:
+        raise ValueError("max_tokens must be positive")
+    counter = token_counter or ConservativeTokenCounter()
+
     fixed = (
         "CURRENT GOAL (authoritative for this compaction):\n"
         f"{_compact_text(task_description, 4_000)}\n\n"
@@ -240,35 +316,87 @@ def build_semantic_packet(
         "user evidence below. Recent raw messages are intentionally excluded and remain verbatim outside "
         "this summary."
     )
-    if len(fixed) >= max_chars:
-        return fixed[:max_chars], True
+    if counter.count_text(fixed) >= max_tokens:
+        return _fit_text_to_tokens(fixed, max_tokens, counter), True
 
-    old_blocks = [
-        f"OLD USER MESSAGE:\n{message.content}"
-        for message in old_messages
+    remaining = max_tokens - counter.count_text(fixed + "\n\n")
+    indexed_users = [
+        (index, f"OLD USER MESSAGE:\n{message.content}")
+        for index, message in enumerate(old_messages)
         if is_user_authored_message(message)
     ]
-    old_blocks.extend(
+
+    selected_users: list[tuple[int, str]] = []
+    for index, block in reversed(indexed_users):
+        if remaining <= 0:
+            break
+        cost = counter.count_text(block + "\n\n")
+        if cost <= remaining:
+            selected_users.append((index, block))
+            remaining -= cost
+            continue
+        # 最新 user 指令本身超预算时，保留它的 bounded prefix，而不是跳过去塞旧指令。
+        if not selected_users:
+            trimmed = _fit_text_to_tokens(block, remaining, counter)
+            if trimmed:
+                selected_users.append((index, trimmed))
+                remaining -= counter.count_text(trimmed)
+            break
+    selected_users.sort(key=lambda item: item[0])
+
+    round_summaries = [
         f"OLD ROUND SUMMARY:\n{message.content}"
         for message in old_messages
         if message.role == "assistant" and message.content.startswith("[Round ")
+    ]
+    selected_rounds: list[str] = []
+    for block in reversed(round_summaries):
+        cost = counter.count_text(block + "\n\n")
+        if cost <= remaining:
+            selected_rounds.append(block)
+            remaining -= cost
+    selected_rounds.reverse()
+
+    truncated = (
+        len(selected_users) != len(indexed_users)
+        or len(selected_rounds) != len(round_summaries)
     )
-
-    budget = max_chars - len(fixed) - 2
-    chosen_old: list[str] = []
-    for block in old_blocks:
-        if len(block) + 2 <= budget:
-            chosen_old.append(block)
-            budget -= len(block) + 2
-
-    truncated = len(chosen_old) != len(old_blocks)
+    blocks = [block for _, block in selected_users] + selected_rounds
     parts = [fixed]
-    if chosen_old:
-        parts.append("\n\n".join(chosen_old))
-    if truncated:
-        parts.append("[Some historical user-authored messages were omitted deterministically to fit the summary input budget.]")
+    if blocks:
+        parts.append("\n\n".join(blocks))
     packet = "\n\n".join(parts)
-    return packet[:max_chars], truncated or len(packet) > max_chars
+
+    notice = (
+        "[Some historical user-authored messages were omitted deterministically "
+        "to fit the summary input token budget.]"
+    )
+    if truncated and counter.count_text(packet + "\n\n" + notice) <= max_tokens:
+        packet = packet + "\n\n" + notice
+
+    if counter.count_text(packet) > max_tokens:
+        packet = _fit_text_to_tokens(packet, max_tokens, counter)
+        truncated = True
+    return packet, truncated
+
+
+def _fit_text_to_tokens(text: str, token_limit: int, counter: TokenCounter) -> str:
+    if token_limit <= 0:
+        return ""
+    if counter.count_text(text) <= token_limit:
+        return text
+    low = 0
+    high = len(text)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if counter.count_text(text[:midpoint]) <= token_limit:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    result = text[:low]
+    while result and counter.count_text(result) > token_limit:
+        result = result[:-1]
+    return result
 
 
 def build_structured_state(
@@ -346,7 +474,6 @@ def render_structured_context(
         text = render()
 
     if len(text) > max_chars:
-        # 固定 heading 已保留；极端 Goal 只在自己的 item 内继续收缩。
         text = _render_with_limits(_compact_text(state.goal, 120), groups, limits, 80)
     return text[:max_chars]
 

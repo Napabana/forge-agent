@@ -19,11 +19,7 @@ from context.structured_compaction import (
     fallback_user_excerpts,
     render_structured_context,
 )
-from context.token_budget import (
-    estimate_messages_tokens,
-    history_unit_tokens,
-    recent_history_units,
-)
+from context.token_budget import history_unit_tokens, recent_history_units
 from context.tool_pruning import DeterministicToolPruner, PruningResult
 from llm.base import LLMBackend, LLMMessage, MockBackend
 from llm.usage import SessionUsage, TokenUsage
@@ -156,7 +152,7 @@ class TraceableCompaction:
             return active
 
         raw = context.history.to_dicts()
-        before_tokens = estimate_messages_tokens(raw)
+        before_tokens = context.token_budget.count_messages(raw)
         pressure = context.token_budget.request_pressure(
             system_text=context.system_content,
             repo_map_text=context.repo_map_content,
@@ -166,13 +162,18 @@ class TraceableCompaction:
         if pressure.ratio < self.threshold:
             return None
 
-        # recent raw tail 只按 canonical history 计算一次，Stage A/C5 不改变这条边界。
-        recent_units = recent_history_units(raw, self.keep_recent_tokens)
+        # recent raw tail 只按 canonical history 计算一次，并复用本轮 TokenCounter。
+        recent_units = recent_history_units(
+            raw,
+            self.keep_recent_tokens,
+            counter=context.token_budget.counter,
+        )
         if not recent_units:
             return None
         tail_start = recent_units[0].indices[0]
         retained_tail_tokens = sum(
-            history_unit_tokens(raw, unit) for unit in recent_units
+            history_unit_tokens(raw, unit, counter=context.token_budget.counter)
+            for unit in recent_units
         )
 
         pruning = self.pruner.prune(messages, protected_from_index=tail_start)
@@ -191,7 +192,7 @@ class TraceableCompaction:
                 context=context,
                 source_event_ids=pruning.pruned_event_ids,
                 before_tokens=before_tokens,
-                after_tokens=pruning.after_tokens,
+                after_tokens=context.token_budget.count_messages(pruned_raw),
                 summary_method="none",
                 summary_hash="",
                 retained_tail=len(messages) - tail_start,
@@ -210,7 +211,7 @@ class TraceableCompaction:
                     context=context,
                     source_event_ids=pruning.pruned_event_ids,
                     before_tokens=before_tokens,
-                    after_tokens=pruning.after_tokens,
+                    after_tokens=context.token_budget.count_messages(pruned_raw),
                     summary_method="none",
                     summary_hash="",
                     retained_tail=len(messages) - tail_start,
@@ -240,12 +241,19 @@ class TraceableCompaction:
                 pressure_ratio=pruned_pressure.ratio,
                 projected_input_tokens=pruned_pressure.projected_input,
             )
-            result = self.semantic_summarizer.summarize(
+            kwargs = dict(
                 task_description=context.task.description,
                 old_messages=dropped,
                 recent_messages=messages[tail_start:],
                 evidence=evidence,
             )
+            if isinstance(self.semantic_summarizer, LLMSemanticSummarizer):
+                result = self.semantic_summarizer.summarize(
+                    **kwargs,
+                    token_budget=context.token_budget,
+                )
+            else:
+                result = self.semantic_summarizer.summarize(**kwargs)
             semantic_duration_ms = (time.perf_counter() - started_at) * 1000
             semantic_fields = result.fields
             semantic_usage = result.usage
@@ -262,15 +270,12 @@ class TraceableCompaction:
                     packet_truncated=packet_truncated,
                     summary_usage=semantic_usage.to_dict(),
                 )
-                # 同一 Task 内已有 active summary 时优先保留，让最终 TokenBudget trim 做硬兜底。
                 if self._active_view is not None:
                     active_messages = self._active_messages(messages)
                     if active_messages is not None:
                         return PrepareNextTurnResult(history_override=tuple(active_messages))
 
         if not semantic_called:
-            # 兼容 C1-C4 的程序化用法：没有 semantic summarizer 时继续使用旧 extractive-v1，
-            # 避免固定结构 heading 在小历史上反而造成 token 膨胀。
             history_budget = context.token_budget.default_plan().history
             summary_method = "extractive-v1"
             summary = _extractive_summary(
@@ -301,7 +306,7 @@ class TraceableCompaction:
             *pruned_messages[tail_start:],
         ]
         compacted_raw = _message_dicts(compacted)
-        after_tokens = estimate_messages_tokens(compacted_raw)
+        after_tokens = context.token_budget.count_messages(compacted_raw)
         after_pressure = context.token_budget.request_pressure(
             system_text=context.system_content,
             repo_map_text=context.repo_map_content,
@@ -390,7 +395,11 @@ class TraceableCompaction:
         if active_pressure.ratio < self.threshold:
             return PrepareNextTurnResult(history_override=tuple(active_messages))
 
-        recent_units = recent_history_units(active_raw, self.keep_recent_tokens)
+        recent_units = recent_history_units(
+            active_raw,
+            self.keep_recent_tokens,
+            counter=context.token_budget.counter,
+        )
         if not recent_units:
             return None
         protected_from = recent_units[0].indices[0]
@@ -405,7 +414,6 @@ class TraceableCompaction:
             tools=context.tool_schemas,
         )
         if pruned_pressure.ratio < self.threshold:
-            # active summary 已有 checkpoint；delta pruning 是便宜临时视图，不重复落 checkpoint。
             return PrepareNextTurnResult(history_override=tuple(pruned_messages))
         return None
 

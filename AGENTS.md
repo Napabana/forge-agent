@@ -243,3 +243,16 @@ pytest -q
 - 简历与面试证据统一以 `docs/evidence/README.md` 为入口。Repo Map 12-case benchmark、B1 frozen fixture、B2 9-run small sample、1 个真实 merged PR 必须保持各自证据边界。
 - 当前 connector 只能确认远端 `dev`，无法读取用户本地未提交修改或 stash，因此不对本地工作区状态做额外断言。
 - 本轮更新日志：`docs/changes/2026-09-16/P1-6-Evidence-Pack收口-DONE.md`。
+
+### 最后交接（2026-09-17，Model-aware Token Budget / Context Compaction 收口）
+
+- 本轮将生产 Context Budget 从固定 80k / 固定 15% reserve 收口为 Model Capability + Forge request policy：`effective_window - request_output_reserve - safety_margin`；旧 `budget_tokens=80000` 只作为 Forge context cap fallback，不再声称是模型 Context Window。
+- 新增 `llm/capabilities.py::ModelCapabilities`；Router 向 Backend 暴露 context window、model max output、request max output、Forge cap、safety margin 与 semantic packet cap。未知 OpenAI-compatible proxy 不硬编码模型能力。
+- `llm.max_tokens` 兼容读取为 request `max_output_tokens`；新增 `context_window`、`model_max_output_tokens`、`max_output_tokens`、`context_budget_cap`、`context_safety_margin_tokens`、`semantic_packet_max_tokens` 语义。CLI `--model` 变化时旧 capability 失效，只保留 Forge cap fallback。
+- `TokenCounter` 新增 model-aware tiktoken 路径与 conservative local estimator；pre-request estimate 与 provider-reported `TokenUsage` 保持独立，后者仍是请求后 accounting / Trace truth。
+- Semantic Packet 已从字符预算改为 token budget；最近 user-authored evidence 优先选择，选中后恢复时间顺序，最新消息过大时保留 bounded prefix 而不是让旧冲突指令占位。
+- `context/compaction.py` 的 pressure、recent-tail、before/after accounting 复用同一 TokenCounter；Stage A deterministic pruning 策略本身未重做。
+- 新增 `tests/test_model_aware_token_budget.py`，固定 32k/128k pressure、output reserve、context cap、mixed packet bound、recent override、provider usage、legacy config migration 与 backend capability 边界。
+- 当前 ChatGPT 执行容器无法解析 `github.com`，无法 clone 远端仓库执行仓库级 pytest；本轮没有虚构 pytest 通过。实际只运行了完全离线纯函数行为校验，六个核心行为均通过。用户本地应优先执行新增测试、现有 TokenBudget/Context 测试，再视成本跑全量 pytest。
+- `config/default.yaml`、P2 Repo Map、B1/B2 fixture、`evals/results` 均未修改。connector 无法读取用户本地未提交修改或 stash，因此不对本地工作区状态做断言。
+- 本轮更新日志：`docs/changes/2026-09-17/Model-Aware-Token-Budget收口.md`。

@@ -1,14 +1,3 @@
-"""
-config/schema.py
-
-配置文件加载与校验。把 config/default.yaml 解析成类型安全的 dataclass。
-
-支持：
-- 环境变量展开：${VAR} 语法
-- 多层配置合并：default.yaml < 用户指定 yaml < CLI 参数
-- 缺失必填项时给出清晰错误信息
-"""
-
 from __future__ import annotations
 
 import os
@@ -20,9 +9,33 @@ from typing import Any
 import yaml
 
 
-# ---------------------------------------------------------------------------
-# 配置 dataclass
-# ---------------------------------------------------------------------------
+class RequestTokenSpec(int):
+    """兼容旧 max_tokens，同时携带已解析的请求/模型能力元数据。"""
+
+    def __new__(cls, value: int, *, context_window: int | None, model_max_output_tokens: int | None, semantic_packet_max_tokens: int, context_budget_cap: int | None, context_safety_margin_tokens: int):
+        obj = int.__new__(cls, value)
+        obj.context_window = context_window
+        obj.model_max_output_tokens = model_max_output_tokens
+        obj.semantic_packet_max_tokens = semantic_packet_max_tokens
+        obj.context_budget_cap = context_budget_cap
+        obj.context_safety_margin_tokens = context_safety_margin_tokens
+        return obj
+
+
+class ContextBudgetSpec(int):
+    """兼容旧 budget_tokens，内部只携带新的 Model-aware Budget 语义。"""
+
+    def __new__(cls, value: int, *, model_context_window: int | None, model_max_output_tokens: int | None, request_max_output_tokens: int, context_budget_cap: int | None, safety_margin_tokens: int, model_name: str, capability_fallback: bool):
+        obj = int.__new__(cls, value)
+        obj.model_context_window = model_context_window
+        obj.model_max_output_tokens = model_max_output_tokens
+        obj.request_max_output_tokens = request_max_output_tokens
+        obj.context_budget_cap = context_budget_cap
+        obj.safety_margin_tokens = safety_margin_tokens
+        obj.model_name = model_name
+        obj.capability_fallback = capability_fallback
+        return obj
+
 
 @dataclass
 class LLMConfig:
@@ -32,12 +45,21 @@ class LLMConfig:
     api_key: str = ""
     base_url: str = ""
     max_tokens: int = 4096
+    context_window: int | None = None
+    model_max_output_tokens: int | None = None
+    max_output_tokens: int = 4096
+
+    @property
+    def request_max_output_tokens(self) -> int:
+        return int(self.max_output_tokens)
 
 
 @dataclass
 class AgentCfg:
     max_steps: int = 40
     budget_tokens: int = 80_000
+    context_budget_cap: int | None = None
+    context_safety_margin_tokens: int = 1024
     log_dir: str = "./logs"
 
 
@@ -62,6 +84,7 @@ class ToolsConfig:
 class ContextConfig:
     repo_map_budget: int = 8_000
     history_window: int = 20
+    semantic_packet_max_tokens: int = 16_000
 
 
 @dataclass
@@ -72,27 +95,15 @@ class AppConfig:
     context: ContextConfig = field(default_factory=ContextConfig)
 
 
-# ---------------------------------------------------------------------------
-# 加载函数
-# ---------------------------------------------------------------------------
-
 _ENV_RE = re.compile(r"\$\{(\w+)\}")
 
 
 def _load_dotenv() -> None:
-    """从仓库外的 .env 加载环境变量（不覆盖 shell 已设置的值）。
-
-    零依赖：手写解析标准 KEY=VALUE 行，跳过注释与空行。
-    默认复用 ~/.config/forge-agent/env—— key 只保留这一份、且始终在
-    forge-agent 仓库之外，git 永远不会上传它。config/default.yaml 里的
-    ${VAR} 占位符在加载时从这些环境变量展开。
-    可用环境变量 FORGE_ENV_FILE 指向其它路径。
-    """
     candidates: list[Path] = []
     custom = os.environ.get("FORGE_ENV_FILE")
     if custom:
         candidates.append(Path(custom))
-    candidates.append(Path.home() / ".config" /"forge-agent"/ "env")
+    candidates.append(Path.home() / ".config" / "forge-agent" / "env")
     for env_path in candidates:
         if not env_path.exists():
             continue
@@ -109,104 +120,98 @@ def _load_dotenv() -> None:
 
 
 def _expand_env(text: str) -> str:
-    """展开 ${VAR} 形式的环境变量占位符。"""
     def replace(m: re.Match) -> str:
         return os.environ.get(m.group(1), "")
     return _ENV_RE.sub(replace, text)
 
 
+def _optional_positive_int(raw: dict[str, Any], key: str) -> int | None:
+    if key not in raw or raw[key] is None or raw[key] == "":
+        return None
+    value = int(raw[key])
+    if value <= 0:
+        raise ValueError(f"{key} must be positive")
+    return value
+
+
+def _context_budget_spec(*, model_name: str, context_window: int | None, model_max_output_tokens: int | None, request_max_output_tokens: int, context_budget_cap: int | None, safety_margin_tokens: int) -> ContextBudgetSpec:
+    if context_window is None and context_budget_cap is None:
+        raise ValueError("llm.context_window is unknown and agent.context_budget_cap is not configured")
+    effective_window = context_budget_cap if context_window is None else context_window if context_budget_cap is None else min(context_window, context_budget_cap)
+    assert effective_window is not None
+    if request_max_output_tokens + safety_margin_tokens >= effective_window:
+        raise ValueError("llm.max_output_tokens + agent.context_safety_margin_tokens must be smaller than the effective context window")
+    return ContextBudgetSpec(effective_window, model_context_window=context_window, model_max_output_tokens=model_max_output_tokens, request_max_output_tokens=request_max_output_tokens, context_budget_cap=context_budget_cap, safety_margin_tokens=safety_margin_tokens, model_name=model_name, capability_fallback=context_window is None)
+
+
+def _refresh_budget_bridges(config: AppConfig) -> None:
+    config.agent.budget_tokens = _context_budget_spec(model_name=config.llm.model, context_window=config.llm.context_window, model_max_output_tokens=config.llm.model_max_output_tokens, request_max_output_tokens=config.llm.max_output_tokens, context_budget_cap=config.agent.context_budget_cap, safety_margin_tokens=config.agent.context_safety_margin_tokens)
+    config.llm.max_tokens = RequestTokenSpec(config.llm.max_output_tokens, context_window=config.llm.context_window, model_max_output_tokens=config.llm.model_max_output_tokens, semantic_packet_max_tokens=config.context.semantic_packet_max_tokens, context_budget_cap=config.agent.context_budget_cap, context_safety_margin_tokens=config.agent.context_safety_margin_tokens)
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
-    """
-    加载配置文件，返回 AppConfig。
-
-    Args:
-        path: YAML 文件路径，None 时自动查找 config/default.yaml
-
-    Returns:
-        AppConfig 实例
-    """
-    _load_dotenv()  # 先把 ~/.env 注入环境，使下面的 ${VAR} 能正确展开
+    _load_dotenv()
     if path is None:
-        # 自动查找：当前目录 → 项目根目录
-        candidates = [
-            Path("config/default.yaml"),
-            Path(__file__).parent / "default.yaml",
-        ]
+        candidates = [Path("config/default.yaml"), Path(__file__).parent / "default.yaml"]
         for p in candidates:
             if p.exists():
                 path = p
                 break
         else:
-            return AppConfig()   # 找不到配置文件，用全默认值
-
+            return _parse({})
     config_path = Path(path)
     if not config_path.exists():
-        return AppConfig()
-    raw = config_path.read_text(encoding="utf-8")
-    raw = _expand_env(raw)
+        return _parse({})
+    raw = _expand_env(config_path.read_text(encoding="utf-8"))
     data: dict[str, Any] = yaml.safe_load(raw) or {}
     return _parse(data)
 
 
 def _parse(data: dict[str, Any]) -> AppConfig:
-    """把 yaml dict 解析为 AppConfig。"""
     llm_raw = data.get("llm", {})
     agent_raw = data.get("agent", {})
     tools_raw = data.get("tools", {})
     context_raw = data.get("context", {})
 
-    llm = LLMConfig(
-        provider=llm_raw.get("provider", "anthropic"),
-        protocol=llm_raw.get("protocol", "auto"),
-        model=llm_raw.get("model", "claude-sonnet-4-5"),
-        api_key=llm_raw.get("api_key", ""),
-        base_url=llm_raw.get("base_url", "") or "",
-        max_tokens=int(llm_raw.get("max_tokens", 4096)),
-    )
+    semantic_packet_max_tokens = int(context_raw.get("semantic_packet_max_tokens", 16_000))
+    if semantic_packet_max_tokens <= 0:
+        raise ValueError("context.semantic_packet_max_tokens must be positive")
 
-    agent = AgentCfg(
-        max_steps=int(agent_raw.get("max_steps", 40)),
-        budget_tokens=int(agent_raw.get("budget_tokens", 80_000)),
-        log_dir=agent_raw.get("log_dir", "./logs"),
-    )
+    legacy_max_tokens = _optional_positive_int(llm_raw, "max_tokens")
+    max_output_tokens = _optional_positive_int(llm_raw, "max_output_tokens") or legacy_max_tokens or 4096
+    context_window = _optional_positive_int(llm_raw, "context_window")
+    model_max_output_tokens = _optional_positive_int(llm_raw, "model_max_output_tokens")
+    if model_max_output_tokens is not None and max_output_tokens > model_max_output_tokens:
+        raise ValueError("llm.max_output_tokens must be <= llm.model_max_output_tokens")
 
+    legacy_budget = _optional_positive_int(agent_raw, "budget_tokens") if "budget_tokens" in agent_raw else 80_000
+    context_budget_cap = _optional_positive_int(agent_raw, "context_budget_cap") if "context_budget_cap" in agent_raw else legacy_budget
+    safety_margin = int(agent_raw.get("context_safety_margin_tokens", 1024))
+    if safety_margin < 0:
+        raise ValueError("agent.context_safety_margin_tokens cannot be negative")
+
+    llm = LLMConfig(provider=llm_raw.get("provider", "anthropic"), protocol=llm_raw.get("protocol", "auto"), model=llm_raw.get("model", "claude-sonnet-4-5"), api_key=llm_raw.get("api_key", ""), base_url=llm_raw.get("base_url", "") or "", context_window=context_window, model_max_output_tokens=model_max_output_tokens, max_output_tokens=max_output_tokens)
+    agent = AgentCfg(max_steps=int(agent_raw.get("max_steps", 40)), context_budget_cap=context_budget_cap, context_safety_margin_tokens=safety_margin, log_dir=agent_raw.get("log_dir", "./logs"))
     shell_raw = tools_raw.get("shell", {})
     file_raw = tools_raw.get("file", {})
-    tools = ToolsConfig(
-        shell=ShellToolConfig(
-            timeout=int(shell_raw.get("timeout", 30)),
-            max_output_tokens=int(shell_raw.get("max_output_tokens", 8_000)),
-        ),
-        file=FileToolConfig(
-            max_view_lines=int(file_raw.get("max_view_lines", 100)),
-        ),
-    )
-
-    context = ContextConfig(
-        repo_map_budget=int(context_raw.get("repo_map_budget", 8_000)),
-        history_window=int(context_raw.get("history_window", 20)),
-    )
-
-    return AppConfig(llm=llm, agent=agent, tools=tools, context=context)
+    tools = ToolsConfig(shell=ShellToolConfig(timeout=int(shell_raw.get("timeout", 30)), max_output_tokens=int(shell_raw.get("max_output_tokens", 8_000))), file=FileToolConfig(max_view_lines=int(file_raw.get("max_view_lines", 100))))
+    context = ContextConfig(repo_map_budget=int(context_raw.get("repo_map_budget", 8_000)), history_window=int(context_raw.get("history_window", 20)), semantic_packet_max_tokens=semantic_packet_max_tokens)
+    config = AppConfig(llm=llm, agent=agent, tools=tools, context=context)
+    _refresh_budget_bridges(config)
+    return config
 
 
-def merge_cli_overrides(
-    config: AppConfig,
-    provider: str | None = None,
-    protocol: str | None = None,
-    model: str | None = None,
-    api_key: str | None = None,
-    max_steps: int | None = None,
-) -> AppConfig:
-    """
-    把 CLI 参数覆盖到已加载的 config 上。
-    CLI 参数优先级最高。
-    """
+def merge_cli_overrides(config: AppConfig, provider: str | None = None, protocol: str | None = None, model: str | None = None, api_key: str | None = None, max_steps: int | None = None) -> AppConfig:
     if provider:
         config.llm.provider = provider
     if protocol:
         config.llm.protocol = protocol
-    if model:
+    if model and model != config.llm.model:
+        config.llm.model = model
+        config.llm.context_window = None
+        config.llm.model_max_output_tokens = None
+        _refresh_budget_bridges(config)
+    elif model:
         config.llm.model = model
     if api_key:
         config.llm.api_key = api_key
