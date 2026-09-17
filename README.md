@@ -1,591 +1,661 @@
 # Forge Agent
 
-Forge Agent 是一个面向软件工程任务、在本地运行的自主编程智能体引擎。它以
-同步 ReAct 循环为控制内核，通过任务状态机、Git worktree 事务、权限 Harness
-和可选 Docker 沙箱完成代码分析、文件修改、命令执行、测试与结果审计。
+Forge Agent 是一个面向软件工程任务的本地 Coding Agent。项目的核心不是单独实现一个 ReAct 循环，而是把“模型决策、仓库上下文、受控工具执行、隔离工作区、任务状态、可恢复会话、独立验收和可审计交付”组织成一条可解释、可测试的工程链路。
 
-项目支持 Anthropic、OpenAI、DeepSeek、Groq 和 Ollama，并同时适配 Anthropic
-Messages、OpenAI Chat Completions 与 OpenAI Responses 协议。它提供 CLI 一次性
-任务、连续对话、HTTP API 与 GitHub Issue 自动处理入口。每次运行都可写入 JSONL
-事件日志；隔离模式还会记录任务状态、worktree 生命周期和权限决策。
+当前 `dev` 的主线架构已经收口：CLI `run`、交互式 `chat`、HTTP API 与 GitHub Issue 入口共享 `ExecutionRunner → Agent → ToolExecutor → EventLog/Trace` 的生产路径；隔离任务在此基础上接入 SQLite WAL TaskEngine、Git Worktree 和可选 Docker Runtime；Chat 额外接入持久化 Session 与两阶段 Context Compaction；GitHub Issue 自动 PR 则在 Agent 结束后增加独立 Acceptance 与确定性交付门禁。
 
-## 核心能力
+> 使用方法见 [`USAGE.md`](USAGE.md)。项目实现、测试和 benchmark 的证据边界见 [`docs/evidence/README.md`](docs/evidence/README.md)。
 
-- **多入口**：CLI、Chat、FastAPI 和 GitHub Issue 流程复用同一套执行内核。
-- **事务化隔离**：SQLite WAL TaskEngine 管理状态，WorktreeSession 管理临时工作区。
-- **集中式权限控制**：工具调用统一经过 Hooks、PermissionManager 和 ToolExecutor。
-- **双运行时**：支持宿主机执行，也支持带资源限制和路径白名单的 Docker 沙箱。
-- **可审计与可回放**：EventLog 持久化执行过程，AgentBus 实时转发事件。
-- **多协议模型后端**：Anthropic 原生工具调用、OpenAI-compatible Chat Completions
-  和 Responses API 共享统一的 `LLMBackend`/`Action` 边界。
-- **中转站兼容**：容忍空 choices/delta/message/usage 和非标准流式结束帧，并可用
-  `--no-stream` 快速区分上游故障与流式协议差异。
+## 1. 整体架构
 
-## 架构设计
-
-Forge Agent 将同步决策循环与异步 I/O 边界分开。`Agent.run()` 保持同步，负责
-步骤、token 预算和工具调用顺序；`orchestrate_run()` 是隔离执行的异步组合根，
-负责 TaskEngine、worktree、AgentBus 和沙箱生命周期，并通过线程边界运行 Agent。
-
-普通 `run`/`chat` 可以直接在目标仓库运行；`run --isolate` 和 API 任务通过事务
-编排层运行：
+Forge Agent 将系统拆成六个彼此独立但可组合的层：入口层、执行控制层、上下文层、工具安全层、隔离与状态层、审计与交付层。
 
 ```text
-CLI / Chat / HTTP API / GitHub Issue
-                 │
-                 ├── 普通模式 ──────────────────────────────────┐
-                 │                                             │
-                 └── 隔离模式 → orchestrate_run                 │
-                                  ├── TaskEngine (SQLite WAL)  │
-                                  ├── WorktreeSession          │
-                                  └── AgentBus                 │
-                                                               ▼
-                         Agent.run (同步 ReAct 控制内核)
-                                  ├── Context / Token Budget
-                                  ├── LLMBackend / LoopDetector
-                                  └── ToolExecutor
-                                        ├── Hooks
-                                        ├── PermissionManager
-                                        └── ToolRegistry
-                                              └── LocalRuntime / DockerRuntime
-                                                               │
-                                                               ▼
-                                              EventLog (JSONL 审计与回放)
+                         ┌─────────────────────────────────────────────┐
+                         │                Product Entrypoints          │
+                         │ CLI run | Chat | HTTP API | GitHub Issue   │
+                         └──────────────────────┬──────────────────────┘
+                                                │
+                                                ▼
+                                      ┌───────────────────┐
+                                      │  ExecutionRunner  │
+                                      │ agent/runner.py   │
+                                      │ request / accept  │
+                                      │ trace / isolate   │
+                                      └─────────┬─────────┘
+                                                │
+                         direct ────────────────┤────────────── isolate
+                                                │                    │
+                                                │                    ▼
+                                                │          ┌───────────────────┐
+                                                │          │ orchestrate_run   │
+                                                │          │ TaskEngine (WAL)  │
+                                                │          │ WorktreeSession   │
+                                                │          │ Docker(optional)  │
+                                                │          └─────────┬─────────┘
+                                                │                    │
+                                                └─────────┬──────────┘
+                                                          ▼
+                                                ┌───────────────────┐
+                                                │     Agent.run     │
+                                                │ agent/core.py     │
+                                                │ sync ReAct loop   │
+                                                └─────┬─────┬───────┘
+                                                      │     │
+                           ┌──────────────────────────┘     └──────────────────────┐
+                           ▼                                                       ▼
+                ┌──────────────────────┐                              ┌──────────────────────┐
+                │      Context Plane   │                              │   Tool Safety Plane  │
+                │ Model-aware Budget   │                              │ validate → pre-hook  │
+                │ Persistent Repo Map  │                              │ → permission → tool  │
+                │ History / Compaction │                              │ → post-hook          │
+                └──────────┬───────────┘                              └──────────┬───────────┘
+                           │                                                       │
+                           └──────────────────────────┬────────────────────────────┘
+                                                      ▼
+                                             ┌───────────────────┐
+                                             │ EventLog / Trace  │
+                                             │ JSONL Trace v2    │
+                                             │ RunResult         │
+                                             └─────────┬─────────┘
+                                                       │
+                         ┌─────────────────────────────┴────────────────────────────┐
+                         ▼                                                          ▼
+              Chat Session checkpoint                                  GitHub Acceptance / Delivery
+              state.json + round logs                                  verifier → commit → push → PR
 ```
 
-架构遵循四项约束：控制内核保持同步；异步资源集中在组合根；任务状态与 worktree
-生命周期绑定；路径和命令权限在执行器边界统一收口。EventLog 是审计事实来源，
-隔离模式可将新增事件转发到 AgentBus，供 CLI、SSE 或其它订阅者消费。
+这个拆分解决的是 Coding Agent 中几个容易互相污染的问题：
 
-### 下一轮准备边界
+- 模型怎么“思考”和工具怎么“安全执行”不混在一起；
+- Agent 主循环保持同步、易测试，异步资源生命周期放到组合根处理；
+- canonical history、给模型看的压缩视图、运行审计日志和 Session 恢复状态分别管理；
+- Worktree 负责 Git 工作区隔离，Docker 负责进程/网络/资源隔离，两者不混为一个概念；
+- Agent 自己声称“完成”和独立验收结果分离，自动 PR 只有在两层条件都满足后才发生。
 
-`prepare_next_turn` 是同步 `Agent.run()` 的 turn 间策略插槽。第一次模型调用前不执行；
-只有当前 turn 已完成且仍需继续时，才在下一次 `_build_messages()` 前同步执行。此时本轮
-工具 Observation 已进入 History，回调可以注入下一轮消息或通过
-`PrepareNextTurnResult(refresh_repo_map=True)` 请求全量刷新 Repo Map。FINISH、GIVE_UP、
-取消和最大步数结束后不会额外执行；回调异常会终止当前 Run 并写入失败 Trace。
+## 2. 四个入口如何复用同一执行内核
 
-## 项目结构
+入口代码位于 `entry/`，但真正的产品执行组合根是 `agent/runner.py::ExecutionRunner`。
 
-下面的结构来自当前仓库的 `tree -a` 输出。省略 `.git/` 和 `tests/` 内部文件，
-其余目录与文件均按实际用途标注：
+| 入口 | 入口文件 | 运行形态 | 额外能力 |
+| --- | --- | --- | --- |
+| `agent run` | `entry/cli.py` | direct 或 isolate | `--confirm`、`--sandbox`、`--isolate`、成果策略 |
+| `agent chat` | `entry/cli.py` + `entry/chat.py` | direct | 多轮共享 History、Session 持久化、Context Compaction |
+| HTTP API | `entry/api.py` | isolate | 后台 worker、SSE、cooperative cancel、任务查询 |
+| GitHub Issue | `entry/github_issue.py` | direct 工作分支 | Issue → Agent → Acceptance → commit/push/PR |
+
+`ExecutionRunner.run(RunRequest)` 负责统一以下语义：
+
+1. 从 Task 和 `AcceptanceContract` 生成本次运行契约；
+2. 解析 `entrypoint`，把 CLI / Chat / API / GitHub Issue 标识传入 Trace；
+3. direct 模式创建/复用 `Agent` 与 `ToolExecutor`；
+4. isolate 模式切换到 `orchestrate_run()`；
+5. Agent 结束后执行独立 acceptance；
+6. 统一补写 `acceptance`、`run_terminated` 等 post-run Trace；
+7. 返回结构化 `RunResult`，而不是让每个入口自行解释失败状态。
+
+因此入口主要处理用户 I/O、配置与产品行为，Agent 生命周期本身没有四套实现。
+
+## 3. 执行控制：同步 ReAct 内核
+
+核心文件：
+
+- `agent/core.py`：`Agent`、`AgentConfig`、`prepare_next_turn` 生命周期；
+- `agent/task.py`：`Task`、`Action`、`Observation`、`RunResult`、状态枚举；
+- `agent/loop_detector.py`：重复动作和无进展检测；
+- `agent/prompt.py`：System / Task prompt 与完成、反思提示。
+
+`Agent.run()` 是同步控制循环，主链可以概括为：
+
+```text
+Task
+ ↓
+构建/复用 ConversationHistory
+ ↓
+Model-aware TokenBudget + Repo Map
+ ↓
+for step in 1..max_steps
+  ├─ cancel boundary
+  ├─ prepare_next_turn（step > 1；shared-history 首轮由 Runner 对齐同一语义）
+  ├─ build_messages(system + repo map + history)
+  ├─ LLMBackend.complete/stream
+  ├─ parse → Action
+  ├─ TOOL_CALL → ToolExecutor → Observation
+  ├─ Observation 写入 History / EventLog
+  ├─ Reflection / LoopDetector / completion guard
+  └─ FINISH / GIVE_UP / FAILED / CANCELED / INCOMPLETE
+ ↓
+RunResult
+```
+
+### 3.1 为什么内核保持同步
+
+模型调用、动作解析、工具调用、Observation、Reflection 和终止判断本质上构成严格有序的状态转换。当前实现让 `Agent.run()` 保持同步，使单步行为、失败语义和离线 failure injection 更容易确定性测试。
+
+真正需要异步生命周期的部分——TaskEngine、Worktree、AgentBus——集中在 `agent/orchestrate.py`。这避免为了资源编排把整个 Agent loop 改成 async 状态机。
+
+### 3.2 完成不是只看模型输出
+
+Agent 的 `FINISH` 会经过完成性守卫。Task 会根据描述推断 `require_changes` / `require_tests`，Core 会跟踪：
+
+- 是否真正完成过文件写入；
+- 仓库状态是否发生变化；
+- 是否执行过要求的测试以及最近测试状态；
+- 是否存在未解决的 fatal runtime/infrastructure 错误。
+
+模型可以提出 FINISH，但不满足完成条件时会被拒绝并继续运行。这是“模型声明完成”与“运行时确认完成”的第一层分离。
+
+### 3.3 终止状态
+
+`RunResult` 不把所有失败压成一个布尔值。当前主状态包括 `SUCCESS`、`FAILED`、`CANCELED`、`INCOMPLETE`、`GAVE_UP`，并通过 `termination_reason` 区分 `provider_error`、`infrastructure_error`、`canceled`、`loop_detected`、`resource_exhausted` 等原因。
+
+其中取消是 cooperative cancellation：已经进入同步 Provider、Tool 或 callback 的调用不会被任意强杀，而是在调用返回后的安全边界停止。
+
+## 4. 模型层：统一 Backend 与能力元数据
+
+核心文件：
+
+- `llm/base.py`：统一 `LLMBackend`、消息、工具 schema、响应类型；
+- `llm/router.py`：Provider / Protocol 路由与 runtime capability 注入；
+- `llm/capabilities.py`：`ModelCapabilities`；
+- `llm/anthropic_backend.py`：Anthropic Messages；
+- `llm/openai_compat.py`：OpenAI-compatible Chat Completions；
+- `llm/openai_responses.py`：OpenAI Responses；
+- `llm/errors.py`：Provider 错误分类。
+
+`create_backend()` 将不同 Provider 统一到 `LLMBackend`，同时把以下概念拆开：
+
+- `context_window`：模型输入+输出总窗口能力；
+- `model_max_output_tokens`：模型本身允许的最大输出；
+- `max_output_tokens`：Forge 本次请求实际保留的最大输出；
+- `context_budget_cap`：Forge 主动设置的 context 上限；
+- `context_safety_margin_tokens`：请求前预留安全边界；
+- `semantic_packet_max_tokens`：Context semantic side-call 的输入包上限。
+
+未知 OpenAI-compatible 代理不会仅凭模型名伪造 capability。若模型窗口未知，Forge 可以使用配置的 `context_budget_cap` 作为兼容 fallback，但它只代表 Forge policy，不代表模型真实 Context Window。
+
+## 5. Context：从“整个仓库塞进 Prompt”到可预算上下文
+
+`context/` 不只是一个 Repo Map 模块，而是一整套 model-facing context 管理层。
+
+### 5.1 Model-aware Token Budget
+
+核心文件：`context/token_budget.py`、`config/schema.py`、`llm/capabilities.py`。
+
+生产路径的可用输入预算由下面的关系决定：
+
+```text
+effective_window = min(model_context_window, forge_context_budget_cap)
+                   （若模型窗口未知，则使用 cap fallback）
+
+available_input = effective_window
+                  - request_output_reserve
+                  - safety_margin
+```
+
+这取代了把 `budget_tokens=80000` 当成“模型窗口”的旧语义。
+
+本地请求前计数使用 `TokenCounter`：已知 tiktoken 模型尽量使用 model-aware tokenizer；未知模型使用偏保守的 UTF-8 本地估算。这个估算只用于请求前 budget / compaction 决策；Provider 响应中的 `TokenUsage` 才是请求后的 usage accounting 与 Trace 事实来源。
+
+### 5.2 Persistent Query-aware Repo Map
+
+核心文件：
+
+- `context/repo_map.py`：符号抽取、query-aware 排序与 rendering；
+- `context/repo_index.py`：持久化结构索引；
+- `context/incremental_repo_map.py`：`PersistentRepoMap`；
+- `context/repository_state.py`：HEAD + working tree fingerprint。
+
+`AgentConfig.repo_map_mode` 默认是 `incremental`。第一次针对仓库运行时建立结构索引，后续 run 可复用持久化索引；query 变化时只做 rerank；已知文件发生变化时只刷新对应路径。Repo Map 的目标是提供“结构导航 + 与当前任务相关的代码符号”，而不是把整个仓库源码注入 Prompt。
+
+当工具修改仓库后，Agent 会依据 repository fingerprint / 写入信号让下一轮 Repo Map 失效或增量同步，避免继续使用明显过期的仓库视图。
+
+### 5.3 History 与两阶段 Context Compaction
+
+核心文件：
+
+- `context/history.py`：canonical `ConversationHistory`；
+- `context/tool_pruning.py`：Stage A deterministic tool pruning；
+- `context/structured_compaction.py`：结构化状态与 semantic summarizer；
+- `context/compaction.py`：`TraceableCompaction`。
+
+当前生产接线中，`TraceableCompaction` 由 Chat 入口启用。它不直接改写 canonical history，而是在下一次模型调用前生成 model-facing override：
+
+```text
+canonical history
+      │
+      ├─ request pressure < threshold ───────────────→ 原样给模型
+      │
+      └─ pressure >= threshold
+              │
+              ▼
+        Stage A deterministic pruning
+              │
+              ├─ 已降到阈值以下 ───────────────────→ pruned view
+              │
+              └─ 仍高压
+                    │
+                    ▼
+           Stage B structured / semantic compaction
+                    │
+                    ├─ semantic 成功 → structured-hybrid-v1
+                    └─ semantic 失败 → structured-fallback-v1
+```
+
+最近 raw history 会按 token budget 保护；semantic packet 同样按 token 而不是字符截断。Compaction 会生成 checkpoint lineage、before/after token、pressure、pruned event、semantic usage 等 Trace 信息。
+
+重要边界：EventLog 是审计记录，canonical History 是会话事实，compacted view 只是给下一次模型请求使用的派生视图。
+
+## 6. Chat Session：恢复状态与审计日志分离
+
+核心文件：`entry/chat.py`、`agent/session.py`、`agent/session_store.py`。
+
+`ChatSession` 每一轮都创建新 `Task`，但复用同一个 `ConversationHistory` 和 Runner。默认 Session 会持久化到：
+
+```text
+logs/chat/<repo_key>/<session_id>/
+├── state.json      # 恢复真相源
+└── rounds/         # 每轮独立 EventLog
+```
+
+`state.json` 保存 History、累计 usage、round metadata、repo revision 与 compaction checkpoint lineage；每轮 JSONL 只负责审计。Session Store 使用临时文件 + `fsync` + `os.replace` 原子更新，并通过 revision + 文件锁避免两个进程静默覆盖同一个 Session。
+
+如果进程在一轮中途退出，`pending_round` 会在恢复时转成明确的 interrupted round，并要求用户检查仓库和 round log，而不是假定上次 Tool side effect 已经完整完成。
+
+## 7. Tool 安全层：所有副作用经过同一生命周期
+
+核心文件：
+
+- `tools/base.py`：Tool / ToolRegistry / ToolResult；
+- `harness/executor.py`：统一 Tool lifecycle；
+- `harness/permission.py`：ALLOW / CONFIRM / DENY；
+- `harness/hooks.py`：PreToolUse / PostToolUse；
+- `harness/__init__.py`：产品安全默认 `ToolExecutor`。
+
+冻结生命周期是：
+
+```text
+cancel
+  → validate tool call
+  → pre-hook
+  → cancel
+  → permission
+  → cancel
+  → tool
+  → post-hook
+  → Observation / Trace
+  → cancel
+```
+
+这条顺序有明确错误语义：
+
+- unknown tool / invalid arguments：在 Hook 和 Permission 之前返回可恢复错误；
+- pre-hook block：`HOOK_BLOCKED`；
+- pre-hook exception：fail-closed，`HOOK_FAILED`；
+- permission deny / 用户拒绝 confirm：`PERMISSION_DENIED`；
+- permission 子系统自身异常：升级为 infrastructure failure；
+- Tool 普通失败：`TOOL_EXECUTION`，由 Agent 决定是否恢复；
+- timeout：保留独立 TIMEOUT 语义；
+- post-hook exception：只记 diagnostic，不覆盖已经真实发生的 ToolResult。
+
+### 7.1 路径与命令边界
+
+`PermissionManager` 对 Shell 命令执行 deny / confirm / allow 决策，并可绑定 `workspace` 限制文件工具路径。产品 Runner 默认启用 PermissionManager；isolate 模式额外显式绑定 `workspace=<worktree>`。
+
+文件工具自身也接收 workspace，因此 direct 模式的文件读写不会仅依赖 LLM 自觉提供正确路径。
+
+## 8. Worktree 与 TaskEngine：隔离 Git 工作区，而不是“复制仓库”
+
+核心文件：`task/engine.py`、`runtime/worktree.py`、`agent/orchestrate.py`。
+
+### 8.1 TaskEngine
+
+`TaskEngine` 使用 SQLite WAL 持久化任务状态与 DAG 依赖。认领任务使用原子 `UPDATE ... WHERE ...` 语义，而不是“读 JSON → 修改 → 写回”，从而避免并发 claim 的经典竞态。
+
+隔离运行中主链是：
+
+```text
+create_task
+ → claim_task(owner="agent")
+ → bind_worktree
+ → Agent run
+ → complete / fail
+```
+
+### 8.2 WorktreeSession
+
+`WorktreeSession` 基于：
+
+```text
+git worktree add -b wt/<task-name> <path> <base-commit>
+```
+
+创建独立 checkout/index/branch。Agent 在这个路径内读写和测试，原始工作树不直接承接这些修改。
+
+结束时 orchestrator 会先 `inspect_changes()`，再应用成果策略：
+
+- `keep-if-changed`：存在未提交修改、提交或状态无法安全判定时保留 worktree；
+- `discard`：无论是否产生修改都清理；
+- 无成果的 `keep-if-changed` 运行也会清理。
+
+保留 worktree 只代表“成果仍在独立工作树中”，不代表已经 commit、merge、push 或创建 PR。
+
+## 9. Docker Runtime：与 Worktree 是两个正交边界
+
+核心文件：`tools/runtime.py`、`tools/sandbox.Dockerfile`。
+
+`Runtime` 将 Shell / pytest / Git 命令执行从 Tool 实现中抽出来：
+
+```text
+ShellTool / PytestTool / GitTool
+              │
+              ▼
+        Runtime.exec()
+          ├─ LocalRuntime
+          └─ DockerRuntime
+```
+
+Docker 默认能力包括：
+
+- 1 GiB memory limit；
+- 2 CPU；
+- `--network none`；
+- `/tmp` tmpfs；
+- 可选只读 root filesystem；
+- 明确的 bind mount 白名单；
+- 运行结束清理容器。
+
+需要区分两种模式：
+
+1. `agent run --sandbox`：命令在 Docker 中执行，但目标 repo 本身仍以 bind mount 暴露给容器，容器内文件/Git 修改会反映到宿主目标 repo；
+2. `agent run --isolate --sandbox`：先创建独立 Worktree，再把这个 worktree 以 rw 挂到 `/workspace`，主工作树不作为 Agent 的可写工作区；同时容器 root 只读、网络关闭。
+
+所以 Worktree 解决 Git/文件成果隔离，Docker 解决进程、网络、资源和容器文件系统边界。二者组合才是当前最完整的隔离运行路径，但仍不能描述为“完全安全”。
+
+isolate+sandbox 在调用模型前还会执行 preflight，检查 `git`、`pytest`、worktree 可见性和可写性；preflight 失败被 Runner 归一为 `FAILED / infrastructure_error`。
+
+## 10. Trace v2：把运行过程变成可追溯事实
+
+核心文件：`agent/event_log.py`、`agent/trace_v2.py`。
+
+每次 Run 写 append-only JSONL。Trace v2 为新事件统一提供：
+
+- `trace_schema_version=2`；
+- `run_id` / `run_span_id`；
+- model / tool / context child span；
+- `step_id` 与 operation-specific id；
+- entrypoint / session correlation；
+- provider error、cancel、infrastructure error、completion rejection；
+- acceptance 与 GitHub delivery 结果；
+- 写盘边界统一 recursive redaction。
+
+Model span 同时记录本地 `token_breakdown` 和独立 `provider_usage`。前者是请求前诊断 estimate，后者是 Provider 返回的 usage；两者不会混为同一个指标。
+
+EventLog 可以 replay 读取和统计，但它不是确定性执行重放系统。
+
+## 11. Independent Acceptance：Agent 成功之后仍要独立验收
+
+核心文件：`agent/runner.py::AcceptanceContract`。
+
+Acceptance 支持：
+
+- `require_changes`；
+- `require_tests`；
+- `required_paths`；
+- `forbidden_paths`；
+- 独立 `verifier(Path) -> bool`。
+
+其中 verifier 由 Runner 持有，不进入 Agent History，因此模型看不到隐藏验收逻辑。结果保存在独立 `acceptance_status` 中：Agent 可以是 SUCCESS，但 Acceptance 仍然失败。
+
+当前 verifier 失败不会自动回灌模型继续修复；这是明确的现有边界。
+
+## 12. GitHub Issue → PR：把模型修改与确定性交付分开
+
+核心文件：`entry/github_issue.py`。
+
+自动 PR 的真实流程是：
+
+```text
+GitHub Issue
+   ↓
+fetch title/body
+   ↓
+clone / reuse clean local repo
+   ↓
+create agent/fix-issue-<n>-<timestamp> branch
+   ↓
+ExecutionRunner → Agent
+   │
+   └─ 自动 PR 模式下移除 Agent 的 git_add / git_commit 工具
+   ↓
+Independent Acceptance (--verify-command)
+   ↓ passed only
+Deterministic Delivery
+   ├─ git add --all
+   ├─ git commit
+   ├─ git push
+   └─ GitHub create PR
+```
+
+自动 PR 模式有两个重要门禁：
+
+1. 本地仓库启动前必须 clean，避免把用户已有修改一起提交；
+2. 必须提供 `--verify-command`，没有独立验收命令时直接拒绝自动交付。
+
+这样 Agent 只负责产生候选修改，commit/push/PR 由确定性代码在验收之后执行。push 或 PR 创建失败时保留已经产生的本地/远端成果，并把 delivery status 写入 Trace。
+
+`--no-pr` 会跳过自动交付，因此不要求 verifier；它仍会创建独立 issue branch 并在本地运行 Agent。
+
+## 13. API：把 isolate 运行暴露为服务
+
+核心文件：`entry/api.py`、`entry/api_store.py`。
+
+FastAPI 层提供任务创建、状态查询、EventLog 查询、SSE 和 cancel。API 任务默认走 isolate 路径，因此每个任务会进入 TaskEngine + WorktreeSession；`sandbox=true` 时再组合 Docker。
+
+API cancellation 使用 `threading.Event` 传到 Agent / Tool lifecycle，是 cooperative cancellation，不会伪装成能够强杀任意同步调用。
+
+API Store 与 Agent TaskEngine 是两个不同状态域：前者服务 HTTP 请求生命周期，后者记录 isolate Agent task 生命周期。
+
+## 14. 关键目录
 
 ```text
 forge-agent/
-├── .agents/                    # 本地 Agent 扩展预留目录；当前为空，运行时未引用
-├── .codex/
-│   └── config.toml             # Codex 项目级沙箱配置
-├── .forge/                     # API 运行状态，不属于源码
-│   └── api_tasks.db            # HTTP 请求生命周期与 Agent 日志映射数据库
-├── .worktrees/                 # isolate 模式创建临时 Git worktree 的默认父目录
-├── agent/                      # Agent 控制内核、领域模型和组合根
-│   ├── __init__.py             # Python 包标识
-│   ├── core.py                 # 同步 ReAct 主循环、完成保护和步骤控制
-│   ├── event_log.py            # JSONL 事件追加、查询、回放与统计
-│   ├── loop_detector.py        # 重复动作、无进展和工具调用循环检测
-│   ├── orchestrate.py          # TaskEngine/worktree/bus/权限/沙箱异步组合根
-│   ├── prompt.py               # System prompt 与任务上下文组装
-│   └── task.py                 # Task、Action、Observation、Event、RunResult
-├── coding_agent.egg-info/      # editable install 生成的包元数据；可重新生成
-│   ├── PKG-INFO                # 项目名称、版本、依赖等元数据快照
-│   ├── SOURCES.txt             # 构建系统收录的源文件清单
-│   ├── dependency_links.txt    # setuptools 兼容依赖链接元数据
-│   ├── entry_points.txt        # agent CLI 入口映射
-│   ├── requires.txt            # 安装依赖与可选依赖清单
-│   └── top_level.txt           # 安装后暴露的顶层 Python 包
-├── config/                     # 应用配置定义与加载
-│   ├── default.yaml            # Provider、模型、预算、工具和上下文默认值
-│   └── schema.py               # YAML/.env 解析、dataclass 配置和 CLI 覆盖
-├── context/                    # 注入 ReAct 循环的上下文管理
-│   ├── __init__.py             # Python 包标识
-│   ├── history.py              # 对话历史窗口、追加与裁剪
-│   ├── repo_map.py             # tree-sitter 仓库符号摘要
-│   └── token_budget.py         # token 估算、预算分配与截断
-├── entry/                      # 用户和外部系统入口
-│   ├── api.py                  # FastAPI 路由、worker、SSE 与 dashboard
-│   ├── api_store.py            # HTTP 任务生命周期 SQLite 存储
-│   ├── chat.py                 # 多轮 ChatSession
-│   ├── cli.py                  # agent run/chat/log 命令及工具注册
-│   └── github_issue.py         # GitHub Issue → Agent → Pull Request 流程
-├── harness/                    # 工具调用的安全拦截管线
-│   ├── __init__.py             # Python 包标识与公共接口出口
-│   ├── executor.py             # Hooks → Permission → Tool 的统一执行器
-│   ├── hooks.py                # 工具执行前后扩展点
-│   └── permission.py           # ALLOW/CONFIRM/DENY 与 workspace 路径边界
-├── ipc/                        # 进程内异步通信
-│   ├── __init__.py             # Python 包标识与 AgentBus 导出
-│   └── bus.py                  # asyncio.Queue topic 发布/订阅总线
-├── llm/                        # 模型后端抽象与 Provider 适配
-│   ├── __init__.py             # Python 包标识
-│   ├── anthropic_backend.py    # Anthropic 原生 tool_use 后端
-│   ├── base.py                 # LLMBackend 接口、响应类型和 MockBackend
-│   ├── errors.py               # 可重试、过载和协议错误类型
-│   ├── openai_compat.py        # OpenAI-compatible、流式响应和文本动作解析
-│   ├── openai_responses.py     # OpenAI Responses 文本、工具调用与事件流适配
-│   └── router.py               # Provider、base URL 与 API key 路由
-├── runtime/                    # 代码工作区事务
-│   ├── __init__.py             # Python 包标识与 worktree 接口导出
-│   └── worktree.py             # Git worktree 创建、绑定、统计和异常清理
-├── scripts/                    # 开发与里程碑演示脚本
-│   ├── m1_demo.py              # TaskEngine 与 WorktreeSession 事务演示
-│   ├── m4_demo.py              # 编排、权限、事件和清理闭环演示
-│   └── start.sh                # 当前机器的 venv/.env/CLI 启动辅助脚本
-├── task/                       # 持久化任务状态层
-│   ├── __init__.py             # Python 包标识与 TaskEngine 类型导出
-│   └── engine.py               # SQLite WAL DAG、状态转换和并发原子认领
-├── tests/                      # 自动化测试；内部文件按要求不在此展开
-├── tools/                      # Agent 可调用工具与命令运行时
-│   ├── __init__.py             # Python 包标识
-│   ├── base.py                 # BaseTool、ToolResult 与 ToolRegistry
-│   ├── file_tool.py            # 文件读取、创建、替换和路径校验
-│   ├── git_tool.py             # Git status/diff/add/commit 工具
-│   ├── runtime.py              # Runtime、LocalRuntime 与 DockerRuntime
-│   ├── sandbox.Dockerfile      # 默认 Python Docker 沙箱镜像
-│   ├── search_tool.py          # 文件、文本与代码符号搜索
-│   ├── shell_tool.py           # Shell 执行、超时、截断与危险命令识别
-│   └── test_tool.py            # pytest 执行与结果解析
-├── .gitignore                  # Git 忽略规则：缓存、日志、密钥和运行产物
-├── README.md                   # 当前架构、安装、使用和开发说明
-├── USAGE.md                    # 补充使用教程
-├── linked_list.py              # Agent 生成能力示例：单链表实现
-├── pyproject.toml              # 包元数据、依赖、CLI、pytest 与 coverage 配置
-├── quicksort.py                # Agent 生成能力示例：多种快速排序实现
-└── smoke_test.py               # 配置、模型后端和工具链联通检查
+├── agent/
+│   ├── core.py              # 同步 ReAct、完成性守卫、Reflection、cancel
+│   ├── runner.py            # 四入口统一执行组合根 + Acceptance
+│   ├── orchestrate.py       # isolate 的 async 资源组合根
+│   ├── event_log.py         # append-only EventLog
+│   ├── trace_v2.py          # Trace schema / correlation / redaction
+│   ├── session.py           # Chat Session domain state
+│   └── session_store.py     # 原子持久化、revision/lock/redaction
+├── context/
+│   ├── token_budget.py      # Model-aware TokenBudget / TokenCounter
+│   ├── repo_map.py          # Query-aware Repo Map
+│   ├── repo_index.py        # 持久化结构索引
+│   ├── incremental_repo_map.py
+│   ├── history.py           # canonical ConversationHistory
+│   ├── tool_pruning.py      # deterministic pruning
+│   └── compaction.py        # TraceableCompaction
+├── harness/
+│   ├── executor.py          # Tool lifecycle
+│   ├── permission.py        # ALLOW / CONFIRM / DENY
+│   └── hooks.py
+├── tools/
+│   ├── base.py              # ToolRegistry
+│   ├── file_tool.py
+│   ├── search_tool.py
+│   ├── shell_tool.py
+│   ├── test_tool.py
+│   ├── git_tool.py
+│   ├── runtime.py           # Local / Docker Runtime
+│   └── sandbox.Dockerfile
+├── task/engine.py           # SQLite WAL TaskEngine
+├── runtime/worktree.py      # WorktreeSession / result policy
+├── llm/                     # Backend adapters / routing / capabilities / usage
+├── entry/
+│   ├── cli.py               # run/chat/log
+│   ├── chat.py              # 多轮 ChatSession
+│   ├── api.py               # HTTP API
+│   └── github_issue.py      # Issue → Acceptance → PR
+├── evals/                   # benchmark / ablation / evidence verification
+├── docs/
+│   ├── evidence/README.md   # Claim → Evidence → Result → Limitation
+│   └── changes/             # 每轮改动记录
+├── README.md
+└── USAGE.md
 ```
 
-从职责上看，`agent/` 是同步控制核心；`task/`、`runtime/` 和 `ipc/` 提供事务与
-异步基础设施；`harness/` 和 `tools/` 构成受控执行边界；`llm/` 与 `context/`
-提供决策输入；`entry/` 负责把这些能力暴露给 CLI、HTTP 和 GitHub。
+## 15. 功能矩阵与当前边界
 
-以下内容是本地状态或可再生成产物：
+| 能力 | run | chat | API | GitHub Issue |
+| --- | --- | --- | --- | --- |
+| 统一 ExecutionRunner | ✓ | ✓ | ✓ | ✓ |
+| Persistent Query-aware Repo Map | ✓ | ✓ | ✓ | ✓ |
+| Model-aware Token Budget | ✓ | ✓ | ✓ | ✓ |
+| Trace v2 | ✓ | ✓（每轮） | ✓ | ✓ + delivery |
+| 持久化 Session | — | ✓ | — | — |
+| Traceable Context Compaction | — | ✓ | — | — |
+| Git Worktree isolate | `--isolate` | — | 默认 | — |
+| Docker Runtime | `--sandbox` | `--sandbox` | 可选 | — |
+| isolate + Docker | ✓ | — | 可选 | — |
+| Independent Acceptance | Runner 可用 | Runner 可用 | Runner 可用 | 自动 PR 强制 verifier |
+| 自动 commit / push / PR | — | — | — | ✓ |
 
-- `.forge/` 保存 API 任务状态，删除会丢失已有 API 任务记录。
-- `.worktrees/` 由隔离运行创建并在结束时清理；异常残留可在确认无任务运行后处理。
-- `coding_agent.egg-info/` 由 `pip install -e .` 生成，可以删除并重新安装恢复。
-- `logs/`、`__pycache__/`、`.pytest_cache/` 等运行缓存不属于项目源码，应保持忽略。
+明确没有实现或不应夸大的能力包括：MCP 正式产品接入、多 Agent、parallel/multi-tool call、任意同步调用强制终止、自动 merge、无人监督发布、分布式 Session Service、完整 OpenTelemetry、Context recall C6。
 
-## 环境要求
+## 16. 安装
 
-- Python 3.11 或更高版本
-- Git
-- 对应模型服务的 API key；使用 Ollama 时不需要 key
-- Docker（仅 `--sandbox` 需要）
-- 目标仓库至少有一次 Git 提交（仅 `--isolate` 需要）
-
-## 安装
+环境要求：Python 3.11+、Git；使用 Docker 路径时需要 Docker daemon。
 
 ```bash
 git clone https://github.com/Napabana/forge-agent.git
 cd forge-agent
+git checkout dev
 
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
-```
 
-安装完成后应能看到 CLI 帮助：
-
-```bash
 agent --help
 ```
 
-也可以不使用已安装的命令，直接执行：
-
-```bash
-python -m entry.cli --help
-```
-
-## 模型配置
-
-默认配置位于 [`config/default.yaml`](config/default.yaml)。推荐把密钥放在环境
-变量中，不要写入仓库。
-
-### Anthropic
-
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export MODEL_ID="claude-sonnet-4-5"
-agent chat --provider anthropic
-```
-
-### OpenAI
-
-Chat Completions（默认兼容模式）：
-
-```bash
-export OPENAI_API_KEY="sk-..."
-agent chat --provider openai --model gpt-4o
-```
-
-Responses API（OpenAI 官方新接口或仅开放 `/responses` 的中转渠道）：
-
-```bash
-agent chat --provider openai --protocol responses --model gpt-5.4
-```
-
-`base_url` 应填写到 API 版本根路径，例如 `https://api.example.com/v1`；不要把
-`/responses` 写进 `base_url`，SDK 会自动追加资源路径。
-
-### DeepSeek
-
-```bash
-export DEEPSEEK_API_KEY="sk-..."
-agent chat --provider deepseek --model deepseek-chat
-```
-
-### Groq
-
-```bash
-export GROQ_API_KEY="gsk_..."
-agent chat --provider groq --model llama-3.3-70b-versatile
-```
-
-### Ollama
-
-先启动本地 Ollama 服务，再运行：
-
-```bash
-agent chat --provider ollama --model qwen2.5-coder
-```
-
-配置加载优先级为：内置默认值 < YAML 配置 < CLI 参数。可以通过全局
-`--config` 参数使用自己的配置文件：
-
-```bash
-agent --config /path/to/agent.yaml chat --repo /path/to/project
-```
-
-配置文件格式：
-
-```yaml
-llm:
-  provider: anthropic
-  protocol: auto               # auto | chat_completions | responses
-  model: ${MODEL_ID}
-  api_key: ${ANTHROPIC_API_KEY}
-  base_url: ${ANTHROPIC_BASE_URL}
-  max_tokens: 8192
-
-agent:
-  max_steps: 40
-  budget_tokens: 80000
-  log_dir: ./logs
-
-tools:
-  shell:
-    timeout: 30
-    max_output_tokens: 8000
-  file:
-    max_view_lines: 100
-
-context:
-  repo_map_budget: 8000
-  history_window: 20
-```
-
-协议选择规则：
-
-| `protocol` | 后端 | 典型场景 |
-| --- | --- | --- |
-| `auto` | Anthropic 走 Messages，其余走 Chat Completions | 默认，兼容旧配置 |
-| `chat_completions` | `OpenAICompatBackend` | OpenAI、DeepSeek、Groq、Ollama及多数中转站 |
-| `responses` | `OpenAIResponsesBackend` | OpenAI Responses 或仅开放 `/responses` 的渠道 |
-
-配置加载器可用`FORGE_ENV_FILE=/path/to/.env` 指定；shell 中已经存在的环境变量不会
-被 `.env` 覆盖。
-
-## 使用指南
-
-### 交互对话
-
-`chat` 会保留本次会话的上下文，并在每轮任务前确认有风险的命令：
-
-```bash
-agent chat
-agent chat --repo /path/to/project
-agent chat --provider deepseek --model deepseek-chat
-agent chat --provider openai --protocol responses --model gpt-5.4
-agent chat --no-stream                    # 排查中转站流式响应兼容问题
-agent chat --repo /path/to/project --max-steps 60 --verbose
-```
-
-会话内命令：
-
-| 命令 | 作用 |
-| --- | --- |
-| `/stats` | 查看会话轮数、步骤数和 token 统计 |
-| `/clear` | 清除对话历史，保留初始仓库上下文 |
-| `/help` | 显示会话命令 |
-| `/exit`、`/quit`、`/q` | 退出 |
-
-### 一次性任务
-
-```bash
-agent run --repo /path/to/project --task "修复失败的单元测试"
-agent run --repo /path/to/project --task-file task.txt
-agent run --repo . --task "重构解析器" --max-steps 60
-agent run --repo . --task "更新依赖" --confirm
-agent run --repo . --protocol responses --no-stream --task "读取配置并总结"
-```
-
-`--confirm` 会在危险 shell 命令执行前请求确认。未启用时仍会经过内置权限和
-命令安全检查，但不会对所有需要确认的操作进行交互询问。
-
-### Docker 沙箱
-
-在宿主机已安装并启动 Docker 后：
-
-```bash
-docker version
-agent run --repo /path/to/project --task "运行并修复测试" --sandbox
-agent chat --repo /path/to/project --sandbox
-```
-
-沙箱使用 `python:3.11-slim`，默认限制为 1 GiB 内存、2 个 CPU，关闭容器
-网络并挂载 `/tmp` 临时文件系统。目标仓库挂载到容器内 `/workspace`。
-首次运行可能需要 Docker 拉取镜像。
-
-注意：默认断网意味着智能体不能在沙箱中下载依赖。`python:3.11-slim` 也不一定
-包含目标项目所需的系统工具和依赖，复杂项目应准备自己的预构建镜像或先在本地
-模式验证。
-
-### Git worktree 隔离
-
-```bash
-agent run --repo /path/to/git-repo \
-  --task "验证修复方案" \
-  --isolate --result-policy discard
-
-agent run --repo /path/to/git-repo \
-  --task "在容器和独立工作树中修复代码" \
-  --isolate --sandbox
-```
-
-`--isolate` 会创建独立 worktree，并通过 SQLite TaskEngine 记录任务状态。
-默认的 `--result-policy keep-if-changed` 会清理没有修改的工作树，但在 Agent
-产生文件修改或新增提交时保留 worktree 和 `wt/<task>` 分支，并在最终输出中
-打印路径。纯验证任务可传 `--result-policy discard`，无论是否产生修改都清理。
-
-`--sandbox` 与成果策略彼此独立：它限制命令的进程、网络和挂载边界；worktree
-负责隔离 Git 分支和文件成果。组合使用时，Docker 容器始终清理，宿主机上的
-worktree 是否保留仍由 `--result-policy` 决定。
-
-### 查看事件日志
-
-运行日志默认写入 `./logs`：
-
-```bash
-agent log list
-agent log list --dir /path/to/logs
-agent log show logs/<task-id>_<timestamp>.jsonl
-```
-
-日志包含任务、动作、工具观察、反思和最终状态。`--isolate` 模式还会记录任务
-认领、worktree 生命周期和权限决策。
-
-### GitHub Issue 自动处理
-
-```bash
-export GITHUB_TOKEN="github-token"
-
-python -m entry.github_issue \
-  --repo owner/repository \
-  --issue 42 \
-  --local-path /tmp/repository
-```
-
-该入口会读取 Issue、克隆或复用本地仓库、创建工作分支、运行 agent，并在成功
-后推送分支和创建 PR。常用选项：
-
-```bash
-# 只在本地运行，不推送或创建 PR
-python -m entry.github_issue \
-  -r owner/repository -i 42 -l /tmp/repository --no-pr
-
-# 指定目标分支和配置
-python -m entry.github_issue \
-  -r owner/repository -i 42 -l /tmp/repository \
-  --base-branch develop --config /path/to/agent.yaml
-```
-
-`GITHUB_TOKEN` 需要具备读取 Issue、推送分支和创建 Pull Request 所需的仓库
-权限。
-
-### HTTP API 服务
-
-Forge Agent 也可以作为轻量级 HTTP 后端运行，方便接入 Web 前端、CI 或其它
-服务。API 层不会替代 CLI；它复用现有 agent、TaskEngine、Git worktree 隔离和
-JSONL 事件日志。
-
-安装 API 依赖：
+需要 FastAPI：
 
 ```bash
 pip install -e ".[api,dev]"
 ```
 
-启动服务：
+需要 tiktoken 和更多 tree-sitter language bindings：
 
 ```bash
-uvicorn entry.api:app --reload
+pip install -e ".[full,dev]"
 ```
 
-浏览器访问 `http://127.0.0.1:8000/` 会返回 API 索引；访问
-`http://127.0.0.1:8000/docs` 可以打开 FastAPI 自动生成的交互式文档。
-也可以访问 `http://127.0.0.1:8000/dashboard` 使用内置的轻量任务面板。
+## 17. 配置：推荐显式区分模型能力与 Forge policy
 
-提交任务：
+`config/default.yaml` 仍兼容旧字段。新配置建议使用清晰语义：
+
+```yaml
+llm:
+  provider: openai
+  protocol: chat_completions       # auto | chat_completions | responses
+  model: your-model
+  api_key: ${YOUR_API_KEY}
+  base_url: https://api.example.com/v1
+
+  # 只有在你确认当前模型/渠道的真实能力时才填写：
+  context_window: 128000
+  model_max_output_tokens: 8192
+
+  # Forge 本次请求的输出 reserve：
+  max_output_tokens: 8192
+
+agent:
+  max_steps: 40
+  context_budget_cap: 80000
+  context_safety_margin_tokens: 1024
+  log_dir: ./logs
+
+context:
+  repo_map_budget: 8000
+  history_window: 20
+  semantic_packet_max_tokens: 16000
+```
+
+如果是未知 OpenAI-compatible 代理，不确定 Context Window 时应省略 `context_window` / `model_max_output_tokens`，保留 `context_budget_cap` 作为 Forge fallback。
+
+兼容字段：
+
+- `llm.max_tokens` → 兼容解释为 request `max_output_tokens`；
+- `agent.budget_tokens` → 兼容解释为 `context_budget_cap` fallback。
+
+API Key 应通过环境变量或 `FORGE_ENV_FILE` 指定的仓库外 env 文件加载，不应把真实 secret 提交到仓库。
+
+## 18. 快速开始
+
+一次性任务：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/tasks \
-  -H "Content-Type: application/json" \
-  -d '{
-    "repo_path": "/path/to/repo",
-    "prompt": "修复失败的 pytest",
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-5",
-    "max_steps": 40,
-    "sandbox": false,
-    "result_policy": "keep-if-changed"
-  }'
+agent run --repo /path/to/project --task "修复失败的测试并运行相关 pytest"
 ```
 
-查询状态和事件：
+多轮 Chat：
 
 ```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/tasks
-curl http://127.0.0.1:8000/tasks/<task_id>
-curl http://127.0.0.1:8000/tasks/<task_id>/events
-curl -N http://127.0.0.1:8000/tasks/<task_id>/events/stream
-curl -X POST http://127.0.0.1:8000/tasks/<task_id>/cancel
+agent chat --repo /path/to/project
 ```
 
-第一版 API 默认在后台线程池执行任务，并使用 `orchestrate_run` 走隔离
-worktree、权限检查和事件审计链路。API 模式下不会交互确认危险命令；
-需要确认的命令会被权限管线拒绝。任务查询结果的 `artifact` 字段会返回保留
-worktree 的路径、分支、基点提交和修改文件列表。可传
-`"result_policy": "discard"` 恢复一次性验证行为。
-
-可用环境变量：
+独立 Worktree：
 
 ```bash
-# 后台 worker 数，默认 2
-export FORGE_API_WORKERS=2
-
-# queued/running/cancel_requested 任务总数上限，默认 50
-export FORGE_API_QUEUE_LIMIT=50
-
-# 限制 API 只能运行这些目录下的仓库；多个路径用系统 path separator 分隔
-export FORGE_API_ALLOWED_ROOTS="/home/jfm/projects:/tmp/demo-repos"
+agent run --repo /path/to/project \
+  --task "修复一个明确问题并运行测试" \
+  --isolate --result-policy keep-if-changed
 ```
 
-当前 API 已支持：
-
-- SSE 事件流：`GET /tasks/{task_id}/events/stream`
-- 协作式取消：`POST /tasks/{task_id}/cancel`
-- worker 数、队列长度和仓库 allowlist 配置
-- 简单 Web dashboard：`GET /dashboard`
-
-剩余限制：
-
-- 取消是协作式的，会在 agent 下一轮 LLM/工具调用前停止；已经进入单个长
-  shell 命令时不会强杀该命令。
-- dashboard 是调试面板，不包含鉴权、多用户隔离或持久化前端状态。
-
-## 命令参考
-
-```text
-agent [--config PATH] COMMAND
-
-agent chat
-  [--repo PATH]
-  [--provider PROVIDER]
-  [--protocol auto|chat_completions|responses]
-  [--model MODEL]
-  [--max-steps N]
-  [--stream | --no-stream]
-  [--sandbox]
-  [--verbose]
-
-agent run
-  (--task TEXT | --task-file FILE)
-  [--repo PATH]
-  [--provider PROVIDER]
-  [--protocol auto|chat_completions|responses]
-  [--model MODEL]
-  [--max-steps N]
-  [--stream | --no-stream]
-  [--confirm]
-  [--sandbox]
-  [--isolate]
-  [--result-policy discard|keep-if-changed]
-  [--verbose]
-
-agent log list [--dir DIR]
-agent log show LOG_FILE
-```
-
-## 安全边界
-
-- 文件工具将相对路径限制在当前目标仓库或临时 worktree 内，并拒绝路径逃逸。
-- Shell 工具有拒绝、确认和允许三类权限决策。
-- `chat` 默认提供危险命令确认回调；`run` 通过 `--confirm` 启用交互确认。
-- `--sandbox` 隔离命令执行环境，但文件工具仍由宿主进程执行，并受 workspace
-  路径边界约束。
-- 使用普通本地模式时，允许的命令直接以当前用户权限在宿主机执行。请先提交或
-  备份目标仓库中的重要修改。
-
-## 开发与测试
+Worktree + Docker：
 
 ```bash
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-# 非 Docker 测试
-pytest -k "not DockerRuntimeIntegration"
-
-# 包含 Docker 集成测试，需要 Docker daemon 和镜像
-pytest
-
-# 单个测试文件
-pytest tests/test_orchestrate.py
+agent run --repo /path/to/project \
+  --task "修复并验证测试" \
+  --isolate --sandbox
 ```
 
-可选安装更多 tree-sitter 语言和精确 token 统计支持：
+GitHub Issue 本地修复：
 
 ```bash
-pip install -e ".[full]"
+python -m entry.github_issue \
+  --repo owner/repo --issue 42 --local-path /tmp/repo --no-pr
 ```
 
-## 常见问题
+GitHub Issue 自动 PR：
 
-**`python` 命令不存在**
+```bash
+export GITHUB_TOKEN=...
+python -m entry.github_issue \
+  --repo owner/repo \
+  --issue 42 \
+  --local-path /tmp/repo \
+  --verify-command "python -m pytest -q tests/test_target.py"
+```
 
-使用 `python3.11` 创建虚拟环境并激活；激活后再使用 `python` 和 `agent`。
+完整逐步验收见 [`USAGE.md`](USAGE.md)。
 
-**提示 API key 缺失**
+## 19. 证据与项目声明边界
 
-确认 provider 对应的环境变量已经导出，或确认 `FORGE_ENV_FILE` 指向的文件可读。
+本仓库把“实现事实”“离线确定性回归”“冻结 benchmark”“真实模型小样本”和“真实端到端案例”分开记录。所有可引用数字统一以 [`docs/evidence/README.md`](docs/evidence/README.md) 为入口。
 
-**中转站提示 GPT 只支持 Responses API**
+当前可复现证据包括 Context B1、Repo Map retrieval benchmark、Persistent Repo Map phase benchmark、B2 real-model small sample、Failure Harness、Trace/Runner contract，以及一个真实 Issue → merged PR 案例。它们各自只能证明对应协议和样本范围，不能外推为总体 Coding Agent 成功率或线上 SLA。
 
-在 YAML 中设置 `protocol: responses`，或在命令行加入 `--protocol responses`。
-如果只是把 `--stream` 改成 `--no-stream`，请求仍会发送到原来的协议端点。
+默认离线证据校验：
 
-**中转站返回 `500/502` 或流式响应结构不完整**
+```bash
+python -m evals.verify_evidence_pack
+```
 
-先用 `--no-stream` 复测。非流式成功通常表示流式事件格式不兼容；非流式仍返回
-`500/502` 通常是模型名称、渠道权限或上游服务问题。后端会安全跳过空
-`choices`、空 `delta/message`，并在缺少 `usage` 时估算 token，不再因这些响应
-形态直接触发 `NoneType.content`。
+全量回归：
 
-**Docker 沙箱无法启动**
-
-运行 `docker version` 检查客户端能否连接 daemon，并确认当前用户有权使用
-Docker。首次使用还需要能够拉取 `python:3.11-slim`。
-
-**`--isolate` 创建 worktree 失败**
-
-确认目标目录是 Git 仓库、至少有一次提交，且 `.worktrees/` 中没有同名的残留
-目录。
+```bash
+python -m pytest -q
+```
