@@ -256,3 +256,12 @@ pytest -q
 - 当前 ChatGPT 执行容器无法解析 `github.com`，无法 clone 远端仓库执行仓库级 pytest；本轮没有虚构 pytest 通过。实际只运行了完全离线纯函数行为校验，六个核心行为均通过。用户本地应优先执行新增测试、现有 TokenBudget/Context 测试，再视成本跑全量 pytest。
 - `config/default.yaml`、P2 Repo Map、B1/B2 fixture、`evals/results` 均未修改。connector 无法读取用户本地未提交修改或 stash，因此不对本地工作区状态做断言。
 - 本轮更新日志：`docs/changes/2026-09-17/Model-Aware-Token-Budget收口.md`。
+
+### 验证补充（2026-09-17，Model-aware Token Budget 本地回归）
+
+- 上一条交接中“ChatGPT 执行容器无法运行仓库级 pytest”保留为实现提交当时的真实状态，不回写历史。
+- 用户随后在本地执行 `tests/test_model_aware_token_budget.py`、既有 TokenBudget/Context Compaction 相关回归，以及 `python -m pytest -q` 全量测试，并明确确认三层验证全部通过。
+- 用户未提供 passed 数量、完整 stdout 或耗时，因此这里只记录“全部通过”，不补造数字。
+- 本轮仅补验证证据，不修改 Agent runtime、Context/LLM 实现、测试 fixture、B1/B2 或 `evals/results`。
+- GitHub connector 只能确认远端 `dev`，无法读取用户本地未提交修改或 stash，因此仍不对本地工作区状态做额外断言。
+- 本轮更新日志：`docs/changes/2026-09-17/Model-Aware-Token-Budget本地回归验证收口.md`。
