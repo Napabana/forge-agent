@@ -70,7 +70,11 @@ llm:
   api_key: ${KRILL_API_KEY}
   base_url: https://api.krill-code.net/coding/v1 
   #https://api-slb.krill-ai.net/coding/v1
-  max_tokens: 8192
+  context_window: 1000000
+  model_max_output_tokens: 384000
+
+  # Forge 这一次请求真正允许模型生成多少
+  max_output_tokens: 50000
 
 # llm:
 #   provider: openai
@@ -90,7 +94,8 @@ llm:
 
 agent:
   max_steps: 40
-  budget_tokens: 80000
+  context_budget_cap: 384000
+  context_safety_margin_tokens: 40000
   log_dir: ./logs
 
 tools:

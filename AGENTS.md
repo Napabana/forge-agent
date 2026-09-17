@@ -265,3 +265,33 @@ pytest -q
 - 本轮仅补验证证据，不修改 Agent runtime、Context/LLM 实现、测试 fixture、B1/B2 或 `evals/results`。
 - GitHub connector 只能确认远端 `dev`，无法读取用户本地未提交修改或 stash，因此仍不对本地工作区状态做额外断言。
 - 本轮更新日志：`docs/changes/2026-09-17/Model-Aware-Token-Budget本地回归验证收口.md`。
+
+### 最后交接（2026-09-17，Smoke Test 配置与依赖修复）
+
+- 修复 `smoke_test.py` 直接按系统默认编码读取 YAML 导致的 Windows `UnicodeDecodeError`。
+- 冒烟脚本现在复用 `config.schema.load_config`，可读取正式配置和项目 env 文件，再兼容传给 `create_backend_from_config`。
+- 当前项目 `.venv` 已安装项目声明的 `openai>=1.30.0`；backend 实例化验证通过，未发起真实 API 请求。
+- 本轮修改：`smoke_test.py`、`docs/changes/2026-09-17/smoke-test配置与依赖修复.md`。
+- 验证：`.venv\\Scripts\\python.exe -m py_compile smoke_test.py`、配置加载和 `OpenAICompatBackend` 实例化均通过。
+- 当前分支为 `dev`，工作区有本轮未提交修改；未处理 stash，未修改 `config/default.yaml`、fixture 或历史结果。
+- 下一步使用项目解释器运行：`.\\.venv\\Scripts\\python.exe smoke_test.py`；本轮没有虚构真实 API 请求成功。
+
+### 最后交接（2026-09-17，ContextBudgetSpec EventLog 序列化修复）
+
+- 修复 `ContextBudgetSpec` 被 `dataclasses.asdict()` 深拷贝时因 `__new__` 必填元数据缺失而崩溃的问题。
+- 修复位于 `config/schema.py` 的类型边界，序列化时转换为普通 `int`，覆盖 CLI、Chat、API、GitHub Issue 和 smoke_test 的共同 Task 路径。
+- 新增 `tests/test_model_aware_token_budget.py` 的 Task 序列化回归；专项测试 9 passed。
+- 本轮修改：`config/schema.py`、`tests/test_model_aware_token_budget.py`、`docs/changes/2026-09-17/smoke-test配置与依赖修复.md`、本交接记录。
+- 已通过 `.venv\\Scripts\\python.exe -m pytest tests/test_model_aware_token_budget.py -q` 和相关文件 `py_compile`。
+- 未运行真实 LLM 请求；下一步可用 `.\\.venv\\Scripts\\python.exe smoke_test.py` 验证 API 联通和工具执行。
+
+### 最后交接（2026-09-18，Chat / Direct 默认 CWD 统一修复）
+
+- 修复 Chat/direct target repo 与 Shell/Test/Git `default_cwd` 未统一绑定的问题；File tools workspace 行为保持不变。
+- `_build_registry` 已用独立 `default_cwd` 替代含混的 `worktree_path` 参数，`workspace` 不再隐式回退到 worktree。
+- CLI direct、Chat、GitHub Issue 显式绑定目标 repo；isolate 显式绑定当前 worktree；三个 eval 和 demo/test builder 已同步新契约。
+- 新增 registry 参数独立性、CLI direct、Chat 和 isolate/GitHub 接线回归；LLM 显式 `cwd` 覆盖默认值的既有语义未改变。
+- Codex 环境的系统 Python 与随附 Python 均缺少 pytest；用户随后在本地执行本轮测试并明确确认全部通过，未提供 passed 数量或耗时，因此不补造数字。
+- 本轮 13 个相关 Python 文件的静态编译检查通过；`git diff --check` 仅报告既有 LF/CRLF 提示。
+- 工作区原有 Smoke Test / Model-aware Token Budget 修改、`config/default.yaml` 修改及 stash 均未覆盖或处理；当前分支仍为 `dev`。
+- 本轮更新日志：`docs/changes/2026-09-18/Chat-Direct默认CWD统一修复.md`。

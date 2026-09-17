@@ -509,7 +509,7 @@ def test_direct_and_isolate_runner_share_permission_denial_semantics(tmp_path):
     repo = tmp_path / "repo"
     _init_git_repo(repo)
 
-    def build_registry(_cfg, _confirm, _runtime, *, worktree_path):
+    def build_registry(_cfg, _confirm, _runtime, *, default_cwd, workspace):
         return ToolRegistry().register(RecordingTool("shell"))
 
     isolate_backend = MockBackend([

@@ -147,3 +147,22 @@ def test_build_registry_injects_workspace_into_file_tools(tmp_path):
     ok = registry.execute_tool("file_write", {"path": "inside.txt", "content": "ok"})
     assert ok.success
     assert (tmp_path / "inside.txt").read_text() == "ok"
+
+
+def test_build_registry_keeps_process_cwd_independent_from_file_workspace(tmp_path):
+    """process tools 绑定 target repo cwd，不再借用 worktree_path 或 workspace。"""
+    from config.schema import AppConfig
+    from entry.cli import _build_registry
+
+    cwd = tmp_path / "repo"
+    workspace = tmp_path / "files"
+    cwd.mkdir()
+    workspace.mkdir()
+    registry = _build_registry(
+        AppConfig(), default_cwd=str(cwd), workspace=str(workspace),
+    )
+
+    for name in ("shell", "test", "git_status", "git_diff", "git_add", "git_commit"):
+        assert registry._tools[name]._default_cwd == str(cwd)
+    for name in ("file_read", "file_view", "file_write"):
+        assert registry._tools[name]._workspace == workspace.resolve()

@@ -149,7 +149,7 @@ def test_issue_registry_uses_target_repo(tmp_path, monkeypatch, create_pr):
     )
 
     def assert_registry(_config, **kwargs):
-        assert kwargs == {"worktree_path": target, "workspace": target}
+        assert kwargs == {"default_cwd": target, "workspace": target}
         return registry
 
     class AssertRunner:

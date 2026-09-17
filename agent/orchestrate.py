@@ -54,7 +54,7 @@ from tools.runtime import CONTAINER_WORKDIR, DockerRuntime, LocalRuntime, Runtim
 logger = logging.getLogger(__name__)
 
 
-# registry_builder 契约：(config, confirm_callback, runtime, worktree_path) -> ToolRegistry
+# registry_builder 契约：(config, confirm_callback, runtime, *, default_cwd, workspace) -> ToolRegistry
 # 注入是为了避免 agent 层 import entry/cli（拉入 Click 依赖）。
 RegistryBuilder = Callable[..., Any]
 
@@ -316,7 +316,8 @@ async def orchestrate_run(
 
             # registry 在 worktree 内执行，PermissionManager 再强制 safe_path 边界。
             registry = registry_builder(
-                agent_cfg, confirm_callback, runtime, worktree_path=wt.path,
+                agent_cfg, confirm_callback, runtime,
+                default_cwd=wt.path, workspace=wt.path,
             )
             permission = PermissionManager(workspace=str(wt.path))
 

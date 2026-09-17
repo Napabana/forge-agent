@@ -122,8 +122,9 @@ def fake_worktree_session(monkeypatch):
     monkeypatch.setattr(orch_mod, "WorktreeSession", FakeWorktreeSession)
 
 
-def _build_registry(cfg, confirm_callback, runtime, worktree_path):
+def _build_registry(cfg, confirm_callback, runtime, *, default_cwd, workspace):
     """最小 registry：只含 file_write（够覆盖权限/写入场景）。"""
+    assert default_cwd == workspace
     return ToolRegistry().register(FileWriteTool())
 
 

@@ -417,7 +417,7 @@ def run_on_issue(
     # GitHub Issue 的所有仓库工具默认在目标仓库执行，避免误用 Forge 进程目录。
     registry = _build_registry(
         config,
-        worktree_path=local_path,
+        default_cwd=local_path,
         workspace=local_path,
     )
     if create_pr:

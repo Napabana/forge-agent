@@ -228,6 +228,16 @@ class TestCliRun:
         result = self._invoke_run(tmp_path)
         assert "Model" in result.output or "Provider" in result.output
 
+    def test_run_binds_process_cwd_to_target_repo(self, tmp_path):
+        from entry.cli import _build_registry
+
+        with patch("entry.cli._build_registry", wraps=_build_registry) as build_registry:
+            result = self._invoke_run(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        assert build_registry.call_args.kwargs["default_cwd"] == str(tmp_path.resolve())
+        assert build_registry.call_args.kwargs["workspace"] == str(tmp_path.resolve())
+
     def test_run_missing_task_fails(self, tmp_path):
         runner = CliRunner()
         result = runner.invoke(cli, ["run", "--repo", str(tmp_path)], obj={})

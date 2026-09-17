@@ -328,7 +328,7 @@ def _run_one(
     preloaded_tokens = estimate_messages_tokens(history.to_dicts())
     policy = _build_policy(variant, defaults, backend)
     policy_probe = CountingPolicy(policy) if policy is not None else None
-    registry = _build_registry(cfg, worktree_path=str(repo), workspace=str(repo))
+    registry = _build_registry(cfg, default_cwd=str(repo), workspace=str(repo))
     agent_config = AgentConfig(
         max_steps=int(defaults["max_steps"]),
         budget_tokens=int(defaults["budget_tokens"]),

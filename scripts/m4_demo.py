@@ -82,12 +82,12 @@ def _make_temp_repo(root: Path) -> Path:
     return repo
 
 
-def _build_registry(cfg, confirm_callback, runtime, worktree_path):
+def _build_registry(cfg, confirm_callback, runtime, *, default_cwd, workspace):
     """registry_builder：给 orchestrator 用的最小 registry（文件工具）。"""
     return (
         ToolRegistry()
-        .register(FileReadTool(workspace=str(worktree_path)))
-        .register(FileWriteTool(workspace=str(worktree_path)))
+        .register(FileReadTool(workspace=str(workspace)))
+        .register(FileWriteTool(workspace=str(workspace)))
     )
 
 

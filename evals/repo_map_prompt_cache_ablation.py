@@ -94,7 +94,7 @@ def run_benchmark(*, config_path: str | Path | None, output: str | Path, repetit
 
     with TemporaryDirectory(prefix="forge-cache-ab-") as tmp:
         workspace = Path(tmp)
-        registry = _build_registry(cfg, worktree_path=str(workspace), workspace=str(workspace))
+        registry = _build_registry(cfg, default_cwd=str(workspace), workspace=str(workspace))
         tools = registry.get_schemas()
         user_message = LLMMessage(role="user", content="Inspect the repository context and briefly identify the most relevant module.")
         with (out / "raw.jsonl").open("w", encoding="utf-8") as stream:

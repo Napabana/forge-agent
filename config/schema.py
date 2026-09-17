@@ -36,6 +36,10 @@ class ContextBudgetSpec(int):
         obj.capability_fallback = capability_fallback
         return obj
 
+    def __deepcopy__(self, memo):
+        """序列化时退化为普通 int，避免 deepcopy 重建时丢失元数据参数。"""
+        return int(self)
+
 
 @dataclass
 class LLMConfig:

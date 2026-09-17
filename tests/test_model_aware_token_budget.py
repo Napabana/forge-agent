@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from agent.task import Action, ActionType
+from agent.task import Action, ActionType, Task
 from config.schema import load_config
 from context.structured_compaction import DeterministicEvidence, build_semantic_packet
 from context.token_budget import ConservativeTokenCounter, TokenBudget
@@ -186,6 +186,30 @@ agent:
     assert budget.effective_context_window == 80_000
     assert budget.reserved_output_tokens == 8_192
     assert budget.safety_margin_tokens == 1_024
+
+
+def test_context_budget_spec_serializes_through_task(tmp_path) -> None:
+        config_path = tmp_path / "legacy.yaml"
+        config_path.write_text(
+                """
+llm:
+    provider: openai
+    model: unknown-proxy-model
+    api_key: dummy
+    max_tokens: 8192
+agent:
+    budget_tokens: 80000
+""".strip(),
+                encoding="utf-8",
+        )
+
+        config = load_config(config_path)
+        task = Task(description="serialize", repo_path=".", budget_tokens=config.agent.budget_tokens)
+
+        serialized = task.to_dict()
+
+        assert serialized["budget_tokens"] == 80_000
+        assert type(serialized["budget_tokens"]) is int
 
 
 def test_backend_exposes_capability_and_request_policy_metadata() -> None:

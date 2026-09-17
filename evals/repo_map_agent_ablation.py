@@ -224,7 +224,7 @@ def _run_one(
         output_dir / "repos" / variant / f"repeat-{repeat}" / case.case_id,
     )
     _init_fixture_repo(repo)
-    registry = _build_registry(cfg, worktree_path=str(repo), workspace=str(repo))
+    registry = _build_registry(cfg, default_cwd=str(repo), workspace=str(repo))
     cache_dir = output_dir / "repo-map-cache" / variant / f"repeat-{repeat}" / case.case_id
     agent_config = AgentConfig(
         max_steps=int(defaults.get("max_steps", 12)),

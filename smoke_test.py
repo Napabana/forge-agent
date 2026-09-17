@@ -20,14 +20,13 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
-
 # 把项目根目录加入 sys.path（脚本放根目录时已经在，保险起见）
 sys.path.insert(0, str(Path(__file__).parent))
 
 from agent.core import Agent, AgentConfig
 from agent.event_log import EventLog, summarize_run
 from agent.task import EventType, Task
+from config.schema import load_config as load_app_config
 from llm.router import create_backend_from_config
 from tools.base import ToolRegistry
 from tools.file_tool import FileReadTool, FileViewTool, FileWriteTool
@@ -67,25 +66,28 @@ def bold(t):   return _c(t, "1")
 # ---------------------------------------------------------------------------
 
 def load_config(path: str = "config/default.yaml") -> dict:
-    config_path = Path(path)
-    if not config_path.exists():
-        logger.error("Config file not found: %s", config_path)
-        sys.exit(1)
-
-    with open(config_path) as f:
-        raw = f.read()
-
-    # 展开环境变量占位符 ${VAR}
-    import os, re
-    def replace_env(m):
-        var = m.group(1)
-        val = os.environ.get(var, "")
-        if not val:
-            logger.warning("Environment variable %s is not set", var)
-        return val
-    raw = re.sub(r"\$\{(\w+)\}", replace_env, raw)
-
-    return yaml.safe_load(raw)
+    """复用正式配置加载器，避免 Windows 编码和 env 文件差异。"""
+    config = load_app_config(path)
+    return {
+        "llm": {
+            "provider": config.llm.provider,
+            "protocol": config.llm.protocol,
+            "model": config.llm.model,
+            "api_key": config.llm.api_key,
+            "base_url": config.llm.base_url,
+            "max_output_tokens": config.llm.max_output_tokens,
+            "context_window": config.llm.context_window,
+            "model_max_output_tokens": config.llm.model_max_output_tokens,
+            "semantic_packet_max_tokens": config.context.semantic_packet_max_tokens,
+            "context_budget_cap": config.agent.context_budget_cap,
+            "context_safety_margin_tokens": config.agent.context_safety_margin_tokens,
+        },
+        "agent": {
+            "max_steps": config.agent.max_steps,
+            "budget_tokens": config.agent.budget_tokens,
+            "log_dir": config.agent.log_dir,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

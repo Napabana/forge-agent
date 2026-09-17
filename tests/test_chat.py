@@ -323,5 +323,6 @@ class TestChatCommand:
         registry = captured["registry"]
         shell_tool = registry._tools["shell"]
         assert shell_tool._runtime is fake_runtime
+        assert shell_tool._default_cwd == str(tmp_path.resolve())
         denied = registry.execute_tool("file_read", {"path": "/etc/passwd"})
         assert not denied.success

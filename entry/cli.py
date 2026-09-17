@@ -85,15 +85,13 @@ def _build_registry(
     cfg,
     confirm_callback=None,
     runtime=None,
-    worktree_path=None,
+    default_cwd=None,
     workspace=None,
 ):
     """根据配置组装工具注册表。
 
-    worktree_path：M4 第二波——非 None 时把它作为 shell/test/git 工具的 default_cwd，
-    让 LocalRuntime 路径下工具默认在 worktree 内执行（LLM 仍可用 params cwd 覆盖）。
-    Docker 路径由 runtime 内部翻译 cwd，default_cwd 不影响。
-    workspace：文件工具的路径边界。未显式传入时优先使用 worktree_path。
+    default_cwd：shell/test/git 工具的默认工作目录；LLM 显式 cwd 仍可覆盖。
+    workspace：文件工具的独立路径边界，不从 default_cwd 隐式推导。
     """
     from tools.base import ToolRegistry
     from tools.file_tool import FileReadTool, FileViewTool, FileWriteTool
@@ -102,23 +100,23 @@ def _build_registry(
     from tools.shell_tool import ShellTool
     from tools.test_tool import PytestTool
 
-    wt = str(worktree_path) if worktree_path else None
-    fs_workspace = str(workspace or worktree_path) if (workspace or worktree_path) else None
+    process_cwd = str(default_cwd) if default_cwd else None
+    fs_workspace = str(workspace) if workspace else None
 
     return (
         ToolRegistry()
-        .register(ShellTool(confirm_callback=confirm_callback, runtime=runtime, default_cwd=wt))
+        .register(ShellTool(confirm_callback=confirm_callback, runtime=runtime, default_cwd=process_cwd))
         .register(FileReadTool(workspace=fs_workspace))
         .register(FileViewTool(workspace=fs_workspace))
         .register(FileWriteTool(workspace=fs_workspace))
         .register(SearchTextTool())
         .register(FindFilesTool())
         .register(FindSymbolTool())
-        .register(PytestTool(runtime=runtime, default_cwd=wt))
-        .register(GitStatusTool(runtime=runtime, default_cwd=wt))
-        .register(GitDiffTool(runtime=runtime, default_cwd=wt))
-        .register(GitAddTool(runtime=runtime, default_cwd=wt))
-        .register(GitCommitTool(runtime=runtime, default_cwd=wt))
+        .register(PytestTool(runtime=runtime, default_cwd=process_cwd))
+        .register(GitStatusTool(runtime=runtime, default_cwd=process_cwd))
+        .register(GitDiffTool(runtime=runtime, default_cwd=process_cwd))
+        .register(GitAddTool(runtime=runtime, default_cwd=process_cwd))
+        .register(GitCommitTool(runtime=runtime, default_cwd=process_cwd))
     )
 
 
@@ -300,6 +298,7 @@ def run(
         config,
         confirm_callback=confirm_cb,
         runtime=runtime,
+        default_cwd=str(repo_path),
         workspace=str(repo_path),
     )
 
@@ -521,6 +520,7 @@ def chat(
         config,
         confirm_callback=terminal_confirm,
         runtime=runtime,
+        default_cwd=str(repo_path),
         workspace=str(repo_path),
     )
     session_store = (
