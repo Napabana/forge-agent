@@ -163,6 +163,15 @@ Detail: {detail}
 The completion requirements are not yet satisfied. Resolve the stated requirement and continue working.\
 """
 
+STRUCTURED_RECOVERY = """\
+[STRUCTURED RECOVERY]
+Failure category: {category}
+Strategy: {strategy}
+Reason: {reason}
+Attempt: {attempt}/{max_attempts}
+{target_section}{replan_section}Use the failure evidence already present above. Do not repeat the same failed action unchanged unless the selected strategy explicitly allows a retry.\
+"""
+
 
 def reflection_test_failed() -> str:
     return REFLECTION_TEST_FAILED
@@ -184,6 +193,36 @@ def step_budget_warning() -> str:
 def completion_rejected(code: str, detail: str) -> str:
     """把结构化完成拒绝渲染为 canonical 控制消息。"""
     return COMPLETION_REJECTED.format(code=code, detail=detail)
+
+
+def structured_recovery(
+    *,
+    category: str,
+    strategy: str,
+    reason: str,
+    attempt: int,
+    max_attempts: int,
+    target_plan_step: str | None = None,
+    requires_plan_revision: bool = False,
+) -> str:
+    """Render one deterministic RecoveryDecision without adding a model call."""
+    target_section = (
+        f"Target plan step: {target_plan_step}\n" if target_plan_step else ""
+    )
+    replan_section = (
+        "Required: call plan_revise before repository mutation or FINISH.\n"
+        if requires_plan_revision
+        else ""
+    )
+    return STRUCTURED_RECOVERY.format(
+        category=category,
+        strategy=strategy,
+        reason=reason,
+        attempt=attempt,
+        max_attempts=max_attempts,
+        target_section=target_section,
+        replan_section=replan_section,
+    )
 
 
 # ---------------------------------------------------------------------------

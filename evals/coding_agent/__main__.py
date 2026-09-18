@@ -19,7 +19,11 @@ _DEFAULT_SUITE = _ROOT / "evals" / "fixtures" / "coding_agent" / "suite.json"
 
 
 def _planning_mode_for_variant(variant: str) -> str:
-    mapping = {"baseline_react": "off", "planning": "always"}
+    mapping = {
+        "baseline_react": "off",
+        "planning": "always",
+        "planning_recovery": "always",
+    }
     try:
         return mapping[variant]
     except KeyError as exc:
@@ -29,7 +33,28 @@ def _planning_mode_for_variant(variant: str) -> str:
         ) from exc
 
 
-def _real_runner_factory(cfg, backend, suite: EvaluationSuite, planning_mode: str):
+def _recovery_mode_for_variant(variant: str) -> str:
+    mapping = {
+        "baseline_react": "off",
+        "planning": "off",
+        "planning_recovery": "structured",
+    }
+    try:
+        return mapping[variant]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported coding-agent architecture variant {variant!r}; "
+            f"expected one of: {', '.join(mapping)}"
+        ) from exc
+
+
+def _real_runner_factory(
+    cfg,
+    backend,
+    suite: EvaluationSuite,
+    planning_mode: str,
+    recovery_mode: str,
+):
     def factory(task, repo, trace_dir, trial_id):
         registry = _build_registry(cfg, default_cwd=str(repo), workspace=str(repo))
         config = AgentConfig(
@@ -37,6 +62,8 @@ def _real_runner_factory(cfg, backend, suite: EvaluationSuite, planning_mode: st
             budget_tokens=int(suite.defaults.get("budget_tokens", cfg.agent.budget_tokens)),
             history_max_messages=cfg.context.history_window * 2,
             planning_mode=planning_mode,
+            recovery_mode=recovery_mode,
+            recovery_max_attempts=cfg.agent.recovery_max_attempts,
             stream=False,
             repo_map_mode="incremental",
             repo_map_cache_dir=str(trace_dir.parent / "repo-map-cache"),
@@ -59,6 +86,7 @@ def main() -> int:
 
     suite = EvaluationSuite.load(args.suite)
     planning_mode = _planning_mode_for_variant(args.variant)
+    recovery_mode = _recovery_mode_for_variant(args.variant)
     with tempfile.TemporaryDirectory(prefix="forge-agent-eval-reference-") as temp_dir:
         reference = validate_suite_references(suite, temp_dir)
 
@@ -111,7 +139,9 @@ def main() -> int:
     harness = EvaluationHarness(
         suite=suite,
         output_dir=args.output_dir,
-        runner_factory=_real_runner_factory(cfg, backend, suite, planning_mode),
+        runner_factory=_real_runner_factory(
+            cfg, backend, suite, planning_mode, recovery_mode
+        ),
         variant=args.variant,
         repetitions=args.repetitions,
         evidence_kind="real_model",
@@ -121,6 +151,8 @@ def main() -> int:
             "protocol": cfg.llm.protocol,
             "model": cfg.llm.model,
             "planning_mode": planning_mode,
+            "recovery_mode": recovery_mode,
+            "recovery_max_attempts": cfg.agent.recovery_max_attempts,
         },
     )
     results = harness.run(args.task)

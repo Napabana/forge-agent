@@ -250,6 +250,29 @@ def test_provider_transient_retry_then_success_is_offline_and_traced(tmp_path):
     assert len(event_payloads(result, EventType.LLM_CALL_FINISHED)) == 1
 
 
+def test_structured_recovery_does_not_duplicate_provider_retry(tmp_path):
+    backend = ScriptedFailureBackend([ConnectionError("temporarily unavailable"), finish()])
+    runner = make_runner(
+        tmp_path,
+        backend,
+        config=AgentConfig(
+            llm_max_retries=2,
+            llm_retry_delay=0,
+            recovery_mode="structured",
+        ),
+    )
+
+    result = runner.run(
+        RunRequest(make_task(tmp_path, task_id="provider-structured"), entrypoint="cli")
+    )
+
+    assert_terminated(result, RunStatus.SUCCESS, "completion_satisfied")
+    assert backend.call_count == 2
+    assert len(event_payloads(result, EventType.LLM_CALL_RETRY)) == 1
+    assert event_payloads(result, EventType.FAILURE_CLASSIFIED) == []
+    assert event_payloads(result, EventType.RECOVERY_SELECTED) == []
+
+
 def test_provider_retry_exhausted_is_failed_provider_error(tmp_path):
     backend = ScriptedFailureBackend(
         [TimeoutError("provider timeout"), TimeoutError("provider timeout again")]
@@ -402,6 +425,37 @@ def test_permission_deny_and_confirm_reject_are_recoverable(
     assert last_observation(result)["error_type"] == ToolErrorType.PERMISSION_DENIED.value
     permission_trace = event_payloads(result, EventType.PERMISSION_DECISION)[0]
     assert permission_trace["decision"] == expected_decision
+
+
+
+
+def test_structured_recovery_permission_denied_selects_change_approach(tmp_path):
+    backend = ScriptedFailureBackend([call(), give_up()])
+    permission = FixedPermission(PermissionDecision(Decision.DENY, "policy denied"))
+    runner = make_runner(
+        tmp_path,
+        backend,
+        registry=ToolRegistry().register(RecordingTool()),
+        config=AgentConfig(
+            recovery_mode="structured",
+            reflection_no_edit_steps=100,
+        ),
+    )
+
+    result = runner.run(
+        RunRequest(
+            make_task(tmp_path, task_id="permission-structured"),
+            permission=permission,
+            entrypoint="cli",
+        )
+    )
+
+    assert_terminated(result, RunStatus.GAVE_UP, "agent_gave_up")
+    decisions = event_payloads(result, EventType.RECOVERY_SELECTED)
+    assert len(decisions) == 1
+    assert decisions[0]["category"] == "permission_denied"
+    assert decisions[0]["strategy"] == "change_approach"
+    assert permission.calls == 1
 
 
 @pytest.mark.parametrize("phase", ["permission", "confirm"])

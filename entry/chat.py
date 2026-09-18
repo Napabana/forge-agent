@@ -171,6 +171,8 @@ class ChatSession:
             budget_tokens=config.agent.budget_tokens,
             history_max_messages=config.context.history_window * 2,
             planning_mode=config.agent.planning_mode,
+        recovery_mode=config.agent.recovery_mode,
+        recovery_max_attempts=config.agent.recovery_max_attempts,
             llm_max_retries=3,
             llm_retry_delay=1.0,
             stream=stream or resolved_reasoning_stream,

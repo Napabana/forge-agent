@@ -440,6 +440,8 @@ def run_on_issue(
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
         planning_mode=config.agent.planning_mode,
+        recovery_mode=config.agent.recovery_mode,
+        recovery_max_attempts=config.agent.recovery_max_attempts,
         stream=reasoning_stream,
         thought_callback=_thought_cb if reasoning_stream else None,
     )

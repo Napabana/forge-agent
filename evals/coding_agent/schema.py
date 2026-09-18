@@ -208,6 +208,10 @@ class TrialMetrics:
     plan_revision_count: int = 0
     plan_step_completed_count: int = 0
     planning_skipped: bool = False
+    failure_classified_count: int = 0
+    recovery_selected_count: int = 0
+    recovery_replan_count: int = 0
+    recovery_exhausted_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

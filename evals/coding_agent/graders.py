@@ -183,6 +183,10 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
     plan_revision_count = 0
     plan_step_completed_count = 0
     planning_skipped = False
+    failure_classified_count = 0
+    recovery_selected_count = 0
+    recovery_replan_count = 0
+    recovery_exhausted_count = 0
     for event in events:
         event_type = event.get("event_type")
         payload = event.get("payload") or {}
@@ -204,6 +208,13 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
             plan_step_completed_count += 1
         elif event_type == "planning_skipped":
             planning_skipped = True
+        elif event_type == "failure_classified":
+            failure_classified_count += 1
+        elif event_type == "recovery_selected":
+            recovery_selected_count += 1
+            recovery_replan_count += int(payload.get("strategy") == "replan")
+        elif event_type == "recovery_exhausted":
+            recovery_exhausted_count += 1
     return TrialMetrics(
         steps=run_result.steps_taken,
         total_tokens=run_result.total_tokens,
@@ -219,4 +230,8 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
         plan_revision_count=plan_revision_count,
         plan_step_completed_count=plan_step_completed_count,
         planning_skipped=planning_skipped,
+        failure_classified_count=failure_classified_count,
+        recovery_selected_count=recovery_selected_count,
+        recovery_replan_count=recovery_replan_count,
+        recovery_exhausted_count=recovery_exhausted_count,
     )

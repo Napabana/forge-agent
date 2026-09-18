@@ -289,6 +289,8 @@ def run(
         budget_tokens=config.agent.budget_tokens,
         history_max_messages=config.context.history_window * 2,
         planning_mode=config.agent.planning_mode,
+        recovery_mode=config.agent.recovery_mode,
+        recovery_max_attempts=config.agent.recovery_max_attempts,
         stream=stream or resolved_reasoning_stream,
         stream_callback=_stream_cb if stream else None,
         thought_callback=_thought_cb if resolved_reasoning_stream else None,

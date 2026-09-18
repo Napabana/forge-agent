@@ -80,6 +80,9 @@ def test_metrics_extract_from_run_result_and_trace(tmp_path: Path):
         {"event_type": "plan_step_completed", "payload": {"step_status": "completed"}},
         {"event_type": "plan_revised", "payload": {}},
         {"event_type": "planning_skipped", "payload": {}},
+        {"event_type": "failure_classified", "payload": {"category": "tool_failure"}},
+        {"event_type": "recovery_selected", "payload": {"strategy": "replan"}},
+        {"event_type": "recovery_exhausted", "payload": {}},
     ]
     trace.write_text("\n".join(json.dumps(item) for item in events) + "\n", encoding="utf-8")
     usage = SessionUsage(input_tokens=20, output_tokens=5, llm_calls=1)
@@ -91,6 +94,10 @@ def test_metrics_extract_from_run_result_and_trace(tmp_path: Path):
     assert metrics.file_read_count == 1 and metrics.shell_call_count == 1
     assert metrics.plan_created_count == 1 and metrics.plan_revision_count == 1
     assert metrics.plan_step_completed_count == 1 and metrics.planning_skipped is True
+    assert metrics.failure_classified_count == 1
+    assert metrics.recovery_selected_count == 1
+    assert metrics.recovery_replan_count == 1
+    assert metrics.recovery_exhausted_count == 1
 
 
 def test_agent_failure_still_emits_trial_result(tmp_path: Path):

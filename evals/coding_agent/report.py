@@ -53,6 +53,18 @@ def build_report(results: Iterable[TrialResult], *, suite_id: str) -> dict[str, 
                     row.metrics.plan_step_completed_count for row in group
                 ]),
                 "planning_skipped_runs": sum(row.metrics.planning_skipped for row in group),
+                "mean_failures_classified": _mean([
+                    row.metrics.failure_classified_count for row in group
+                ]),
+                "mean_recoveries_selected": _mean([
+                    row.metrics.recovery_selected_count for row in group
+                ]),
+                "mean_replans_selected": _mean([
+                    row.metrics.recovery_replan_count for row in group
+                ]),
+                "recovery_exhausted_runs": sum(
+                    row.metrics.recovery_exhausted_count > 0 for row in group
+                ),
             }
         real_model_small_sample = aggregate
         claim_boundary += " Real-model rates are observed small-sample values, not stable pass@1 estimates."

@@ -373,3 +373,17 @@ pytest -q
 - 本轮没有执行 real-model `baseline_react vs planning` A/B，不产生 success-rate、pass@1、token、latency 或 Planning 提升结论。
 - 下一阶段进入 P2-2 Failure-aware Recovery + Replanning，并直接复用 P2-1 current plan / current step / plan revision mechanism。
 - 验证日志：`docs/changes/2026-09-19/P2-1-Structured-Planning本地回归-DONE.md`。
+
+
+### 最后交接（2026-09-19，P2-2 Failure-aware Recovery + Replanning）
+
+- P2-2 已完成首版代码实现，当前状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`；实现基线为 `dev@1ad7850b8e84ebad650ccc3f16d46c791368f14a`。
+- 新增 `agent/recovery.py`：typed `FailureContext / RecoveryDecision / RecoveryPolicy / RecoveryRuntime`；继续复用唯一的 `ExecutionRunner → Agent → ToolExecutor` 主链。
+- `recovery_mode=off|structured`，默认 `off` 保持旧行为；`recovery_max_attempts` 提供 bounded recovery budget。
+- structured mode 分类 Tool/Test failure、Permission denied、Loop、No Progress 与 Completion rejected；Provider retry、cancel、prepare/context infrastructure 和 fatal runtime infrastructure 保持既有权威语义，不重复实现。
+- P2-1 Replanning 已做强约束：Recovery 选择 REPLAN 且已有 current plan 时，记录当前 plan version；在 `plan_revise` 产生新版本前，mutation 与 FINISH 被 `RECOVERY_BLOCKED` gate，read-only diagnosis 允许。
+- unresolved replan gate 每轮作为 runtime system context 注入，避免 history trimming/compaction 丢失 recovery state；没有建立第二套 Recovery memory。
+- Trace v2 增加 `failure_classified / recovery_selected / recovery_exhausted / recovery_blocked`；P2-0 Eval 新增 `planning_recovery` variant 与 recovery metrics。
+- 新增 `tests/test_structured_recovery.py`，并扩展 `tests/test_failure_harness.py`、`tests/test_day6.py`、`tests/test_coding_agent_eval.py`，覆盖 recovery off compatibility、test failure→replan、replan gate、completion rejection→retest、budget exhaustion、provider retry separation、permission deny 与 infra boundary。
+- 当前 ChatGPT 环境没有可执行仓库 checkout，因此尚未运行 pytest；不要把本状态写成 DONE，也不要声明 real-model recovery 收益。
+- 本轮更新日志：`docs/changes/2026-09-19/P2-2-Failure-aware-Recovery-Replanning.md`。

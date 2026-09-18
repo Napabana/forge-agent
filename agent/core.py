@@ -29,6 +29,14 @@ from typing import TYPE_CHECKING
 from agent.event_log import EventLog
 from agent.loop_detector import LoopDetector, LoopSeverity
 from agent.planning import PlanningMode, PlanningRuntime, decide_planning
+from agent.recovery import (
+    FailureCategory,
+    FailureContext,
+    FailureSource,
+    RecoveryDecision,
+    RecoveryRuntime,
+    classify_tool_failure,
+)
 from context.history import ConversationHistory
 from context.incremental_repo_map import PersistentRepoMap
 from context.repo_map import RepoMap
@@ -48,6 +56,7 @@ from agent.prompt import (
     reflection_no_edit,
     reflection_test_failed,
     step_budget_warning,
+    structured_recovery,
 )
 from agent.task import (
     Action, ActionType, Event, EventType,
@@ -106,6 +115,8 @@ class AgentConfig:
     budget_tokens: int = 80_000
     history_max_messages: int = 40
     planning_mode: str = "off"
+    recovery_mode: str = "off"
+    recovery_max_attempts: int = 4
     llm_max_retries: int = 3
     llm_retry_delay: float = 2.0
     llm_retry_max_delay: float = 30.0
@@ -149,11 +160,13 @@ class Agent:
         self._prepared_history_override: tuple[LLMMessage, ...] | None = None
         self._planning_runtime: PlanningRuntime | None = None
         self._planning_context_cache = ""
+        self._recovery_runtime: RecoveryRuntime | None = None
 
     def reset_run_runtime_state(self) -> None:
         """Clear transient per-run state before a Runner shared-history preflight."""
         self._planning_runtime = None
         self._planning_context_cache = ""
+        self._recovery_runtime = None
 
     def invalidate_repo_map_cache(self, repo_path: str | Path | None = None) -> bool:
         """Invalidate the cached repository summary, optionally by repo."""
@@ -224,6 +237,11 @@ class Agent:
         planning_decision = decide_planning(task, self._cfg.planning_mode)
         self._planning_runtime = PlanningRuntime(planning_decision)
         self._planning_context_cache = ""
+        self._recovery_runtime = RecoveryRuntime(
+            self._cfg.recovery_mode,
+            max_attempts=self._cfg.recovery_max_attempts,
+        )
+        recent_actions: list[str] = []
         if planning_decision.mode is PlanningMode.AUTO and not planning_decision.enabled:
             log.log_trace(
                 EventType.PLANNING_SKIPPED, 0,
@@ -402,6 +420,9 @@ class Agent:
                 raw_content=response.raw_content,
                 usage=response.usage,
             )
+            recent_actions.append(self._recovery_action_summary(action))
+            if len(recent_actions) > 4:
+                del recent_actions[:-4]
             logger.info("Step %d: %r", step, action)
 
             if (
@@ -414,6 +435,13 @@ class Agent:
                     action.tool_call.name, action.tool_call.params
                 )
                 log.log_trace(control.event_type, step, **control.payload)
+                if (
+                    control.accepted
+                    and control.event_type is EventType.PLAN_REVISED
+                    and self._recovery_runtime is not None
+                    and self.current_plan is not None
+                ):
+                    self._recovery_runtime.observe_plan_revision(self.current_plan.version)
                 history.add(LLMMessage(role="user", content=control.message))
                 continue
 
@@ -431,6 +459,25 @@ class Agent:
                     event_ref=action_event_ref,
                 ))
                 history.add(LLMMessage(role="user", content="[PLANNING REQUIRED] " + detail))
+                continue
+
+            if (
+                action.action_type == ActionType.FINISH
+                and self._recovery_replan_required()
+            ):
+                detail = self._recovery_runtime.replan_gate_message()  # type: ignore[union-attr]
+                log.log_trace(
+                    EventType.RECOVERY_BLOCKED,
+                    step,
+                    blocked_action="finish",
+                    reason="plan_revision_required",
+                )
+                history.add(LLMMessage(
+                    role="assistant",
+                    content=self._format_action_for_history(action),
+                    event_ref=action_event_ref,
+                ))
+                history.add(LLMMessage(role="user", content=detail))
                 continue
 
             if action.action_type == ActionType.FINISH:
@@ -491,6 +538,32 @@ class Agent:
                         ),
                         event_ref=rejection_event_ref,
                     ))
+                    if self._structured_recovery_enabled():
+                        recovery = self._handle_recovery(
+                            self._failure_context(
+                                category=FailureCategory.COMPLETION_REJECTED,
+                                source=FailureSource.COMPLETION_GUARD,
+                                step=step,
+                                evidence=verification_error,
+                                recent_actions=recent_actions,
+                                completion_code=(
+                                    rejection_code or "COMPLETION_REQUIREMENT_UNMET"
+                                ),
+                                repository_changed=final_repo_state != initial_repo_state,
+                                test_state=(
+                                    "success" if last_test_passed is True
+                                    else "failed" if last_test_passed is False
+                                    else None
+                                ),
+                            ),
+                            step=step,
+                            log=log,
+                            history=history,
+                        )
+                        if recovery is not None and recovery.terminal:
+                            return self._recovery_terminated_result(
+                                task, step, total_tokens, usage, log, recovery
+                            )
                     continue
                 log.log_task_complete(steps=step, summary=summary)
                 return RunResult(
@@ -547,6 +620,23 @@ class Agent:
                         event_ref=action_event_ref,
                     ))
                     history.add(LLMMessage(role="user", content="[PLANNING REQUIRED] " + detail))
+                    continue
+                if self._recovery_replan_required() and self._registry.is_mutating(
+                    tc.name, tc.params
+                ):
+                    detail = self._recovery_runtime.replan_gate_message()  # type: ignore[union-attr]
+                    log.log_trace(
+                        EventType.RECOVERY_BLOCKED,
+                        step,
+                        blocked_action=tc.name,
+                        reason="plan_revision_required",
+                    )
+                    history.add(LLMMessage(
+                        role="assistant",
+                        content=self._format_action_for_history(action),
+                        event_ref=action_event_ref,
+                    ))
+                    history.add(LLMMessage(role="user", content=detail))
                     continue
                 tool_started = time.perf_counter()
                 tool_span = log.log_trace(
@@ -803,22 +893,87 @@ class Agent:
                             termination_reason="loop_detected",
                         )
 
-                    reflect_prompt = reflection_loop_detected(
-                        loop_signal.repeats,
-                        loop_signal.period,
-                    )
-                    log.log_reflection(
-                        step=step,
-                        reason="loop_detected",
-                        prompt=reflect_prompt,
-                    )
-                    history.add(LLMMessage(role="user", content=reflect_prompt))
-                    logger.warning(
-                        "Loop detected at step %d; injected recovery reflection", step,
-                    )
+                    if self._structured_recovery_enabled():
+                        recovery = self._handle_recovery(
+                            self._failure_context(
+                                category=FailureCategory.LOOP,
+                                source=FailureSource.LOOP_DETECTOR,
+                                step=step,
+                                evidence=(
+                                    f"period={loop_signal.period}, repeats={loop_signal.repeats}, "
+                                    f"occurrence={loop_signal.occurrence}"
+                                ),
+                                recent_actions=recent_actions,
+                                repository_changed=repository_changed,
+                                test_state=test_state,
+                            ),
+                            step=step,
+                            log=log,
+                            history=history,
+                        )
+                        if recovery is not None and recovery.terminal:
+                            return self._recovery_terminated_result(
+                                task, step, total_tokens, usage, log, recovery
+                            )
+                    else:
+                        reflect_prompt = reflection_loop_detected(
+                            loop_signal.repeats,
+                            loop_signal.period,
+                        )
+                        log.log_reflection(
+                            step=step,
+                            reason="loop_detected",
+                            prompt=reflect_prompt,
+                        )
+                        history.add(LLMMessage(role="user", content=reflect_prompt))
+                        logger.warning(
+                            "Loop detected at step %d; injected recovery reflection", step,
+                        )
                     continue
 
-                if tc.name in self._cfg.test_tool_names and not observation.is_success():
+                failure_category = (
+                    classify_tool_failure(
+                        tool_name=tc.name,
+                        error_type=observation.error_type,
+                        test_tool_names=self._cfg.test_tool_names,
+                    )
+                    if not observation.is_success()
+                    else None
+                )
+                if (
+                    self._structured_recovery_enabled()
+                    and failure_category is not None
+                    and failure_category is not FailureCategory.INFRASTRUCTURE
+                ):
+                    recovery = self._handle_recovery(
+                        self._failure_context(
+                            category=failure_category,
+                            source=(
+                                FailureSource.TEST
+                                if failure_category is FailureCategory.TEST_FAILURE
+                                else FailureSource.TOOL
+                            ),
+                            step=step,
+                            evidence=observation.error or observation.output or "tool failed",
+                            recent_actions=recent_actions,
+                            tool_name=tc.name,
+                            error_type=observation.error_type,
+                            repository_changed=repository_changed,
+                            test_state=test_state,
+                        ),
+                        step=step,
+                        log=log,
+                        history=history,
+                    )
+                    if recovery is not None and recovery.terminal:
+                        return self._recovery_terminated_result(
+                            task, step, total_tokens, usage, log, recovery
+                        )
+                elif (
+                    tc.name in self._cfg.test_tool_names
+                    and not observation.is_success()
+                    and not self._structured_recovery_enabled()
+                ):
                     reflect_prompt = reflection_test_failed()
                     log.log_reflection(
                         step=step,
@@ -827,16 +982,39 @@ class Agent:
                     )
                     history.add(LLMMessage(role="user", content=reflect_prompt))
                     logger.debug("Reflection triggered: test_failed at step %d", step)
-                elif steps_without_edit >= self._cfg.reflection_no_edit_steps:
-                    reflect_prompt = reflection_no_edit(steps_without_edit)
-                    log.log_reflection(
-                        step=step,
-                        reason="no_edit",
-                        prompt=reflect_prompt,
-                    )
-                    history.add(LLMMessage(role="user", content=reflect_prompt))
+                elif (
+                    steps_without_edit >= self._cfg.reflection_no_edit_steps
+                    and failure_category is not FailureCategory.INFRASTRUCTURE
+                ):
+                    if self._structured_recovery_enabled():
+                        recovery = self._handle_recovery(
+                            self._failure_context(
+                                category=FailureCategory.NO_PROGRESS,
+                                source=FailureSource.PROGRESS_GUARD,
+                                step=step,
+                                evidence=f"{steps_without_edit} consecutive steps without repository change",
+                                recent_actions=recent_actions,
+                                repository_changed=False,
+                                test_state=test_state,
+                            ),
+                            step=step,
+                            log=log,
+                            history=history,
+                        )
+                        if recovery is not None and recovery.terminal:
+                            return self._recovery_terminated_result(
+                                task, step, total_tokens, usage, log, recovery
+                            )
+                    else:
+                        reflect_prompt = reflection_no_edit(steps_without_edit)
+                        log.log_reflection(
+                            step=step,
+                            reason="no_edit",
+                            prompt=reflect_prompt,
+                        )
+                        history.add(LLMMessage(role="user", content=reflect_prompt))
+                        logger.debug("Reflection triggered: no_edit at step %d", step)
                     steps_without_edit = 0
-                    logger.debug("Reflection triggered: no_edit at step %d", step)
 
             elif action.action_type == ActionType.REFLECTION:
                 history.add(LLMMessage(role="assistant", content=action.thought))
@@ -858,6 +1036,124 @@ class Agent:
             termination_reason="resource_exhausted",
             resource_reason="max_steps",
         )
+
+    def _structured_recovery_enabled(self) -> bool:
+        return bool(self._recovery_runtime and self._recovery_runtime.enabled)
+
+    def _recovery_replan_required(self) -> bool:
+        if not self._structured_recovery_enabled():
+            return False
+        plan = self.current_plan
+        version = plan.version if plan is not None else None
+        return self._recovery_runtime.requires_replan(version)  # type: ignore[union-attr]
+
+    def _failure_context(
+        self,
+        *,
+        category: FailureCategory,
+        source: FailureSource,
+        step: int,
+        evidence: str,
+        recent_actions: list[str],
+        tool_name: str | None = None,
+        error_type: str | None = None,
+        completion_code: str | None = None,
+        repository_changed: bool = False,
+        test_state: str | None = None,
+    ) -> FailureContext:
+        plan = self.current_plan
+        return FailureContext(
+            category=category,
+            source=source,
+            step=step,
+            evidence=evidence,
+            tool_name=tool_name,
+            error_type=error_type,
+            completion_code=completion_code,
+            recent_actions=tuple(recent_actions[-4:]),
+            repository_changed=repository_changed,
+            test_state=test_state,
+            plan_version=plan.version if plan is not None else None,
+            plan_step_id=plan.current_step_id if plan is not None else None,
+        )
+
+    def _handle_recovery(
+        self,
+        context: FailureContext,
+        *,
+        step: int,
+        log: EventLog,
+        history: ConversationHistory,
+    ) -> RecoveryDecision | None:
+        runtime = self._recovery_runtime
+        if runtime is None or not runtime.enabled:
+            return None
+        log.log_trace(EventType.FAILURE_CLASSIFIED, step, **context.to_payload())
+        decision = runtime.select(context)
+        if decision is None:
+            return None
+        if decision.budget_exhausted:
+            log.log_trace(
+                EventType.RECOVERY_EXHAUSTED,
+                step,
+                category=context.category.value,
+                **decision.to_payload(),
+            )
+            return decision
+        log.log_trace(
+            EventType.RECOVERY_SELECTED,
+            step,
+            category=context.category.value,
+            **decision.to_payload(),
+        )
+        if not decision.terminal:
+            history.add(LLMMessage(
+                role="user",
+                content=structured_recovery(
+                    category=context.category.value,
+                    strategy=decision.strategy.value,
+                    reason=decision.reason,
+                    attempt=decision.attempt,
+                    max_attempts=decision.max_attempts,
+                    target_plan_step=decision.target_plan_step,
+                    requires_plan_revision=decision.requires_plan_revision,
+                ),
+            ))
+        return decision
+
+    def _recovery_terminated_result(
+        self,
+        task: Task,
+        step: int,
+        total_tokens: int,
+        usage: SessionUsage,
+        log: EventLog,
+        decision: RecoveryDecision,
+    ) -> RunResult:
+        reason = decision.reason
+        log.log_task_incomplete(
+            steps=step,
+            reason=reason,
+            termination_reason="recovery_exhausted",
+            resource_reason="recovery_budget",
+        )
+        return RunResult(
+            task_id=task.task_id,
+            status=RunStatus.INCOMPLETE,
+            summary=reason,
+            steps_taken=step,
+            total_tokens=total_tokens,
+            usage=usage.snapshot(),
+            patch=self._get_git_diff(task.repo_path),
+            termination_reason="recovery_exhausted",
+            resource_reason="recovery_budget",
+        )
+
+    @staticmethod
+    def _recovery_action_summary(action: Action) -> str:
+        if action.tool_call is not None:
+            return f"tool:{action.tool_call.name}"
+        return action.action_type.value
 
     @staticmethod
     def _detect_known_fatal_infrastructure_error(observation: Observation) -> str | None:
@@ -1009,13 +1305,17 @@ class Agent:
 
         repo_map_content = self._repo_map_cache
         planning_context = self._planning_runtime.render_context() if self._planning_runtime else ""
+        recovery_context = self._recovery_runtime.render_context() if self._recovery_runtime else ""
         self._planning_context_cache = planning_context
+        runtime_context = "\n\n".join(
+            part for part in (planning_context, recovery_context) if part
+        )
         system_content = build_system_prompt(
             repo_path=getattr(self, "_model_repo_path", "."),
             tools=list(schemas),
             repo_summary=repo_map_content if mode != "none" else None,
             execution_workspace=self._cfg.execution_workspace,
-            runtime_context=planning_context or None,
+            runtime_context=runtime_context or None,
         )
         return system_content, repo_map_content, schemas
 

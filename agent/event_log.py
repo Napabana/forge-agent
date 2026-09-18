@@ -68,6 +68,8 @@ def _span_type(event_type: EventType) -> str:
         return "context"
     if event_type.name.startswith("PLAN_") or event_type is EventType.PLANNING_SKIPPED:
         return "planning"
+    if event_type.name.startswith("FAILURE_") or event_type.name.startswith("RECOVERY_"):
+        return "recovery"
     if event_type is EventType.COMPLETION_REJECTED:
         return "completion"
     if event_type is EventType.ACCEPTANCE:

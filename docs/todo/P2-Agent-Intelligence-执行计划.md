@@ -261,8 +261,21 @@ Structured Planning + ReAct
 
 # P2-2 Failure-aware Recovery + Replanning
 
-状态：**TODO**  
+状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
 依赖：P2-1
+
+实现摘要（2026-09-19）：
+
+- 新增 `agent/recovery.py`，用 typed `FailureContext / RecoveryDecision / RecoveryPolicy / RecoveryRuntime` 表达同一 Agent loop 内的 failure-aware recovery；没有新增 RetryAgent、Reviewer Agent 或第二套执行循环。
+- 新增 `recovery_mode=off|structured` 与 `recovery_max_attempts`；默认 `off` 完全保留既有 Reflection / Completion Guard 行为，CLI / Chat / API / GitHub Issue 使用同一正式配置。
+- structured recovery 覆盖 recoverable Tool/Test failure、Permission deny、Loop、No Progress 与 Completion rejection；策略为 `retry / inspect / rerun_test / change_approach / replan / give_up`。
+- Provider transient retry 继续由既有 `_call_with_retry` 负责；cancel、ToolExecutor framework failure、prepare/context infrastructure failure 与 runtime fatal infrastructure 不包装成“智能恢复”。
+- `REPLAN` 不是提示词标签：当已有 P2-1 plan 时，RecoveryRuntime 记录触发时的 plan version；在真实 `plan_revise` 产生更高版本之前，repository mutation 与 FINISH 被 gate，read-only diagnosis 仍允许。
+- pending replan gate 作为 bounded runtime system context 每轮重新注入，因此 HistoryWindow / Context Compaction 不会通过裁剪旧 history 丢失当前 recovery requirement。
+- Trace v2 新增 `failure_classified / recovery_selected / recovery_exhausted / recovery_blocked`；P2-0 TrialMetrics 增加 failure/recovery/replan/exhaustion metrics。
+- Evaluation CLI 新增正式 architecture variant `planning_recovery`：`planning_mode=always + recovery_mode=structured`；既有 `baseline_react` 与 `planning` 语义保持不变。
+- 新增 `tests/test_structured_recovery.py`，并扩展 Failure Harness、config 与 coding-agent eval regression；当前 ChatGPT 环境未执行仓库 pytest，因此状态保持 LOCAL VALIDATION PENDING，不声明测试通过或真实模型效果。
+
 
 ## 当前缺口
 

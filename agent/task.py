@@ -64,6 +64,10 @@ class EventType(str, Enum):
     PLAN_REVISED = "plan_revised"
     PLANNING_SKIPPED = "planning_skipped"
     PLAN_REJECTED = "plan_rejected"
+    FAILURE_CLASSIFIED = "failure_classified"
+    RECOVERY_SELECTED = "recovery_selected"
+    RECOVERY_EXHAUSTED = "recovery_exhausted"
+    RECOVERY_BLOCKED = "recovery_blocked"
     TASK_INCOMPLETE = "task_incomplete"
     # Trace v2 的 Runner / product 生命周期。旧 JSONL 不包含这些事件也可照常读取。
     RUN_TERMINATED = "run_terminated"

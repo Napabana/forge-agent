@@ -259,6 +259,8 @@ def run_agent_task(
             budget_tokens=cfg.agent.budget_tokens,
             history_max_messages=cfg.context.history_window * 2,
             planning_mode=cfg.agent.planning_mode,
+            recovery_mode=cfg.agent.recovery_mode,
+            recovery_max_attempts=cfg.agent.recovery_max_attempts,
             stream=False,
             cancel_event=cancel_event,
         )

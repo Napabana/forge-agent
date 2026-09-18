@@ -66,6 +66,8 @@ class AgentCfg:
     context_safety_margin_tokens: int = 1024
     log_dir: str = "./logs"
     planning_mode: str = "off"
+    recovery_mode: str = "off"
+    recovery_max_attempts: int = 4
 
 
 @dataclass
@@ -207,8 +209,29 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     if planning_mode not in {"off", "auto", "always"}:
         raise ValueError("agent.planning_mode must be one of: off, auto, always")
 
+    recovery_mode_raw = agent_raw.get("recovery_mode", "off")
+    if recovery_mode_raw is False:
+        recovery_mode = "off"
+    elif isinstance(recovery_mode_raw, str):
+        recovery_mode = recovery_mode_raw.strip().lower()
+    else:
+        raise ValueError("agent.recovery_mode must be one of: off, structured")
+    if recovery_mode not in {"off", "structured"}:
+        raise ValueError("agent.recovery_mode must be one of: off, structured")
+    recovery_max_attempts = int(agent_raw.get("recovery_max_attempts", 4))
+    if recovery_max_attempts < 1:
+        raise ValueError("agent.recovery_max_attempts must be >= 1")
+
     llm = LLMConfig(provider=llm_raw.get("provider", "anthropic"), protocol=llm_raw.get("protocol", "auto"), model=llm_raw.get("model", "claude-sonnet-4-5"), api_key=llm_raw.get("api_key", ""), base_url=llm_raw.get("base_url", "") or "", context_window=context_window, model_max_output_tokens=model_max_output_tokens, max_output_tokens=max_output_tokens)
-    agent = AgentCfg(max_steps=int(agent_raw.get("max_steps", 40)), context_budget_cap=context_budget_cap, context_safety_margin_tokens=safety_margin, log_dir=agent_raw.get("log_dir", "./logs"), planning_mode=planning_mode)
+    agent = AgentCfg(
+        max_steps=int(agent_raw.get("max_steps", 40)),
+        context_budget_cap=context_budget_cap,
+        context_safety_margin_tokens=safety_margin,
+        log_dir=agent_raw.get("log_dir", "./logs"),
+        planning_mode=planning_mode,
+        recovery_mode=recovery_mode,
+        recovery_max_attempts=recovery_max_attempts,
+    )
     shell_raw = tools_raw.get("shell", {})
     file_raw = tools_raw.get("file", {})
     tools = ToolsConfig(shell=ShellToolConfig(timeout=int(shell_raw.get("timeout", 30)), max_output_tokens=int(shell_raw.get("max_output_tokens", 8_000))), file=FileToolConfig(max_view_lines=int(file_raw.get("max_view_lines", 100))))
