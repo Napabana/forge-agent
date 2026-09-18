@@ -22,9 +22,34 @@
 
 ## 验证状态
 
-当前 ChatGPT 会话没有可执行的仓库 checkout，因此未真实运行 pytest，不声明通过。
+2026-09-18 用户已在本地完成真实 Docker E2E 验证，本轮执行语义收口按实际产品入口验收通过。
 
-本地建议：
+真实执行命令：
+
+```bash
+agent run \
+  --repo "$TARGET_REPO" \
+  --task "在 calculator.py 中新增 cube(a: int) -> int 函数，并在 tests/test_calculator.py 中添加正数、负数和零的测试，运行完整 pytest 验证。不要提交 git commit。" \
+  --isolate \
+  --sandbox \
+  --result-policy discard \
+  --confirm
+```
+
+观测结果：
+
+- Agent 在独立 worktree 中完成读取、修改、验证与 FINISH；
+- 两次具有写副作用的 shell 命令分别只触发一次 Permission confirmation，没有重复确认；
+- shell 写入后 Completion Guard 能识别真实 repository state 变化；
+- 先用 shell 执行 `python -m pytest -q` 得到 18 passed；
+- 首次 FINISH 因未使用 dedicated `test` tool 被 Completion Guard 拒绝，Agent 随后自动恢复并调用 `test`；
+- dedicated `test` 再次得到 18 passed，随后正常完成；
+- 最终 `Status: SUCCESS`，`Steps: 9`，记录的 Token 数为 52,258，运行时间为 157.0s；
+- `result-policy=discard` 正常移除 worktree；用户确认本轮完整流程验收通过。
+
+上述数字只记录本次真实 E2E case，不外推为总体成功率、平均成本或性能指标。
+
+本地回归建议：
 
 ```bash
 pytest -q \
