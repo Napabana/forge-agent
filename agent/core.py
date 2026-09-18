@@ -150,6 +150,11 @@ class Agent:
         self._planning_runtime: PlanningRuntime | None = None
         self._planning_context_cache = ""
 
+    def reset_run_runtime_state(self) -> None:
+        """Clear transient per-run state before a Runner shared-history preflight."""
+        self._planning_runtime = None
+        self._planning_context_cache = ""
+
     def invalidate_repo_map_cache(self, repo_path: str | Path | None = None) -> bool:
         """Invalidate the cached repository summary, optionally by repo."""
         if repo_path is not None and self._repo_map_cache_key is not None:

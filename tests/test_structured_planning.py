@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agent.core import Agent, AgentConfig, PrepareNextTurnResult
+from agent.runner import ExecutionRunner, RunRequest
 from agent.event_log import EventLog
 from agent.planning import ExecutionPlan, PlanStepStatus, PlanningRuntime, decide_planning
 from agent.prompt import build_task_prompt
@@ -446,3 +447,48 @@ def test_fake_planning_metrics_are_not_reported_as_real_model_capability():
     assert report["real_model_executed"] is False
     assert report["harness_validation"]["pass_rate_intentionally_omitted"] is True
     assert "real_model_small_sample" not in report
+
+
+def test_shared_history_preflight_never_sees_previous_run_plan(tmp_path: Path):
+    repo = _init_repo(tmp_path / "repo")
+    observed_systems: list[str] = []
+
+    def observe_prepare(context):
+        observed_systems.append(context.system_content)
+        return None
+
+    backend = MockBackend(
+        [
+            _plan_action("OLD-RUN-PLAN-DO-NOT-LEAK"),
+            Action(ActionType.FINISH, "done", message="done"),
+            _plan_action("NEW-RUN-PLAN"),
+            Action(ActionType.FINISH, "done", message="done"),
+        ]
+    )
+    registry = ToolRegistry().register(FileReadTool(workspace=repo)).register(
+        FileWriteTool(workspace=repo)
+    )
+    runner = ExecutionRunner(
+        backend=backend,
+        registry=registry,
+        config=AgentConfig(
+            max_steps=6,
+            budget_tokens=20_000,
+            repo_map_mode="none",
+            planning_mode="always",
+            prepare_next_turn=observe_prepare,
+        ),
+        log_dir=str(tmp_path / "runner-logs"),
+    )
+    history = ConversationHistory(max_messages=40)
+    history.add(LLMMessage(role="user", content="Shared task context."))
+    history.add(LLMMessage(role="assistant", content="Prior round context."))
+
+    first = Task("First task.", str(repo), task_id="shared-plan-1")
+    second = Task("Second task.", str(repo), task_id="shared-plan-2")
+    assert runner.run(RunRequest(task=first, history=history)).status is RunStatus.SUCCESS
+    before_second = len(observed_systems)
+    assert runner.run(RunRequest(task=second, history=history)).status is RunStatus.SUCCESS
+
+    second_preflight = observed_systems[before_second]
+    assert "OLD-RUN-PLAN-DO-NOT-LEAK" not in second_preflight

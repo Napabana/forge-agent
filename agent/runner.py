@@ -296,6 +296,9 @@ class ExecutionRunner:
         if history is None or history.message_count <= 1 or callback is None:
             return None
 
+        # Shared-history preflight runs before Agent.run; clear the previous run's
+        # transient plan so context pressure can never observe stale planning state.
+        self.agent.reset_run_runtime_state()
         self.agent._current_repo_path = task.repo_path
         self.agent._repo_map_query = task.description
         cache_key = task.repo_path
