@@ -320,3 +320,18 @@ pytest -q
 - 未修改 `config/default.yaml`、B1/B2 fixture、`evals/results` 或 Independent Acceptance 语义。GitHub connector 无法读取用户本地未提交修改/stash，因此不对本地工作区状态作断言。
 - 本轮更新日志：`docs/changes/2026-09-18/Docker-E2E执行语义收口.md`。
 
+
+
+### 最后交接（2026-09-18，P2-0 Coding Agent Evaluation Harness）
+
+- P2-0 已完成实现，状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`；实现基线为 `dev@a9c745f77db4adae4818f381261a2dd4c151e552`。
+- 新增 `evals/coding_agent/` 通用 task-level Evaluation Harness：Evaluation 层负责 suite/case/trial/environment/grader/artifact/aggregation，Agent 层继续复用 `ExecutionRunner → Agent → ToolExecutor`。
+- 首版 `evals/fixtures/coding_agent/suite.json` 固定 8 个 coding task，并带 reference solution；hidden deterministic grader 不进入 Agent prompt。
+- Grader 支持 command/file/repository_state/run_trace；TrialResult 保存 RunStatus、termination、acceptance、steps/tokens/provider usage/wall time、tool/test/completion-rejection/reflection metrics、patch/final-state/trace refs。
+- fake/scripted backend 只证明 Harness correctness，聚合 report 故意不生成 capability pass rate；真实模型必须显式 `--real-model`。
+- 本轮没有真实模型 baseline；`evals/results/coding_agent_baseline_not_executed/` 明确记录 `execution_status=not_executed`、`real_model_executed=false`。
+- 输出目录默认拒绝静默覆盖；variant/repetition/trial id 已为 P2-1～P2-5 architecture A/B 留出统一扩展点。
+- 新增 `tests/test_coding_agent_eval.py` 覆盖 schema、duplicate id、stable trial id、clean fixture、grader、Agent failure result、metrics、report、no-overwrite、not-executed、fake evidence boundary 与 reference self-check。
+- 当前 ChatGPT 环境没有可执行仓库 checkout，因此未真实运行 pytest，不声明测试通过；本地应先执行 `python -m pytest -q tests/test_coding_agent_eval.py`，再跑 Runner/Failure Harness/Trace/Acceptance/Evidence Pack 回归和全量 `python -m pytest -q`。
+- 本轮未实现 Planning、RecoveryPolicy、Skills、MCP、Evolution、Multi-Agent 或 LLM-as-Judge 主链。
+- 更新日志：`docs/changes/2026-09-18/P2-0-Coding-Agent-Evaluation-Harness.md`。

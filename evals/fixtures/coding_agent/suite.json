@@ -1,0 +1,360 @@
+{
+  "schema_version": 1,
+  "suite_id": "p2-0-coding-agent-smoke",
+  "description": "Small deterministic coding-agent task suite for architecture A/B. Hidden graders are never included in the Agent prompt.",
+  "defaults": {
+    "max_steps": 20,
+    "budget_tokens": 40000
+  },
+  "tasks": [
+    {
+      "id": "simple-feature",
+      "description": "Add a triple(value) function to math_utils.py. Keep the existing double(value) behavior unchanged.",
+      "files": {
+        "math_utils.py": "def double(value):\n    return value * 2\n"
+      },
+      "reference_files": {
+        "math_utils.py": "def double(value):\n    return value * 2\n\n\ndef triple(value):\n    return value * 3\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "simple",
+        "feature",
+        "single-file"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from math_utils import double, triple; assert double(4) == 8; assert triple(4) == 12; assert triple(-2) == -6"
+            ]
+          }
+        },
+        {
+          "id": "shape",
+          "kind": "file",
+          "params": {
+            "path": "math_utils.py",
+            "contains": "def triple"
+          }
+        },
+        {
+          "id": "changed",
+          "kind": "repository_state",
+          "params": {
+            "changed": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "simple-bug-fix",
+      "description": "Fix subtract(left, right) in calc.py so it returns left minus right.",
+      "files": {
+        "calc.py": "def subtract(left, right):\n    return left + right\n"
+      },
+      "reference_files": {
+        "calc.py": "def subtract(left, right):\n    return left - right\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "simple",
+        "bug-fix",
+        "single-file"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from calc import subtract; assert subtract(7, 2) == 5; assert subtract(-1, 3) == -4"
+            ]
+          }
+        },
+        {
+          "id": "changed",
+          "kind": "repository_state",
+          "params": {
+            "changed": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "test-regression",
+      "description": "Fix slugify in slug.py so the existing regression test passes, then run the repository tests before finishing.",
+      "files": {
+        "slug.py": "def slugify(text):\n    return text.strip().lower().replace(' ', '_')\n",
+        "tests/test_slug.py": "from slug import slugify\n\n\ndef test_slugify_spaces():\n    assert slugify('Hello World') == 'hello-world'\n"
+      },
+      "reference_files": {
+        "slug.py": "def slugify(text):\n    return text.strip().lower().replace(' ', '-')\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "regression",
+        "tests",
+        "single-file"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from slug import slugify; assert slugify('Hello World') == 'hello-world'; assert slugify(' A B ') == 'a-b'"
+            ]
+          }
+        },
+        {
+          "id": "tests-used",
+          "kind": "run_trace",
+          "params": {
+            "run_status": "success",
+            "min_test_attempts": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi-file-change",
+      "description": "Add normalize_name(name) to formatter.py so it trims whitespace and title-cases the name, then update service.py so render_user(name) passes the normalized name to label(name).",
+      "files": {
+        "formatter.py": "def label(name):\n    return f'User: {name}'\n",
+        "service.py": "from formatter import label\n\n\ndef render_user(name):\n    return label(name)\n"
+      },
+      "reference_files": {
+        "formatter.py": "def label(name):\n    return f'User: {name}'\n\n\ndef normalize_name(name):\n    return name.strip().title()\n",
+        "service.py": "from formatter import label, normalize_name\n\n\ndef render_user(name):\n    return label(normalize_name(name))\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "feature",
+        "multi-file"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from service import render_user; assert render_user('  alice smith ') == 'User: Alice Smith'"
+            ]
+          }
+        },
+        {
+          "id": "formatter",
+          "kind": "file",
+          "params": {
+            "path": "formatter.py",
+            "contains": "def normalize_name"
+          }
+        },
+        {
+          "id": "service",
+          "kind": "file",
+          "params": {
+            "path": "service.py",
+            "contains": "normalize_name"
+          }
+        }
+      ]
+    },
+    {
+      "id": "repository-navigation",
+      "description": "The client timeout should be 10 seconds. Update the canonical timeout setting rather than hardcoding a second value in client.py.",
+      "files": {
+        "src/app/__init__.py": "",
+        "src/app/config.py": "REQUEST_TIMEOUT = 5\n",
+        "src/app/client.py": "from .config import REQUEST_TIMEOUT\n\n\ndef timeout():\n    return REQUEST_TIMEOUT\n",
+        "README.md": "The request timeout is configured under src/app.\n"
+      },
+      "reference_files": {
+        "src/app/config.py": "REQUEST_TIMEOUT = 10\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "navigation",
+        "configuration",
+        "single-file"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys; sys.path.insert(0, 'src'); from app.client import timeout; assert timeout() == 10"
+            ]
+          }
+        },
+        {
+          "id": "canonical-setting",
+          "kind": "file",
+          "params": {
+            "path": "src/app/config.py",
+            "contains": "REQUEST_TIMEOUT = 10"
+          }
+        },
+        {
+          "id": "no-hardcode",
+          "kind": "file",
+          "params": {
+            "path": "src/app/client.py",
+            "not_contains": "return 10"
+          }
+        }
+      ]
+    },
+    {
+      "id": "completion-test-requirement",
+      "description": "Implement increment(value) in counter.py so it returns value + 1, and run the repository tests before finishing.",
+      "files": {
+        "counter.py": "def increment(value):\n    return value\n",
+        "tests/test_counter.py": "from counter import increment\n\n\ndef test_increment():\n    assert increment(4) == 5\n"
+      },
+      "reference_files": {
+        "counter.py": "def increment(value):\n    return value + 1\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "completion",
+        "tests",
+        "single-file"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from counter import increment; assert increment(4) == 5; assert increment(-1) == 0"
+            ]
+          }
+        },
+        {
+          "id": "tests-used",
+          "kind": "run_trace",
+          "params": {
+            "run_status": "success",
+            "min_test_attempts": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "recoverable-test-failure",
+      "description": "First reproduce the failing parser test, then fix parse_bool(value) so it accepts true/false case-insensitively and rerun the tests before finishing.",
+      "files": {
+        "parser.py": "def parse_bool(value):\n    return value == 'true'\n",
+        "tests/test_parser.py": "from parser import parse_bool\n\n\ndef test_parse_bool_case_insensitive():\n    assert parse_bool('TRUE') is True\n    assert parse_bool('false') is False\n"
+      },
+      "reference_files": {
+        "parser.py": "def parse_bool(value):\n    normalized = value.strip().lower()\n    if normalized == 'true':\n        return True\n    if normalized == 'false':\n        return False\n    raise ValueError(f'unsupported boolean: {value}')\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "recovery",
+        "tests",
+        "bug-fix"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from parser import parse_bool; assert parse_bool('TRUE') is True; assert parse_bool(' false ') is False"
+            ]
+          }
+        },
+        {
+          "id": "reproduced-and-retested",
+          "kind": "run_trace",
+          "params": {
+            "run_status": "success",
+            "min_test_attempts": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "final-state-verification",
+      "description": "Enable FEATURE_ENABLED in config.py, update tests/test_feature.py to assert the enabled behavior, and run the tests after all edits before finishing.",
+      "files": {
+        "config.py": "FEATURE_ENABLED = False\n",
+        "feature.py": "from config import FEATURE_ENABLED\n\n\ndef is_enabled():\n    return FEATURE_ENABLED\n",
+        "tests/test_feature.py": "from feature import is_enabled\n\n\ndef test_feature_default():\n    assert is_enabled() is False\n"
+      },
+      "reference_files": {
+        "config.py": "FEATURE_ENABLED = True\n",
+        "tests/test_feature.py": "from feature import is_enabled\n\n\ndef test_feature_enabled():\n    assert is_enabled() is True\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "final-state",
+        "tests",
+        "multi-file"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from feature import is_enabled; assert is_enabled() is True"
+            ]
+          }
+        },
+        {
+          "id": "test-updated",
+          "kind": "file",
+          "params": {
+            "path": "tests/test_feature.py",
+            "contains": "is True"
+          }
+        },
+        {
+          "id": "final-tests",
+          "kind": "run_trace",
+          "params": {
+            "run_status": "success",
+            "termination_reason": "completion_satisfied",
+            "min_test_attempts": 1
+          }
+        }
+      ]
+    }
+  ]
+}

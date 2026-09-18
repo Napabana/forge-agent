@@ -1,7 +1,7 @@
 # P2 Agent Intelligence 执行计划
 
 状态更新时间：2026-09-18  
-当前基线：`dev@e86eedf19d90100a52444877adcb2ac95afe2bfc`
+当前实现基线：`dev@a9c745f77db4adae4818f381261a2dd4c151e552`
 
 > 命名说明：仓库历史上已经存在 “P2 Repo Map” 实验与证据目录。本计划使用 **P2 Agent Intelligence** 作为新阶段名称，子任务编号为 P2-0 ～ P2-5，避免把旧 Repo Map P2 重新解释为未完成。
 
@@ -38,7 +38,18 @@ Trajectory-driven Skill Evolution
 
 # P2-0 Coding Agent Evaluation Harness
 
-状态：**TODO**
+状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**
+
+实现摘要（2026-09-18）：
+
+- 新增 `evals/coding_agent/`，形成 `EvaluationSuite → EvalTask → Trial → existing ExecutionRunner → deterministic Graders → TrialResult → EvalReport`。
+- 正式 Agent 执行仍复用 `ExecutionRunner → Agent → ToolExecutor`；没有新增第二套 Agent loop，也没有修改 Trace v2 schema。
+- 首版冻结 8 个小型 coding task，覆盖 single-file feature、bug fix、test regression、multi-file、repository navigation、completion/test requirement、recoverable test failure 与 final-state verification；每个 case 带 reference solution 自检。
+- deterministic grader 首版支持 command/file/repository_state/run_trace，并从现有 RunResult/Trace 抽取 steps、tokens、wall time、tool/test/completion-rejection/reflection 等指标。
+- fake/scripted backend 只作为 Harness correctness evidence，不输出 Agent capability pass rate。
+- `baseline_react` 的真实模型实验本轮未执行；冻结 artifact 明确记录 `execution_status=not_executed`、`real_model_executed=false`。
+- 输出目录默认拒绝覆盖；CLI 支持 suite / variant / repetitions / output_dir / task filter，并要求显式 `--real-model` 才会调用 Provider。
+- 当前执行环境未运行仓库级 pytest，因此状态保持 LOCAL VALIDATION PENDING。详见 `docs/changes/2026-09-18/P2-0-Coding-Agent-Evaluation-Harness.md`。
 
 ## 为什么先做
 
