@@ -28,6 +28,40 @@ def _finish_action() -> Action:
     )
 
 
+class RepositoryWriteTool(BaseTool):
+    """测试专用：用任意工具名制造真实 repository change。"""
+
+    def __init__(self, name: str, path, content: str = "changed\n") -> None:
+        self._name = name
+        self._path = path
+        self._content = content
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return "write a real repository change"
+
+    @property
+    def parameters_schema(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    def execute(self, params: dict) -> ToolResult:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(self._content, encoding="utf-8")
+        return ToolResult(success=True, output="changed repository")
+
+
+class RepositoryDeleteTool(RepositoryWriteTool):
+    """测试专用：恢复前一步新增文件，使最终 repository state 回到初始状态。"""
+
+    def execute(self, params: dict) -> ToolResult:
+        self._path.unlink(missing_ok=True)
+        return ToolResult(success=True, output="restored repository")
+
+
 def _run(tmp_path, script, registry, config=None, *, require_changes=False, require_tests=False):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -78,6 +112,83 @@ def test_finish_allowed_after_successful_test(tmp_path):
     assert events[-1].event_type == EventType.TASK_COMPLETE
 
 
+def test_shell_real_change_then_test_satisfies_required_change(tmp_path):
+    registry = (
+        ToolRegistry()
+        .register(RepositoryWriteTool("shell", tmp_path / "repo" / "value.txt"))
+        .register(NoopTool("test", "2 passed"))
+    )
+    result, _, events = _run(
+        tmp_path,
+        [_tool_action("shell"), _tool_action("test"), _finish_action()],
+        registry,
+        require_changes=True,
+        require_tests=True,
+    )
+    assert result.status == RunStatus.SUCCESS
+    assert not any(event.event_type == EventType.COMPLETION_REJECTED for event in events)
+
+
+def test_shell_real_change_after_test_requires_retest(tmp_path):
+    registry = (
+        ToolRegistry()
+        .register(NoopTool("test", "2 passed"))
+        .register(RepositoryWriteTool("shell", tmp_path / "repo" / "value.txt"))
+    )
+    result, _, events = _run(
+        tmp_path,
+        [_tool_action("test"), _tool_action("shell"), _finish_action()],
+        registry,
+        require_changes=True,
+        require_tests=True,
+    )
+    assert result.status == RunStatus.INCOMPLETE
+    rejection = next(event for event in events if event.event_type == EventType.COMPLETION_REJECTED)
+    assert rejection.payload["code"] == "FINAL_STATE_UNVERIFIED"
+
+
+def test_successful_tool_without_repository_change_does_not_satisfy_required_change(tmp_path):
+    result, _, events = _run(
+        tmp_path,
+        [_tool_action("shell"), _finish_action()],
+        ToolRegistry().register(NoopTool("shell", "no change")),
+        require_changes=True,
+    )
+    assert result.status == RunStatus.INCOMPLETE
+    rejection = next(event for event in events if event.event_type == EventType.COMPLETION_REJECTED)
+    assert rejection.payload["code"] == "REPOSITORY_UNCHANGED"
+
+
+def test_change_restored_to_initial_state_is_rejected(tmp_path):
+    path = tmp_path / "repo" / "temporary.txt"
+    registry = (
+        ToolRegistry()
+        .register(RepositoryWriteTool("shell", path))
+        .register(RepositoryDeleteTool("restore", path))
+    )
+    result, _, events = _run(
+        tmp_path,
+        [_tool_action("shell"), _tool_action("restore"), _finish_action()],
+        registry,
+        require_changes=True,
+    )
+    assert result.status == RunStatus.INCOMPLETE
+    rejection = next(event for event in events if event.event_type == EventType.COMPLETION_REJECTED)
+    assert rejection.payload["code"] == "REPOSITORY_UNCHANGED"
+
+
+def test_file_write_real_change_still_satisfies_required_change(tmp_path):
+    result, _, _ = _run(
+        tmp_path,
+        [_tool_action("file_write"), _finish_action()],
+        ToolRegistry().register(
+            RepositoryWriteTool("file_write", tmp_path / "repo" / "value.txt")
+        ),
+        require_changes=True,
+    )
+    assert result.status == RunStatus.SUCCESS
+
+
 def test_finish_rejected_after_single_fatal_infrastructure_error(tmp_path):
     error = "Failed to start container: Duplicate mount point: /workspace"
     registry = ToolRegistry().register(FailingTool("shell", error))
@@ -98,7 +209,7 @@ def test_finish_rejected_when_write_follows_successful_test(tmp_path):
     registry = (
         ToolRegistry()
         .register(NoopTool("test", "2 passed"))
-        .register(NoopTool("file_write", "written"))
+        .register(RepositoryWriteTool("file_write", tmp_path / "repo" / "value.txt"))
     )
     result, _, events = _run(
         tmp_path,
@@ -142,7 +253,9 @@ def test_finish_rejected_when_required_write_and_test_never_run(tmp_path):
 
 
 def test_finish_rejected_when_required_test_never_run(tmp_path):
-    registry = ToolRegistry().register(NoopTool("file_write", "written"))
+    registry = ToolRegistry().register(
+        RepositoryWriteTool("file_write", tmp_path / "repo" / "value.txt")
+    )
     result, _, _ = _run(
         tmp_path,
         [_tool_action("file_write"), _finish_action()],
@@ -171,7 +284,7 @@ def test_finish_allowed_when_required_write_was_committed(tmp_path):
     class CommitWriteTool(BaseTool):
         @property
         def name(self) -> str:
-            return "file_write"
+            return "shell"
 
         @property
         def description(self) -> str:
@@ -198,7 +311,7 @@ def test_finish_allowed_when_required_write_was_committed(tmp_path):
         require_changes=True,
     )
     log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
-    backend = MockBackend([_tool_action("file_write"), _finish_action()])
+    backend = MockBackend([_tool_action("shell"), _finish_action()])
     try:
         result = Agent(
             backend,
@@ -302,7 +415,7 @@ def test_write_after_test_rejection_then_retest_recovers(tmp_path):
     registry = (
         ToolRegistry()
         .register(NoopTool("test", "passed"))
-        .register(NoopTool("file_write", "written"))
+        .register(RepositoryWriteTool("file_write", tmp_path / "repo" / "value.txt"))
     )
     result, _, events = _run(
         tmp_path,

@@ -8,10 +8,10 @@ Shell 命令执行工具。四层防护：
 4. Timeout + 输出截断：防挂起、防上下文爆炸
 
 权限确认设计：
-- confirm_callback 是一个 Callable[[str], bool]，返回 True 表示允许
-- 默认 None（不确认，直接执行）——用于 run 模式
-- chat 模式 / 交互模式传入真实的终端确认函数
-- 测试时传入 mock，不需要真实终端
+- confirm_callback 是 standalone ShellTool 的兼容能力，返回 True 表示允许
+- 生产组合根不向 ShellTool 注入交互 callback；唯一权限权威是 ToolExecutor + PermissionManager
+- 默认 None 只表示跳过 ShellTool 本层确认，不表示生产执行绕过 permission
+- 独立使用 ShellTool 时仍可传 mock/终端 callback，保持既有 API
 """
 
 from __future__ import annotations
@@ -106,8 +106,8 @@ class ShellTool(BaseTool):
         cwd (str):     工作目录（默认使用当前目录）
 
     构造参数:
-        confirm_callback: 需要确认时调用，返回 True 表示用户允许执行。
-                          None 表示跳过确认（run 模式默认）。
+        confirm_callback: standalone 使用时的兼容确认回调。
+                          None 表示跳过 ShellTool 本层确认；生产路径由 ToolExecutor 负责。
     """
 
     def __init__(

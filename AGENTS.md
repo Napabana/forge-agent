@@ -307,3 +307,16 @@ pytest -q
 - WSL 全量 pytest：822 passed、14 skipped、2 个 AnyIO/Python 3.11 deprecation warnings，118.33s；13 个相关 Python 文件静态编译通过。
 - 用户原有 `config/default.yaml` 修改、B1/B2 fixture、`evals/results` 与 stash 均未处理；当前分支仍为 `dev`。
 - 本轮更新日志：`docs/changes/2026-09-18/GitHub-Issue-Live-Progress共享EventRenderer.md`。
+
+### 最后交接（2026-09-18，Docker E2E 执行语义收口）
+
+- 基于真实 `--isolate --sandbox --confirm` E2E 暴露的问题，重新打开三项 correctness 收口；实现基线为 `dev@084426470d7e79da0d1d6db8ec6d31cb70c55bb8`。
+- Completion Guard 改为 repository-state-driven：工具后统一比较 `repository_fingerprint`，记录 `last_repo_change_step`；FINISH 用 final vs initial repository state 判断 required changes，并用最后成功测试 step 对比最后真实 repo change step。shell/git/未来真实修改工具不再依赖工具名白名单；同一 fingerprint 同时喂给 loop detector，未知路径变更触发增量 Repo Map 下一轮 sync。
+- 生产确认单一权威收口为 `ToolExecutor + PermissionManager`：`entry/cli.py::_build_registry` 不再向 `ShellTool` 注入交互 confirm callback；`ShellTool` standalone confirmation API 保留。CLI/Chat 的 callback 继续只注入 Runner/ToolExecutor，isolate 继续由 orchestrator 的 workspace-bound PermissionManager 控制。
+- Sandbox 路径语义拆分：宿主 `task.repo_path/worktree` 继续服务 file tools、PermissionManager、Repo Map、repository fingerprint 与 worktree 生命周期；模型可见 execution workspace 在 sandbox 下为 `/workspace`，prompt 明确 shell 已在该 cwd 且应优先相对路径。未重写 shell command，也未把内部 Task.repo_path 替成容器路径。
+- `test` 工具 schema 已明确为 pytest 工具，本轮未为偶发 `run_tests` 幻觉引入 alias system。
+- 新增/更新 deterministic regression，覆盖 shell 真修改、测试后 shell 再修改、最终恢复 initial state、无真实变化、file_write/HEAD commit、生产 shell 单次 confirm yes/no/callback crash、sandbox model-visible workspace 与 host workspace 分离。既有 `tests/test_sandbox.py` 继续固定 Docker cwd host→`/workspace` 映射；`tests/test_confirm.py` 继续固定 standalone ShellTool contract。
+- 当前 ChatGPT 环境无法获得可执行的仓库 checkout，因此本轮未真实运行 pytest，也不声明通过；用户本地应先跑定向回归，再跑 `pytest -q` 与真实 Docker E2E。
+- 未修改 `config/default.yaml`、B1/B2 fixture、`evals/results` 或 Independent Acceptance 语义。GitHub connector 无法读取用户本地未提交修改/stash，因此不对本地工作区状态作断言。
+- 本轮更新日志：`docs/changes/2026-09-18/Docker-E2E执行语义收口.md`。
+

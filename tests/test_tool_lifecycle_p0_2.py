@@ -167,6 +167,101 @@ def test_permission_deny_is_normal_typed_result():
     assert result.error_type is ToolErrorType.PERMISSION_DENIED
 
 
+class RecordingRuntime:
+    """生产 registry 回归专用：只记录命令，不触发真实 subprocess。"""
+    name = "recording"
+
+    def __init__(self):
+        self.calls = []
+
+    def exec(self, cmd, cwd=None, timeout=30):
+        from tools.runtime import RunResult as RuntimeRunResult
+        self.calls.append((cmd, cwd, timeout))
+        return RuntimeRunResult(0, "ok\n", "")
+
+    def cleanup(self):
+        return None
+
+
+def _run_production_shell_case(tmp_path, confirm_callback, command="echo changed > value.txt"):
+    from config.schema import AppConfig
+    from entry.cli import _build_registry
+
+    runtime = RecordingRuntime()
+    registry = _build_registry(
+        AppConfig(), confirm_callback=confirm_callback, runtime=runtime,
+        default_cwd=str(tmp_path), workspace=str(tmp_path),
+    )
+    backend = MockBackend([
+        Action(ActionType.TOOL_CALL, "run shell", ToolCall("shell", {"cmd": command})),
+        Action(ActionType.FINISH, "done", message="done"),
+    ])
+    result = _runner(
+        tmp_path, backend, registry, confirm_callback=confirm_callback,
+    ).run(RunRequest(Task("production shell", str(tmp_path), max_steps=2)))
+    return result, runtime
+
+
+def test_production_dangerous_shell_confirms_once_and_executes_once(tmp_path):
+    confirmations = []
+
+    def confirm(command):
+        confirmations.append(command)
+        return True
+
+    result, runtime = _run_production_shell_case(tmp_path, confirm)
+    events = _read_events(result.trace_path)
+    assert result.status is RunStatus.SUCCESS
+    assert confirmations == ["echo changed > value.txt"]
+    assert len(runtime.calls) == 1
+    decisions = _events(events, EventType.PERMISSION_DECISION)
+    assert len(decisions) == 1
+    assert decisions[0].payload["decision"] == "confirm"
+
+
+def test_production_dangerous_shell_rejects_once_without_execution(tmp_path):
+    confirmations = []
+
+    def reject(command):
+        confirmations.append(command)
+        return False
+
+    result, runtime = _run_production_shell_case(tmp_path, reject)
+    events = _read_events(result.trace_path)
+    assert result.status is RunStatus.SUCCESS
+    assert confirmations == ["echo changed > value.txt"]
+    assert runtime.calls == []
+    observation = _events(events, EventType.OBSERVATION)[0].payload["observation"]
+    assert observation["error_type"] == "permission_denied"
+
+
+def test_production_confirm_callback_crash_is_infrastructure_failure(tmp_path):
+    from config.schema import AppConfig
+    from entry.cli import _build_registry
+
+    runtime = RecordingRuntime()
+
+    def explode(_command):
+        raise RuntimeError("confirm crashed")
+
+    registry = _build_registry(
+        AppConfig(), confirm_callback=explode, runtime=runtime,
+        default_cwd=str(tmp_path), workspace=str(tmp_path),
+    )
+    backend = MockBackend([
+        Action(ActionType.TOOL_CALL, "run shell", ToolCall("shell", {"cmd": "echo changed > value.txt"})),
+    ])
+    result = _runner(
+        tmp_path, backend, registry, confirm_callback=explode,
+    ).run(RunRequest(Task("confirm crash", str(tmp_path), max_steps=1)))
+    assert result.status is RunStatus.FAILED
+    assert result.termination_reason == "infrastructure_error"
+    assert runtime.calls == []
+    events = _read_events(result.trace_path)
+    failed = _events(events, EventType.TOOL_EXECUTION_FAILED)[0].payload
+    assert failed["lifecycle_phase"] == "permission_confirm"
+
+
 def test_timeout_observation_uses_timeout_status():
     result = ToolResult(
         False,

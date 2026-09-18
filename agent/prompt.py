@@ -44,7 +44,7 @@ explore the repository, make the necessary code changes, and verify they work co
 - Do not call a `finish` or `give_up` tool; they are terminal actions, not tools
 - If you truly cannot solve the task, respond with `GIVE_UP: <reason>`
 
-## Available tools
+{execution_workspace_section}## Available tools
 {tool_descriptions}
 
 ## Repository
@@ -54,11 +54,20 @@ Path: {repo_path}
 
 _NO_REPO_SUMMARY = "(Repository summary not yet available — use find_files and file_read to explore)"
 
+_EXECUTION_WORKSPACE_TEMPLATE = """\
+## Execution workspace
+- Shell commands already start in `{workspace}`.
+- Prefer repository-relative paths; do not `cd` to host filesystem paths.
+- File tools use repository-relative paths within the repository workspace.
+
+"""
+
 
 def build_system_prompt(
     repo_path: str,
     tools: list[LLMToolSchema],
     repo_summary: str | None = None,
+    execution_workspace: str | None = None,
 ) -> str:
     """
     渲染完整的 system prompt。
@@ -67,17 +76,24 @@ def build_system_prompt(
         repo_path:    repo 根目录路径
         tools:        已注册工具的 schema 列表
         repo_summary: repo-map 生成的摘要（Day 5 接入，当前传 None）
+        execution_workspace: 模型可见的 shell 工作区；None 表示与宿主 repo_path 相同
 
     Returns:
         渲染好的 system prompt 字符串
     """
     tool_descriptions = _format_tool_descriptions(tools)
     summary = repo_summary or _NO_REPO_SUMMARY
+    execution_workspace_section = (
+        _EXECUTION_WORKSPACE_TEMPLATE.format(workspace=execution_workspace)
+        if execution_workspace
+        else ""
+    )
 
     return _SYSTEM_TEMPLATE.format(
         repo_path=repo_path,
         repo_summary=summary,
         tool_descriptions=tool_descriptions,
+        execution_workspace_section=execution_workspace_section,
     )
 
 

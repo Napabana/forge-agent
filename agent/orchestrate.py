@@ -322,7 +322,13 @@ async def orchestrate_run(
                     detail = preflight.output.strip() or "unknown sandbox error"
                     raise SandboxPreflightError(detail)
 
-            # registry 在 worktree 内执行，PermissionManager 再强制 safe_path 边界。
+            # 宿主 worktree 继续作为文件/Git/repository state 的真实边界；
+            # Docker 下仅把模型可见的 shell 工作区切成容器内 /workspace。
+            runtime_cfg = (
+                dataclasses.replace(agent_cfg, execution_workspace=CONTAINER_WORKDIR)
+                if sandbox
+                else agent_cfg
+            )
             registry = registry_builder(
                 agent_cfg, confirm_callback, runtime,
                 default_cwd=wt.path, workspace=wt.path,
@@ -338,13 +344,13 @@ async def orchestrate_run(
                 )
 
             executor = ToolExecutor(
-                registry, hooks=agent_cfg.hooks, permission=permission,
+                registry, hooks=runtime_cfg.hooks, permission=permission,
                 confirm_callback=confirm_callback,
                 decision_callback=_on_decision,
             )
 
             # 创建新 Task 而不修改原对象，让 Agent 的所有相对路径都落在 worktree。
-            agent = factory(backend, registry, agent_cfg, executor)
+            agent = factory(backend, registry, runtime_cfg, executor)
             task_in_wt = dataclasses.replace(task, repo_path=str(wt.path))
 
             # Agent.run() 保持同步；EventLog 事件先入队，随后由 forwarder 转发。

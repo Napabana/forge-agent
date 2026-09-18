@@ -93,6 +93,7 @@ def _build_registry(
 
     default_cwd：shell/test/git 工具的默认工作目录；LLM 显式 cwd 仍可覆盖。
     workspace：文件工具的独立路径边界，不从 default_cwd 隐式推导。
+    confirm_callback 仅保留 registry_builder 兼容；生产确认统一由外层 ToolExecutor 执行。
     """
     from tools.base import ToolRegistry
     from tools.file_tool import FileReadTool, FileViewTool, FileWriteTool
@@ -106,7 +107,7 @@ def _build_registry(
 
     return (
         ToolRegistry()
-        .register(ShellTool(confirm_callback=confirm_callback, runtime=runtime, default_cwd=process_cwd))
+        .register(ShellTool(runtime=runtime, default_cwd=process_cwd))
         .register(FileReadTool(workspace=fs_workspace))
         .register(FileViewTool(workspace=fs_workspace))
         .register(FileWriteTool(workspace=fs_workspace))
@@ -237,7 +238,7 @@ def run(
         sys.exit(1)
 
     from tools.shell_tool import terminal_confirm
-    from tools.runtime import create_runtime
+    from tools.runtime import CONTAINER_WORKDIR, create_runtime
     confirm_cb = terminal_confirm if confirm else None
     #runtime是执行器实例， 有生命周期，后续还需要清理
     runtime = (
@@ -292,6 +293,7 @@ def run(
         thought_callback=_thought_cb if resolved_reasoning_stream else None,
         confirm_dangerous=confirm,
         confirm_callback=confirm_cb,
+        execution_workspace=CONTAINER_WORKDIR if sandbox else None,
     )
     require_changes, require_tests = infer_completion_requirements(description)
     task_obj = Task(
@@ -479,7 +481,7 @@ def chat(
         sys.exit(1)
 
     from tools.shell_tool import terminal_confirm
-    from tools.runtime import create_runtime
+    from tools.runtime import CONTAINER_WORKDIR, create_runtime
     runtime = create_runtime(sandbox=sandbox, repo_path=str(repo_path)) if sandbox else None
     if sandbox:
         click.echo(dim(f"  Sandbox: Docker ({runtime.name})"))
@@ -516,6 +518,7 @@ def chat(
             session_store=session_store,
             session_id=initial_session_id,
             prepare_next_turn=context_policy,
+            execution_workspace=CONTAINER_WORKDIR if sandbox else None,
         )
     except (ChatSessionError, OSError) as exc:
         if runtime is not None:

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent.event_log import EventLog
-from agent.loop_detector import LoopDetector, LoopSeverity, snapshot_repository
+from agent.loop_detector import LoopDetector, LoopSeverity
 from context.history import ConversationHistory
 from context.incremental_repo_map import PersistentRepoMap
 from context.repo_map import RepoMap
@@ -116,6 +116,8 @@ class AgentConfig:
     cancel_event: object = None
     hooks: Hooks | None = None
     prepare_next_turn: PrepareNextTurn | None = None
+    # 仅控制模型可见的执行工作区；宿主 repo_path 仍用于文件、Git 与 repository state。
+    execution_workspace: str | None = None
     # Production defaults to persistent incremental Repo Map. Other modes are
     # retained as controlled ablation variants.
     repo_map_mode: str = "incremental"
@@ -190,6 +192,7 @@ class Agent:
     ) -> RunResult:
         """执行一次完整的 agent 运行。"""
         self._current_repo_path = task.repo_path
+        self._model_repo_path = self._cfg.execution_workspace or task.repo_path
         self._repo_map_query = task.description
         cache_key = task.repo_path
         if self._repo_map_cache_key != cache_key:
@@ -209,7 +212,7 @@ class Agent:
             history = ConversationHistory(max_messages=self._cfg.history_max_messages)
             history.add(LLMMessage(
                 role="user",
-                content=build_task_prompt(task.description, task.repo_path, task.issue_url),
+                content=build_task_prompt(task.description, self._model_repo_path, task.issue_url),
             ))
 
         token_budget = TokenBudget(total=self._cfg.budget_tokens)
@@ -224,11 +227,11 @@ class Agent:
         test_attempted = False
         last_test_passed: bool | None = None
         last_successful_test_step: int | None = None
-        successful_write = False
-        last_write_step: int | None = None
-        initial_repo_state = (
-            self._get_repo_state(task.repo_path) if task.require_changes else None
-        )
+        # Completion Guard 与 loop detector 共用真实 repository fingerprint，
+        # 不再把“调用过某个写工具”当成仓库确实发生变化的证据。
+        initial_repo_state = self._get_repo_state(task.repo_path)
+        last_repo_state = initial_repo_state
+        last_repo_change_step: int | None = None
         fatal_error_key: str | None = None
         fatal_error_count = 0
 
@@ -381,11 +384,7 @@ class Agent:
             if action.action_type == ActionType.FINISH:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
-                final_repo_state = (
-                    self._get_repo_state(task.repo_path)
-                    if task.require_changes
-                    else None
-                )
+                final_repo_state = self._get_repo_state(task.repo_path)
                 rejection_code: str | None = None
                 verification_error: str | None = None
                 if fatal_error_key is not None:
@@ -396,16 +395,7 @@ class Agent:
                         steps_taken=step, total_tokens=total_tokens, usage=usage.snapshot(),
                         patch=patch, error=reason, termination_reason="infrastructure_error",
                     )
-                elif task.require_changes and not successful_write:
-                    rejection_code = "REQUIRED_CHANGE_MISSING"
-                    verification_error = (
-                        "Task requires repository changes, but no write tool completed successfully."
-                    )
-                elif (
-                    task.require_changes
-                    and initial_repo_state is not None
-                    and final_repo_state == initial_repo_state
-                ):
+                elif task.require_changes and final_repo_state == initial_repo_state:
                     rejection_code = "REPOSITORY_UNCHANGED"
                     verification_error = (
                         "Task requires repository changes, but the repository state did not change."
@@ -422,10 +412,10 @@ class Agent:
                     )
                 elif (
                     test_attempted
-                    and last_write_step is not None
+                    and last_repo_change_step is not None
                     and (
                         last_successful_test_step is None
-                        or last_successful_test_step < last_write_step
+                        or last_successful_test_step < last_repo_change_step
                     )
                 ):
                     rejection_code = "FINAL_STATE_UNVERIFIED"
@@ -609,26 +599,32 @@ class Agent:
                 )
                 observation = result.to_observation(tc.name)
 
-                if tc.name in ("file_write", "file_edit", "edit"):
+                current_repo_state = self._get_repo_state(task.repo_path)
+                repository_changed = current_repo_state != last_repo_state
+                if repository_changed:
                     steps_without_edit = 0
-                    if observation.is_success():
-                        successful_write = True
-                        last_write_step = step
-                        if self._repo_map_mode() == "incremental":
-                            if hasattr(self, "_repo_map_cache"):
-                                del self._repo_map_cache
-                            changed_path = tc.params.get("path")
-                            try:
-                                if changed_path:
-                                    repo_map.update_paths([changed_path])  # type: ignore[attr-defined]
-                                    self._repo_map_sync_requested = False
-                                else:
-                                    self._repo_map_sync_requested = True
-                            except Exception as exc:
-                                logger.warning("Incremental Repo Map update failed: %s", exc)
+                    last_repo_change_step = step
+                    last_repo_state = current_repo_state
+                    if self._repo_map_mode() == "incremental":
+                        if hasattr(self, "_repo_map_cache"):
+                            del self._repo_map_cache
+                        changed_path = (
+                            tc.params.get("path")
+                            if tc.name in ("file_write", "file_edit", "edit")
+                            else None
+                        )
+                        try:
+                            if changed_path and observation.is_success():
+                                repo_map.update_paths([changed_path])  # type: ignore[attr-defined]
+                                self._repo_map_sync_requested = False
+                            else:
+                                # shell/git 等也可能真实改仓库；未知路径时下一轮统一 sync。
                                 self._repo_map_sync_requested = True
-                        else:
-                            self.invalidate_repo_map_cache(task.repo_path)
+                        except Exception as exc:
+                            logger.warning("Incremental Repo Map update failed: %s", exc)
+                            self._repo_map_sync_requested = True
+                    else:
+                        self.invalidate_repo_map_cache(task.repo_path)
                 else:
                     steps_without_edit += 1
 
@@ -707,7 +703,7 @@ class Agent:
                 loop_signal = loop_detector.observe(
                     action,
                     observation,
-                    repo_state=snapshot_repository(task.repo_path),
+                    repo_state=current_repo_state,
                     test_state=test_state,
                 )
                 if loop_signal is not None:
@@ -945,9 +941,10 @@ class Agent:
 
         repo_map_content = self._repo_map_cache
         system_content = build_system_prompt(
-            repo_path=getattr(self, "_current_repo_path", "."),
+            repo_path=getattr(self, "_model_repo_path", "."),
             tools=list(schemas),
             repo_summary=repo_map_content if mode != "none" else None,
+            execution_workspace=self._cfg.execution_workspace,
         )
         return system_content, repo_map_content, schemas
 

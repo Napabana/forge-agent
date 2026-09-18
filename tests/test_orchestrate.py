@@ -307,6 +307,60 @@ class TestOrchestrateSuccess:
         assert instances[0].kwargs["worktree_mount"][1] == "/workspace"
 
 
+    async def test_sandbox_keeps_host_workspace_internal_and_exposes_container_workspace(
+        self, repo, tmp_path, monkeypatch,
+    ):
+        """模型只看 /workspace；文件、permission 与 repo state 仍绑定宿主 worktree。"""
+        import agent.orchestrate as orch_mod
+        from tools.runtime import CONTAINER_WORKDIR, LocalRuntime
+
+        captured = {}
+
+        class FakeDockerRuntime(LocalRuntime):
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+
+            @property
+            def name(self):
+                return "fake-docker"
+
+            def preflight(self, cwd=None):
+                from tools.runtime import RunResult as RuntimeRunResult
+                return RuntimeRunResult(0, "ok", "")
+
+        def capture_registry(cfg, confirm_callback, runtime, *, default_cwd, workspace):
+            captured["default_cwd"] = str(default_cwd)
+            captured["workspace"] = str(workspace)
+            return _build_registry(
+                cfg, confirm_callback, runtime,
+                default_cwd=default_cwd, workspace=workspace,
+            )
+
+        class CapturingAgent(FakeAgent):
+            def __init__(self, backend, registry, config, executor):
+                captured["execution_workspace"] = config.execution_workspace
+                captured["permission_workspace"] = executor._permission.workspace
+                super().__init__(backend, registry, config, executor)
+
+        monkeypatch.setattr(orch_mod, "DockerRuntime", FakeDockerRuntime)
+
+        result = await orchestrate_run(
+            backend=None,
+            task=Task(description="workspace split", repo_path=str(repo)),
+            engine=TaskEngine(tmp_path / "tasks.db"),
+            registry_builder=capture_registry,
+            log_dir=str(tmp_path / "logs"),
+            sandbox=True,
+            agent_factory=CapturingAgent,
+        )
+
+        assert result.is_success()
+        assert captured["execution_workspace"] == CONTAINER_WORKDIR
+        assert captured["default_cwd"] == captured["workspace"]
+        assert captured["workspace"] == captured["permission_workspace"]
+        assert captured["workspace"] != CONTAINER_WORKDIR
+        assert ".worktrees" in captured["workspace"]
+
 # ---------------------------------------------------------------------------
 # 失败回滚
 # ---------------------------------------------------------------------------

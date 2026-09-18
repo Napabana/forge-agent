@@ -111,6 +111,7 @@ class ChatSession:
         session_store=None,
         session_id: str | None = None,
         prepare_next_turn=None,
+        execution_workspace: str | None = None,
     ) -> None:
         from agent.core import AgentConfig
         from agent.runner import ExecutionRunner
@@ -177,6 +178,7 @@ class ChatSession:
             confirm_dangerous=confirm_callback is not None,
             confirm_callback=confirm_callback,
             prepare_next_turn=prepare_next_turn,
+            execution_workspace=execution_workspace,
         )
         self.runner = ExecutionRunner(
             backend=backend,
