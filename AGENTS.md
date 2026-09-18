@@ -362,3 +362,14 @@ pytest -q
 - 新增 `tests/test_structured_planning.py` 并扩展 `tests/test_coding_agent_eval.py`；当前 ChatGPT 环境没有可执行仓库 checkout，未真实运行 pytest，因此不声明通过。
 - 本轮没有 real-model A/B，没有 success-rate/token/latency improvement 数字；Evidence Pack 暂不新增“Regression passed” claim，待用户本地验证后再收口。
 - 更新日志：`docs/changes/2026-09-19/P2-1-Structured-Planning.md`。
+
+
+### 验证补充（2026-09-19，P2-1 Structured Planning 本地回归）
+
+- 用户在 P2-1 实现后完成多轮定向与全量本地 regression；过程中暴露的 Trace token accounting、empty planning token attribution、PyYAML `off` 解析问题均已修复。
+- 用户最终再次执行全量 `python -m pytest -q` 并明确确认全部通过；最终通过轮次未提供具体 passed 数量、完整 stdout 或耗时，因此不补造数字。
+- P2-1 状态由 `IMPLEMENTED / LOCAL VALIDATION PENDING` 正式收口为 `DONE`。
+- deterministic evidence 覆盖 typed Plan/Step/Revision、off/auto/always、compaction-surviving current plan、Trace v2 planning events/token diagnostics、产品入口配置、P2-0 planning variant 与既有 Runner/Completion Guard/Failure Harness 回归兼容。
+- 本轮没有执行 real-model `baseline_react vs planning` A/B，不产生 success-rate、pass@1、token、latency 或 Planning 提升结论。
+- 下一阶段进入 P2-2 Failure-aware Recovery + Replanning，并直接复用 P2-1 current plan / current step / plan revision mechanism。
+- 验证日志：`docs/changes/2026-09-19/P2-1-Structured-Planning本地回归-DONE.md`。

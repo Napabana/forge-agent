@@ -149,7 +149,7 @@ Trial 输出至少记录：
 
 # P2-1 Structured Planning
 
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
+状态：**DONE**  
 依赖：P2-0 baseline
 
 实现摘要（2026-09-19）：
@@ -162,7 +162,7 @@ Trial 输出至少记录：
 - progress/revision 只接受模型显式 structured update，不从 Tool success 自动推断 semantic completion；未实现 P2-2 failure-aware automatic replanning。
 - Trace v2 增加 plan lifecycle point events；P2-0 `TrialMetrics` 增加 planning metrics。
 - Evaluation CLI 将 `baseline_react → off`、`planning → always`，共享 8-case outcome grader 不要求 baseline 产生 plan event。
-- 当前 ChatGPT 环境无法执行仓库 pytest，因此不声明 regression passed；状态保持 LOCAL VALIDATION PENDING。详见 `docs/changes/2026-09-19/P2-1-Structured-Planning.md`。
+- 用户随后在本地完成定向修复复跑与全量 `python -m pytest -q`，最终明确确认全部通过；最终通过轮次未提供具体 passed 数量或耗时，因此不补造数字。P2-1 状态已收口为 DONE。详见 `docs/changes/2026-09-19/P2-1-Structured-Planning.md` 与本地回归 DONE 日志。
 
 ## 当前缺口
 

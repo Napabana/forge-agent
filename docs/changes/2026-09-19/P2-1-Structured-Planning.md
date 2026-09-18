@@ -2,7 +2,7 @@
 
 日期：2026-09-19  
 实现基线：`dev@60e1194d50f9d23c64a57f6e90d51f6842319bfd`  
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**
+状态：**DONE**
 
 ## 目标
 
@@ -377,3 +377,31 @@ python -m pytest -q
 - 大规模付费 benchmark
 
 下一阶段 P2-2 可以直接复用本轮的 `ExecutionPlan`、current step 和 `plan_revise` mechanism，而不改写 Agent 主循环。
+
+
+## 本地回归补充（最终，2026-09-19）
+
+在前三轮回归暴露并修复 Trace token accounting、empty planning token attribution 与 YAML `off` 解析问题后，用户再次执行本地全量 `python -m pytest -q`，并明确确认最终全部通过。
+
+本次最终通过轮次没有提供完整 stdout、passed 数量或耗时，因此本文只记录“全量 pytest 最终通过”，不根据前一轮 collected 数量反推或补造统计。
+
+据此：
+
+```text
+P2-1 Structured Planning
+IMPLEMENTED / LOCAL VALIDATION PENDING
+                ↓
+               DONE
+```
+
+本地回归证明的范围：
+
+- Structured Planning typed runtime contract；
+- planning off/auto/always 行为；
+- Planning 与 Trace v2 / token diagnostics 的兼容；
+- Planning 与 Context Compaction / shared-history runtime isolation 的兼容；
+- CLI / Chat / API / GitHub Issue 配置接线；
+- P2-0 Evaluation Harness 的 planning variant mapping 与 metrics；
+- 既有 Completion Guard、Runner、Failure Harness、Evidence Pack 等 deterministic regression 无回归。
+
+本次验证仍未执行 real-model `baseline_react vs planning` A/B，因此不产生 success rate、pass@1、token、latency 或“Planning 提升效果”的结论。
