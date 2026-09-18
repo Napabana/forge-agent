@@ -1086,7 +1086,11 @@ class Agent:
         pending_tokens = 0
         context_tokens = history_tokens + injected_tokens + pending_tokens
         estimated_input_tokens = (
-            system_tokens + repo_map_tokens + tool_schema_tokens + context_tokens
+            system_tokens
+            + repo_map_tokens
+            + planning_tokens
+            + tool_schema_tokens
+            + context_tokens
         )
         return {
             "system_tokens": system_tokens,

@@ -312,7 +312,16 @@ def test_planning_calls_use_normal_usage_accounting(tmp_path: Path):
 
     llm_finished = [row for row in _event_rows(trace) if row["event_type"] == "llm_call_finished"]
     assert len(llm_finished) == 2
-    assert all("planning_tokens" in row["payload"]["token_breakdown"] for row in llm_finished)
+    for row in llm_finished:
+        breakdown = row["payload"]["token_breakdown"]
+        assert breakdown["planning_tokens"] > 0
+        assert breakdown["estimated_input_tokens"] == (
+            breakdown["system_tokens"]
+            + breakdown["repo_map_tokens"]
+            + breakdown["planning_tokens"]
+            + breakdown["tool_schema_tokens"]
+            + breakdown["context_tokens"]
+        )
 
 
 def test_malformed_plan_is_rejected_then_can_be_corrected(tmp_path: Path):

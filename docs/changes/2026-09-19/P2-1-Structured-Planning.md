@@ -265,6 +265,27 @@ CLI / Chat / API / GitHub Issue 均把同一 config 值传入 `AgentConfig`，Pl
 - Docker E2E；
 - real-model baseline/planning A/B。
 
+## 本地回归补充（第一次，2026-09-19）
+
+用户在本地执行相关 regression 集合，共收集 119 个测试：
+
+- 118 passed
+- 1 failed
+- 失败：`tests/test_trace_v2.py::test_trace_v2_records_prepare_llm_tool_and_configured_hooks`
+
+失败原因不是 Agent/Planning lifecycle 行为错误，而是 P2-1 新增 `planning_tokens` 后，Trace v2 的 exact-key 回归仍按旧 token breakdown 字段集合断言。
+
+排查同时发现一个实际 accounting bug：`agent/core.py::_trace_token_breakdown` 已经从 `system_tokens` 中拆出 `planning_tokens`，但 `estimated_input_tokens` 求和时漏加该字段，启用 Planning 时会低估本地 diagnostic input estimate。
+
+修复：
+
+- `tests/test_trace_v2.py` 将 `planning_tokens` 纳入 Trace v2 token breakdown contract；
+- baseline/default `planning_mode=off` 明确断言 `planning_tokens == 0`；
+- `agent/core.py` 将 `planning_tokens` 纳入 `estimated_input_tokens`；
+- `tests/test_structured_planning.py` 增加 Planning-on 时 `planning_tokens > 0` 与完整 token breakdown 恒等式回归。
+
+该修复不改变 provider-reported usage、Completion Guard、Planning lifecycle 或 P2-0 grader outcome。修复提交后尚待用户本地复跑，因此 P2-1 状态仍为 **IMPLEMENTED / LOCAL VALIDATION PENDING**。
+
 ## 本地验证命令
 
 拉取本轮提交后：

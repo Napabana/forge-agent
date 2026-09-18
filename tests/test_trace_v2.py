@@ -115,6 +115,7 @@ def test_trace_v2_records_prepare_llm_tool_and_configured_hooks(tmp_path):
         "system_tokens",
         "tool_schema_tokens",
         "repo_map_tokens",
+        "planning_tokens",
         "history_tokens",
         "context_tokens",
         "pending_tokens",
@@ -125,8 +126,12 @@ def test_trace_v2_records_prepare_llm_tool_and_configured_hooks(tmp_path):
         breakdown["system_tokens"]
         + breakdown["tool_schema_tokens"]
         + breakdown["repo_map_tokens"]
+        + breakdown["planning_tokens"]
         + breakdown["context_tokens"]
     )
+    # This test uses the default planning_mode=off, so the new diagnostic
+    # field must preserve the baseline request accounting exactly.
+    assert breakdown["planning_tokens"] == 0
     assert breakdown["context_tokens"] == (
         breakdown["history_tokens"]
         + breakdown["pending_tokens"]
