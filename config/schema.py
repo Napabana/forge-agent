@@ -194,7 +194,16 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     safety_margin = int(agent_raw.get("context_safety_margin_tokens", 1024))
     if safety_margin < 0:
         raise ValueError("agent.context_safety_margin_tokens cannot be negative")
-    planning_mode = str(agent_raw.get("planning_mode", "off")).strip().lower()
+    planning_mode_raw = agent_raw.get("planning_mode", "off")
+    # PyYAML follows YAML 1.1 boolean spellings, so an unquoted `off`
+    # is loaded as False. Accept that representation as the documented
+    # "off" mode while still rejecting unrelated non-string values.
+    if planning_mode_raw is False:
+        planning_mode = "off"
+    elif isinstance(planning_mode_raw, str):
+        planning_mode = planning_mode_raw.strip().lower()
+    else:
+        raise ValueError("agent.planning_mode must be one of: off, auto, always")
     if planning_mode not in {"off", "auto", "always"}:
         raise ValueError("agent.planning_mode must be one of: off, auto, always")
 

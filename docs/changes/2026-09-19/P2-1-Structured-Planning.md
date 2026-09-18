@@ -313,6 +313,27 @@ tests/test_structured_planning.py
 
 该修复只影响本地 diagnostic token attribution，不修改 provider-reported usage、Agent completion、Tool lifecycle 或 Evaluation outcome。修复后仍待用户本地复跑，因此 P2-1 状态继续保持 **IMPLEMENTED / LOCAL VALIDATION PENDING**。
 
+## 本地回归补充（第三次，2026-09-19）
+
+用户完成前两轮定向修复后执行全量 `python -m pytest -q`：
+
+- collected 877
+- 859 passed
+- 14 skipped
+- 4 failed
+- 2 warnings
+
+4 个失败分别位于 Chat、CLI isolate 和 config default 测试，但根因相同：`config/default.yaml` 中的裸值 `planning_mode: off` 被 PyYAML 按 YAML 1.1 规则解析为布尔值 `False`，随后字符串枚举校验拒绝 `"false"`。
+
+修复：
+
+- 默认配置改为显式字符串 `planning_mode: "off"`；
+- 配置解析兼容 PyYAML 对裸 `off` 的 `False` 表示，并规范化回 `"off"`；
+- 其他非字符串值仍拒绝，非法字符串仍拒绝；
+- `tests/test_day6.py` 新增裸 YAML `off`、布尔 `False` 兼容和非法值回归。
+
+这 4 个失败属于同一配置解析兼容性问题，不是 Chat、CLI、isolate 四条独立产品链路故障。修复后仍待用户本地复跑，因此 P2-1 状态继续保持 **IMPLEMENTED / LOCAL VALIDATION PENDING**。
+
 ## 本地验证命令
 
 拉取本轮提交后：

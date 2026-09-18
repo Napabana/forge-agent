@@ -66,6 +66,17 @@ class TestParseConfig:
         assert config.agent.max_steps == 20
         assert config.agent.budget_tokens == 40000
 
+    def test_planning_mode_accepts_yaml_off_boolean(self):
+        config = _parse({"agent": {"planning_mode": False}})
+        assert config.agent.planning_mode == "off"
+
+    def test_planning_mode_rejects_invalid_value(self):
+        with pytest.raises(
+            ValueError,
+            match="agent.planning_mode must be one of: off, auto, always",
+        ):
+            _parse({"agent": {"planning_mode": "sometimes"}})
+
     def test_tools_section(self):
         config = _parse({"tools": {"shell": {"timeout": 60}}})
         assert config.tools.shell.timeout == 60
@@ -99,6 +110,12 @@ agent:
         config = load_config(config_file)
         assert config.llm.provider == "deepseek"
         assert config.agent.max_steps == 15
+
+    def test_unquoted_planning_off_loads_from_yaml(self, tmp_path):
+        config_file = tmp_path / "planning.yaml"
+        config_file.write_text("agent:\n  planning_mode: off\n")
+        config = load_config(config_file)
+        assert config.agent.planning_mode == "off"
 
     def test_env_var_expanded_in_file(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TEST_API_KEY", "sk-from-env")
