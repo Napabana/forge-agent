@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tools.base import BaseTool, ToolResult
+from tools.base import BaseTool, ToolEffect, ToolResult
 from tools.runtime import LocalRuntime, Runtime
 
 
@@ -39,6 +39,10 @@ class PytestTool(BaseTool):
         self._runtime = runtime or LocalRuntime()
         # LLM 未传 cwd 时的默认目录（orchestrator 注入 worktree 路径，M4 第二波）。
         self._default_cwd = default_cwd
+
+    @property
+    def effect(self) -> ToolEffect:
+        return ToolEffect.READ_ONLY
 
     @property
     def name(self) -> str:

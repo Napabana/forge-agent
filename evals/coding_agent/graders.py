@@ -179,6 +179,10 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
     reflection_count = 0
     file_read_count = 0
     shell_call_count = 0
+    plan_created_count = 0
+    plan_revision_count = 0
+    plan_step_completed_count = 0
+    planning_skipped = False
     for event in events:
         event_type = event.get("event_type")
         payload = event.get("payload") or {}
@@ -192,6 +196,14 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
             completion_rejection_count += 1
         elif event_type == "reflection":
             reflection_count += 1
+        elif event_type == "plan_created":
+            plan_created_count += 1
+        elif event_type == "plan_revised":
+            plan_revision_count += 1
+        elif event_type == "plan_step_completed" and payload.get("step_status") == "completed":
+            plan_step_completed_count += 1
+        elif event_type == "planning_skipped":
+            planning_skipped = True
     return TrialMetrics(
         steps=run_result.steps_taken,
         total_tokens=run_result.total_tokens,
@@ -203,4 +215,8 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
         reflection_count=reflection_count,
         file_read_count=file_read_count,
         shell_call_count=shell_call_count,
+        plan_created_count=plan_created_count,
+        plan_revision_count=plan_revision_count,
+        plan_step_completed_count=plan_step_completed_count,
+        planning_skipped=planning_skipped,
     )

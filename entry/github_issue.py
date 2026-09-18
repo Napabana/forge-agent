@@ -439,6 +439,7 @@ def run_on_issue(
     agent_config = AgentConfig(
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
+        planning_mode=config.agent.planning_mode,
         stream=reasoning_stream,
         thought_callback=_thought_cb if reasoning_stream else None,
     )

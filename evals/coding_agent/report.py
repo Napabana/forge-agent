@@ -47,6 +47,12 @@ def build_report(results: Iterable[TrialResult], *, suite_id: str) -> dict[str, 
                 "mean_completion_rejections": _mean([
                     row.metrics.completion_rejection_count for row in group
                 ]),
+                "mean_plan_created": _mean([row.metrics.plan_created_count for row in group]),
+                "mean_plan_revisions": _mean([row.metrics.plan_revision_count for row in group]),
+                "mean_plan_steps_completed": _mean([
+                    row.metrics.plan_step_completed_count for row in group
+                ]),
+                "planning_skipped_runs": sum(row.metrics.planning_skipped for row in group),
             }
         real_model_small_sample = aggregate
         claim_boundary += " Real-model rates are observed small-sample values, not stable pass@1 estimates."

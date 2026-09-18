@@ -19,7 +19,7 @@ from __future__ import annotations
 import subprocess
 from typing import Any
 
-from tools.base import BaseTool, ToolResult
+from tools.base import BaseTool, ToolEffect, ToolResult
 from tools.runtime import LocalRuntime, Runtime
 
 
@@ -62,6 +62,10 @@ class GitStatusTool(BaseTool):
     params:
         cwd (str): repo 根目录（默认当前目录）
     """
+
+    @property
+    def effect(self) -> ToolEffect:
+        return ToolEffect.READ_ONLY
 
     @property
     def name(self) -> str:
@@ -111,6 +115,10 @@ class GitDiffTool(BaseTool):
         path (str):    只查看特定文件的 diff
         cwd (str):     repo 根目录
     """
+
+    @property
+    def effect(self) -> ToolEffect:
+        return ToolEffect.READ_ONLY
 
     @property
     def name(self) -> str:

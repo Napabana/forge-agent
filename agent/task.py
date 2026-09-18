@@ -58,6 +58,12 @@ class EventType(str, Enum):
     CONTEXT_COMPACTION_FAILED = "context_compaction_failed"
     CONTEXT_COMPACTED = "context_compacted"
     COMPLETION_REJECTED = "completion_rejected"
+    PLAN_CREATED = "plan_created"
+    PLAN_STEP_STARTED = "plan_step_started"
+    PLAN_STEP_COMPLETED = "plan_step_completed"
+    PLAN_REVISED = "plan_revised"
+    PLANNING_SKIPPED = "planning_skipped"
+    PLAN_REJECTED = "plan_rejected"
     TASK_INCOMPLETE = "task_incomplete"
     # Trace v2 的 Runner / product 生命周期。旧 JSONL 不包含这些事件也可照常读取。
     RUN_TERMINATED = "run_terminated"

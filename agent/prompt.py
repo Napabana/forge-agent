@@ -44,7 +44,7 @@ explore the repository, make the necessary code changes, and verify they work co
 - Do not call a `finish` or `give_up` tool; they are terminal actions, not tools
 - If you truly cannot solve the task, respond with `GIVE_UP: <reason>`
 
-{execution_workspace_section}## Available tools
+{execution_workspace_section}{runtime_context_section}## Available tools
 {tool_descriptions}
 
 ## Repository
@@ -68,6 +68,7 @@ def build_system_prompt(
     tools: list[LLMToolSchema],
     repo_summary: str | None = None,
     execution_workspace: str | None = None,
+    runtime_context: str | None = None,
 ) -> str:
     """
     渲染完整的 system prompt。
@@ -89,11 +90,14 @@ def build_system_prompt(
         else ""
     )
 
+    runtime_context_section = (runtime_context.strip() + "\n\n") if runtime_context else ""
+
     return _SYSTEM_TEMPLATE.format(
         repo_path=repo_path,
         repo_summary=summary,
         tool_descriptions=tool_descriptions,
         execution_workspace_section=execution_workspace_section,
+        runtime_context_section=runtime_context_section,
     )
 
 

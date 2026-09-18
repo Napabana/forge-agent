@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from tools.base import BaseTool, ToolResult
+from tools.base import BaseTool, ToolEffect, ToolResult
 
 
 # 单次 file_read 最多返回的行数，超出提示用 file_view
@@ -38,6 +38,10 @@ class FileReadTool(BaseTool):
 
     def __init__(self, workspace: str | Path | None = None) -> None:
         self._workspace = Path(workspace).resolve() if workspace else None
+
+    @property
+    def effect(self) -> ToolEffect:
+        return ToolEffect.READ_ONLY
 
     @property
     def name(self) -> str:
@@ -121,6 +125,10 @@ class FileViewTool(BaseTool):
 
     def __init__(self, workspace: str | Path | None = None) -> None:
         self._workspace = Path(workspace).resolve() if workspace else None
+
+    @property
+    def effect(self) -> ToolEffect:
+        return ToolEffect.READ_ONLY
 
     @property
     def name(self) -> str:

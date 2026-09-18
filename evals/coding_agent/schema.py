@@ -204,6 +204,10 @@ class TrialMetrics:
     reflection_count: int = 0
     file_read_count: int = 0
     shell_call_count: int = 0
+    plan_created_count: int = 0
+    plan_revision_count: int = 0
+    plan_step_completed_count: int = 0
+    planning_skipped: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

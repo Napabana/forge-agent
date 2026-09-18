@@ -65,6 +65,7 @@ class AgentCfg:
     context_budget_cap: int | None = None
     context_safety_margin_tokens: int = 1024
     log_dir: str = "./logs"
+    planning_mode: str = "off"
 
 
 @dataclass
@@ -193,9 +194,12 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     safety_margin = int(agent_raw.get("context_safety_margin_tokens", 1024))
     if safety_margin < 0:
         raise ValueError("agent.context_safety_margin_tokens cannot be negative")
+    planning_mode = str(agent_raw.get("planning_mode", "off")).strip().lower()
+    if planning_mode not in {"off", "auto", "always"}:
+        raise ValueError("agent.planning_mode must be one of: off, auto, always")
 
     llm = LLMConfig(provider=llm_raw.get("provider", "anthropic"), protocol=llm_raw.get("protocol", "auto"), model=llm_raw.get("model", "claude-sonnet-4-5"), api_key=llm_raw.get("api_key", ""), base_url=llm_raw.get("base_url", "") or "", context_window=context_window, model_max_output_tokens=model_max_output_tokens, max_output_tokens=max_output_tokens)
-    agent = AgentCfg(max_steps=int(agent_raw.get("max_steps", 40)), context_budget_cap=context_budget_cap, context_safety_margin_tokens=safety_margin, log_dir=agent_raw.get("log_dir", "./logs"))
+    agent = AgentCfg(max_steps=int(agent_raw.get("max_steps", 40)), context_budget_cap=context_budget_cap, context_safety_margin_tokens=safety_margin, log_dir=agent_raw.get("log_dir", "./logs"), planning_mode=planning_mode)
     shell_raw = tools_raw.get("shell", {})
     file_raw = tools_raw.get("file", {})
     tools = ToolsConfig(shell=ShellToolConfig(timeout=int(shell_raw.get("timeout", 30)), max_output_tokens=int(shell_raw.get("max_output_tokens", 8_000))), file=FileToolConfig(max_view_lines=int(file_raw.get("max_view_lines", 100))))

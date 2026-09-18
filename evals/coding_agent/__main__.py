@@ -18,13 +18,25 @@ _ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_SUITE = _ROOT / "evals" / "fixtures" / "coding_agent" / "suite.json"
 
 
-def _real_runner_factory(cfg, backend, suite: EvaluationSuite):
+def _planning_mode_for_variant(variant: str) -> str:
+    mapping = {"baseline_react": "off", "planning": "always"}
+    try:
+        return mapping[variant]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported coding-agent architecture variant {variant!r}; "
+            f"expected one of: {', '.join(mapping)}"
+        ) from exc
+
+
+def _real_runner_factory(cfg, backend, suite: EvaluationSuite, planning_mode: str):
     def factory(task, repo, trace_dir, trial_id):
         registry = _build_registry(cfg, default_cwd=str(repo), workspace=str(repo))
         config = AgentConfig(
             max_steps=int(suite.defaults.get("max_steps", cfg.agent.max_steps)),
             budget_tokens=int(suite.defaults.get("budget_tokens", cfg.agent.budget_tokens)),
             history_max_messages=cfg.context.history_window * 2,
+            planning_mode=planning_mode,
             stream=False,
             repo_map_mode="incremental",
             repo_map_cache_dir=str(trace_dir.parent / "repo-map-cache"),
@@ -46,6 +58,7 @@ def main() -> int:
     args = parser.parse_args()
 
     suite = EvaluationSuite.load(args.suite)
+    planning_mode = _planning_mode_for_variant(args.variant)
     with tempfile.TemporaryDirectory(prefix="forge-agent-eval-reference-") as temp_dir:
         reference = validate_suite_references(suite, temp_dir)
 
@@ -79,6 +92,7 @@ def main() -> int:
             "provider": cfg.llm.provider,
             "protocol": cfg.llm.protocol,
             "model": cfg.llm.model,
+            "planning_mode": planning_mode,
             "api_key": cfg.llm.api_key or None,
             "base_url": cfg.llm.base_url or None,
             "max_tokens": cfg.llm.max_tokens,
@@ -98,7 +112,7 @@ def main() -> int:
     harness = EvaluationHarness(
         suite=suite,
         output_dir=args.output_dir,
-        runner_factory=_real_runner_factory(cfg, backend, suite),
+        runner_factory=_real_runner_factory(cfg, backend, suite, planning_mode),
         variant=args.variant,
         repetitions=args.repetitions,
         evidence_kind="real_model",

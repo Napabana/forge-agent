@@ -23,6 +23,12 @@ from agent.task import Observation, ObservationStatus
 from llm.base import LLMToolSchema
 
 
+class ToolEffect(str, Enum):
+    """Repository effect classification used by Structured Planning gates."""
+    READ_ONLY = "read_only"
+    MAY_MUTATE_REPOSITORY = "may_mutate_repository"
+
+
 class ToolErrorType(str, Enum):
     UNKNOWN_TOOL = "unknown_tool"
     INVALID_ARGUMENTS = "invalid_arguments"
@@ -118,6 +124,11 @@ class BaseTool(ABC):
     """
 
     @property
+    def effect(self) -> ToolEffect:
+        """Unknown/new tools fail safe as mutation-capable unless explicitly read-only."""
+        return ToolEffect.MAY_MUTATE_REPOSITORY
+
+    @property
     @abstractmethod
     def name(self) -> str:
         """工具名称，如 "shell", "file_read"。必须全局唯一。"""
@@ -183,6 +194,11 @@ class ToolRegistry:
             raise ValueError(f"Tool '{tool.name}' is already registered.")
         self._tools[tool.name] = tool
         return self
+
+    def is_mutating(self, name: str, params: Any | None = None) -> bool:
+        """Conservative gate: unknown tools may mutate repository state."""
+        tool = self._tools.get(name)
+        return tool is None or tool.effect is ToolEffect.MAY_MUTATE_REPOSITORY
 
     def validate_tool_call(self, name: str, params: Any) -> ToolResult | None:
         if name not in self._tools:

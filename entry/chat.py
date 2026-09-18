@@ -170,6 +170,7 @@ class ChatSession:
             max_steps=config.agent.max_steps,
             budget_tokens=config.agent.budget_tokens,
             history_max_messages=config.context.history_window * 2,
+            planning_mode=config.agent.planning_mode,
             llm_max_retries=3,
             llm_retry_delay=1.0,
             stream=stream or resolved_reasoning_stream,

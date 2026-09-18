@@ -76,6 +76,10 @@ def test_metrics_extract_from_run_result_and_trace(tmp_path: Path):
         {"event_type": "tool_execution_started", "payload": {"tool_name": "shell"}},
         {"event_type": "completion_rejected", "payload": {}},
         {"event_type": "reflection", "payload": {}},
+        {"event_type": "plan_created", "payload": {}},
+        {"event_type": "plan_step_completed", "payload": {"step_status": "completed"}},
+        {"event_type": "plan_revised", "payload": {}},
+        {"event_type": "planning_skipped", "payload": {}},
     ]
     trace.write_text("\n".join(json.dumps(item) for item in events) + "\n", encoding="utf-8")
     usage = SessionUsage(input_tokens=20, output_tokens=5, llm_calls=1)
@@ -85,6 +89,8 @@ def test_metrics_extract_from_run_result_and_trace(tmp_path: Path):
     assert metrics.tool_call_count == 3 and metrics.test_attempt_count == 1
     assert metrics.completion_rejection_count == 1 and metrics.reflection_count == 1
     assert metrics.file_read_count == 1 and metrics.shell_call_count == 1
+    assert metrics.plan_created_count == 1 and metrics.plan_revision_count == 1
+    assert metrics.plan_step_completed_count == 1 and metrics.planning_skipped is True
 
 
 def test_agent_failure_still_emits_trial_result(tmp_path: Path):

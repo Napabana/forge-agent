@@ -94,6 +94,7 @@ llm:
 
 agent:
   max_steps: 40
+  planning_mode: off # off | auto | always；默认保持 baseline ReAct
   context_budget_cap: 384000
   context_safety_margin_tokens: 40000
   log_dir: ./logs

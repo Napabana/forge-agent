@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 from agent.event_log import EventLog
 from agent.loop_detector import LoopDetector, LoopSeverity
+from agent.planning import PlanningMode, PlanningRuntime, decide_planning
 from context.history import ConversationHistory
 from context.incremental_repo_map import PersistentRepoMap
 from context.repo_map import RepoMap
@@ -104,6 +105,7 @@ class AgentConfig:
     fatal_tool_error_repeats: int = 2
     budget_tokens: int = 80_000
     history_max_messages: int = 40
+    planning_mode: str = "off"
     llm_max_retries: int = 3
     llm_retry_delay: float = 2.0
     llm_retry_max_delay: float = 30.0
@@ -145,6 +147,8 @@ class Agent:
         self._repo_map_build_seconds = 0.0
         self._repo_map_build_calls = 0
         self._prepared_history_override: tuple[LLMMessage, ...] | None = None
+        self._planning_runtime: PlanningRuntime | None = None
+        self._planning_context_cache = ""
 
     def invalidate_repo_map_cache(self, repo_path: str | Path | None = None) -> bool:
         """Invalidate the cached repository summary, optionally by repo."""
@@ -173,6 +177,11 @@ class Agent:
         if self._repo_map_mode() == "incremental":
             return PersistentRepoMap(repo_path, cache_dir=self._cfg.repo_map_cache_dir)
         return RepoMap(repo_path)
+
+    @property
+    def current_plan(self):
+        """Expose current typed plan for diagnostics; completion never depends on it."""
+        return self._planning_runtime.current_plan if self._planning_runtime else None
 
     @property
     def repo_map_telemetry(self) -> dict[str, object]:
@@ -207,6 +216,15 @@ class Agent:
 
         log.log_task_start(task)
         logger.info("Agent starting task %s", task.task_id)
+        planning_decision = decide_planning(task, self._cfg.planning_mode)
+        self._planning_runtime = PlanningRuntime(planning_decision)
+        self._planning_context_cache = ""
+        if planning_decision.mode is PlanningMode.AUTO and not planning_decision.enabled:
+            log.log_trace(
+                EventType.PLANNING_SKIPPED, 0,
+                planning_mode=planning_decision.mode.value,
+                reason=planning_decision.reason,
+            )
 
         if history is None:
             history = ConversationHistory(max_messages=self._cfg.history_max_messages)
@@ -381,6 +399,35 @@ class Agent:
             )
             logger.info("Step %d: %r", step, action)
 
+            if (
+                action.action_type == ActionType.TOOL_CALL
+                and action.tool_call
+                and self._planning_runtime
+                and self._planning_runtime.is_control(action.tool_call.name)
+            ):
+                control = self._planning_runtime.apply_control(
+                    action.tool_call.name, action.tool_call.params
+                )
+                log.log_trace(control.event_type, step, **control.payload)
+                history.add(LLMMessage(role="user", content=control.message))
+                continue
+
+            if (
+                action.action_type == ActionType.FINISH
+                and self._planning_runtime
+                and self._planning_runtime.requires_plan
+                and self._planning_runtime.current_plan is None
+            ):
+                detail = "Structured Planning is enabled; create a valid plan before finishing."
+                log.log_trace(EventType.PLAN_REJECTED, step, control="finish", error=detail)
+                history.add(LLMMessage(
+                    role="assistant",
+                    content=self._format_action_for_history(action),
+                    event_ref=action_event_ref,
+                ))
+                history.add(LLMMessage(role="user", content="[PLANNING REQUIRED] " + detail))
+                continue
+
             if action.action_type == ActionType.FINISH:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
@@ -481,6 +528,21 @@ class Agent:
                     )
 
                 tc = action.tool_call
+                if (
+                    self._planning_runtime
+                    and self._planning_runtime.requires_plan
+                    and self._planning_runtime.current_plan is None
+                    and self._registry.is_mutating(tc.name, tc.params)
+                ):
+                    detail = f"Create a structured plan before repository-mutating tool {tc.name!r}."
+                    log.log_trace(EventType.PLAN_REJECTED, step, control=tc.name, error=detail)
+                    history.add(LLMMessage(
+                        role="assistant",
+                        content=self._format_action_for_history(action),
+                        event_ref=action_event_ref,
+                    ))
+                    history.add(LLMMessage(role="user", content="[PLANNING REQUIRED] " + detail))
+                    continue
                 tool_started = time.perf_counter()
                 tool_span = log.log_trace(
                     EventType.TOOL_EXECUTION_STARTED,
@@ -915,7 +977,8 @@ class Agent:
         repo_map: RepoMap,
     ) -> tuple[str, str, tuple[LLMToolSchema, ...]]:
         """统一生成下一请求固定部分，供 pressure 计算与最终消息组装复用。"""
-        schemas = tuple(self._registry.get_schemas())
+        planning_schemas = self._planning_runtime.schemas() if self._planning_runtime else ()
+        schemas = tuple(self._registry.get_schemas()) + tuple(planning_schemas)
         mode = self._repo_map_mode()
         if not hasattr(self, "_repo_map_cache"):
             map_budget = token_budget.default_plan().repo_map
@@ -940,11 +1003,14 @@ class Agent:
             self._repo_map_cache_query = getattr(self, "_repo_map_query", None)
 
         repo_map_content = self._repo_map_cache
+        planning_context = self._planning_runtime.render_context() if self._planning_runtime else ""
+        self._planning_context_cache = planning_context
         system_content = build_system_prompt(
             repo_path=getattr(self, "_model_repo_path", "."),
             tools=list(schemas),
             repo_summary=repo_map_content if mode != "none" else None,
             execution_workspace=self._cfg.execution_workspace,
+            runtime_context=planning_context or None,
         )
         return system_content, repo_map_content, schemas
 
@@ -1002,7 +1068,11 @@ class Agent:
         )
         repo_map_tokens = estimate_tokens(getattr(self, "_repo_map_cache", ""))
         repo_map_tokens = min(repo_map_tokens, system_message_tokens)
-        system_tokens = max(0, system_message_tokens - repo_map_tokens)
+        planning_tokens = min(
+            estimate_tokens(getattr(self, "_planning_context_cache", "")),
+            max(0, system_message_tokens - repo_map_tokens),
+        )
+        system_tokens = max(0, system_message_tokens - repo_map_tokens - planning_tokens)
         tool_schema_tokens = estimate_tool_schemas_tokens(tools)
         injected_dicts = [as_dict(message) for message in (injected_messages or [])]
         injected_tokens = estimate_messages_tokens(injected_dicts)
@@ -1017,6 +1087,7 @@ class Agent:
             "system_tokens": system_tokens,
             "tool_schema_tokens": tool_schema_tokens,
             "repo_map_tokens": repo_map_tokens,
+            "planning_tokens": planning_tokens,
             "history_tokens": history_tokens,
             "context_tokens": context_tokens,
             "pending_tokens": pending_tokens,

@@ -149,8 +149,20 @@ Trial 输出至少记录：
 
 # P2-1 Structured Planning
 
-状态：**TODO**  
+状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
 依赖：P2-0 baseline
+
+实现摘要（2026-09-19）：
+
+- 新增 `agent/planning.py`，用 typed `ExecutionPlan / PlanStep / PlanRevision` 表达 runtime planning state；没有新增 Planner Agent 或第二套 loop。
+- 复用既有 Function Calling `Action(TOOL_CALL)` 作为内部 `plan_create / plan_step_update / plan_revise` structured control surface；Provider parser 无需新增 PLAN Action。
+- `planning_mode=off|auto|always` 进入正式 config 与 CLI/Chat/API/GitHub Issue；默认 `off` 保持 baseline。
+- 当前 plan 作为 bounded runtime context 注入 system request，不重复写入 canonical ConversationHistory，因此 HistoryWindow/Compaction 不会把 current plan 当旧历史裁掉。
+- Tool 增加保守 effect metadata：未知 Tool 默认 may-mutate；read-only 工具显式 opt-in。`always` 模式下 mutation 与 FINISH 前要求存在有效 plan。
+- progress/revision 只接受模型显式 structured update，不从 Tool success 自动推断 semantic completion；未实现 P2-2 failure-aware automatic replanning。
+- Trace v2 增加 plan lifecycle point events；P2-0 `TrialMetrics` 增加 planning metrics。
+- Evaluation CLI 将 `baseline_react → off`、`planning → always`，共享 8-case outcome grader 不要求 baseline 产生 plan event。
+- 当前 ChatGPT 环境无法执行仓库 pytest，因此不声明 regression passed；状态保持 LOCAL VALIDATION PENDING。详见 `docs/changes/2026-09-19/P2-1-Structured-Planning.md`。
 
 ## 当前缺口
 

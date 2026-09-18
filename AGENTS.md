@@ -346,3 +346,19 @@ pytest -q
 - `evals/results/coding_agent_baseline_not_executed/` 继续保持 `execution_status=not_executed`、`real_model_executed=false`，不因离线 pytest 通过而改写。
 - 下一阶段进入 P2-1 Structured Planning，并继续以 P2-0 的 `baseline_react` / variant / repetition 协议作为统一 A/B 入口。
 - 本轮验证补充日志：`docs/changes/2026-09-18/P2-0-Coding-Agent-Evaluation-Harness本地回归-DONE.md`。
+
+
+### 最后交接（2026-09-19，P2-1 Structured Planning）
+
+- P2-1 已完成代码实现，当前状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`；实现基线为 `dev@60e1194d50f9d23c64a57f6e90d51f6842319bfd`。
+- 新增 `agent/planning.py`：typed `ExecutionPlan / PlanStep / PlanRevision` 与 `planning_mode=off|auto|always`；没有新增第二套 Agent loop、Planner Agent 或 Provider 专属 plan parser。
+- Planning 复用既有 Function Calling ToolCall 结构，通过 `plan_create / plan_step_update / plan_revise` 三个 internal control 更新 runtime state；真正 repository Tool 继续走 `ToolExecutor → Hook → Permission → Tool → post-hook`。
+- `always` 允许显式 read-only exploration，但 mutation/FINISH 前必须有有效 plan；`auto` 使用 deterministic complexity signals 并记录 decision reason；`off` 不增加 plan schema 或额外 model call。
+- Tool abstraction 增加保守 effect metadata：未知 Tool 默认 may-mutate；file read/view、search、git status/diff、test 显式 read-only；shell 保守按 may-mutate。
+- Current plan 每轮作为 bounded runtime system context 注入，不重复进入 canonical ConversationHistory；因此 Context Compaction/HistoryWindow 不负责保存 current plan。token breakdown 增加 diagnostic `planning_tokens`，provider usage 仍是权威 accounting。
+- Plan progress/revision 只接受显式 structured update，不把 Tool success 自动标成 PlanStep 完成；Completion Guard/Acceptance 权威语义未改变。
+- Trace v2 增加 `plan_created / plan_step_started / plan_step_completed / plan_revised / planning_skipped / plan_rejected`；没有 Trace v3。
+- P2-0 Eval CLI 正式映射 `baseline_react → planning_mode=off`、`planning → planning_mode=always`；TrialMetrics 增加 plan created/revision/completed/skipped 指标。共享 8-case outcome grader 未加入 plan-only 约束。
+- 新增 `tests/test_structured_planning.py` 并扩展 `tests/test_coding_agent_eval.py`；当前 ChatGPT 环境没有可执行仓库 checkout，未真实运行 pytest，因此不声明通过。
+- 本轮没有 real-model A/B，没有 success-rate/token/latency improvement 数字；Evidence Pack 暂不新增“Regression passed” claim，待用户本地验证后再收口。
+- 更新日志：`docs/changes/2026-09-19/P2-1-Structured-Planning.md`。

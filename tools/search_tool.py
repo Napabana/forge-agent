@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from tools.base import BaseTool, ToolResult
+from tools.base import BaseTool, ToolEffect, ToolResult
 
 
 MAX_RESULTS = 50        # 单次搜索最多返回的结果数
@@ -41,6 +41,10 @@ class SearchTextTool(BaseTool):
         file_pattern (str): 只搜索匹配的文件名（如 "*.py"，默认所有文件）
         case_sensitive (bool): 是否区分大小写（默认 True）
     """
+
+    @property
+    def effect(self) -> ToolEffect:
+        return ToolEffect.READ_ONLY
 
     @property
     def name(self) -> str:
@@ -140,6 +144,10 @@ class FindFilesTool(BaseTool):
     """
 
     @property
+    def effect(self) -> ToolEffect:
+        return ToolEffect.READ_ONLY
+
+    @property
     def name(self) -> str:
         return "find_files"
 
@@ -208,6 +216,10 @@ class FindSymbolTool(BaseTool):
         symbol (str): 函数名或类名（支持部分匹配）
         path (str):   搜索根目录（默认当前目录）
     """
+
+    @property
+    def effect(self) -> ToolEffect:
+        return ToolEffect.READ_ONLY
 
     @property
     def name(self) -> str:
