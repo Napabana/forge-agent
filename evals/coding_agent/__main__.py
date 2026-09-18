@@ -92,7 +92,6 @@ def main() -> int:
             "provider": cfg.llm.provider,
             "protocol": cfg.llm.protocol,
             "model": cfg.llm.model,
-            "planning_mode": planning_mode,
             "api_key": cfg.llm.api_key or None,
             "base_url": cfg.llm.base_url or None,
             "max_tokens": cfg.llm.max_tokens,
@@ -121,6 +120,7 @@ def main() -> int:
             "provider": cfg.llm.provider,
             "protocol": cfg.llm.protocol,
             "model": cfg.llm.model,
+            "planning_mode": planning_mode,
         },
     )
     results = harness.run(args.task)
