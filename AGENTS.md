@@ -335,3 +335,14 @@ pytest -q
 - 当前 ChatGPT 环境没有可执行仓库 checkout，因此未真实运行 pytest，不声明测试通过；本地应先执行 `python -m pytest -q tests/test_coding_agent_eval.py`，再跑 Runner/Failure Harness/Trace/Acceptance/Evidence Pack 回归和全量 `python -m pytest -q`。
 - 本轮未实现 Planning、RecoveryPolicy、Skills、MCP、Evolution、Multi-Agent 或 LLM-as-Judge 主链。
 - 更新日志：`docs/changes/2026-09-18/P2-0-Coding-Agent-Evaluation-Harness.md`。
+
+### 验证补充（2026-09-18，P2-0 Coding Agent Evaluation Harness 本地回归）
+
+- P2-0 实现提交：`36aa0895730ca4145947e3bee4f35779dc5563ae`（`feat: add coding agent evaluation harness`）。
+- 用户随后在本地执行 P2-0 新增专项测试、相关 Runner / Failure Harness / Trace / Acceptance / Evidence Pack 回归，并执行全量 pytest；用户明确确认全部通过。
+- 用户未提供具体 passed 数量、完整 stdout 或耗时，因此本交接只记录“全部通过”，不补造数字。
+- P2-0 状态由 `IMPLEMENTED / LOCAL VALIDATION PENDING` 收口为 `DONE`。
+- 该验证只证明 Evaluation Harness 的 deterministic contract 与现有生产执行主链兼容；没有执行真实模型 baseline，不产生 Coding Agent success rate、token、latency 或 pass@1 结论。
+- `evals/results/coding_agent_baseline_not_executed/` 继续保持 `execution_status=not_executed`、`real_model_executed=false`，不因离线 pytest 通过而改写。
+- 下一阶段进入 P2-1 Structured Planning，并继续以 P2-0 的 `baseline_react` / variant / repetition 协议作为统一 A/B 入口。
+- 本轮验证补充日志：`docs/changes/2026-09-18/P2-0-Coding-Agent-Evaluation-Harness本地回归-DONE.md`。

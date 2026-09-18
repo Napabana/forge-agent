@@ -38,7 +38,7 @@ Trajectory-driven Skill Evolution
 
 # P2-0 Coding Agent Evaluation Harness
 
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**
+状态：**DONE**
 
 实现摘要（2026-09-18）：
 
@@ -49,7 +49,7 @@ Trajectory-driven Skill Evolution
 - fake/scripted backend 只作为 Harness correctness evidence，不输出 Agent capability pass rate。
 - `baseline_react` 的真实模型实验本轮未执行；冻结 artifact 明确记录 `execution_status=not_executed`、`real_model_executed=false`。
 - 输出目录默认拒绝覆盖；CLI 支持 suite / variant / repetitions / output_dir / task filter，并要求显式 `--real-model` 才会调用 Provider。
-- 当前执行环境未运行仓库级 pytest，因此状态保持 LOCAL VALIDATION PENDING。详见 `docs/changes/2026-09-18/P2-0-Coding-Agent-Evaluation-Harness.md`。
+- 实现提交时 ChatGPT 环境未运行仓库级 pytest；用户随后在本地执行新增专项测试、相关 Runner/Failure Harness/Trace/Acceptance/Evidence Pack 回归以及全量 pytest，并明确确认全部通过。未提供 passed 数量或耗时，因此不补造数字。详见 `docs/changes/2026-09-18/P2-0-Coding-Agent-Evaluation-Harness.md` 与本地回归补充日志。
 
 ## 为什么先做
 
