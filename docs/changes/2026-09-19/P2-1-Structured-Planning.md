@@ -286,6 +286,33 @@ CLI / Chat / API / GitHub Issue 均把同一 config 值传入 `AgentConfig`，Pl
 
 该修复不改变 provider-reported usage、Completion Guard、Planning lifecycle 或 P2-0 grader outcome。修复提交后尚待用户本地复跑，因此 P2-1 状态仍为 **IMPLEMENTED / LOCAL VALIDATION PENDING**。
 
+## 本地回归补充（第二次，2026-09-19）
+
+用户拉取首轮 Trace accounting 修复后，执行：
+
+```text
+tests/test_trace_v2.py
+tests/test_structured_planning.py
+```
+
+共收集 31 个测试：
+
+- 30 passed
+- 1 failed
+- 失败仍为 `tests/test_trace_v2.py::test_trace_v2_records_prepare_llm_tool_and_configured_hooks`
+- 断言：baseline/default `planning_mode=off` 期望 `planning_tokens == 0`，实际为 `1`
+
+根因确认：`planning_mode=off` 时 `_planning_context_cache == ""`，但通用保守 `estimate_tokens("")` 返回 1。空 Planning context 不是一个真实可归因的 Planning token section，因此不能直接套用该保守估算结果。
+
+修复：
+
+- `agent/core.py::_trace_token_breakdown` 仅在 planning context 非空时调用 token estimator；
+- 空 planning context 明确记录 `planning_tokens = 0`；
+- `tests/test_structured_planning.py` 增加 off-mode empty-context 的专门回归；
+- Planning-on 的 `planning_tokens > 0` 与完整 token breakdown 恒等式继续保留。
+
+该修复只影响本地 diagnostic token attribution，不修改 provider-reported usage、Agent completion、Tool lifecycle 或 Evaluation outcome。修复后仍待用户本地复跑，因此 P2-1 状态继续保持 **IMPLEMENTED / LOCAL VALIDATION PENDING**。
+
 ## 本地验证命令
 
 拉取本轮提交后：

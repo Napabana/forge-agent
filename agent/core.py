@@ -1073,9 +1073,14 @@ class Agent:
         )
         repo_map_tokens = estimate_tokens(getattr(self, "_repo_map_cache", ""))
         repo_map_tokens = min(repo_map_tokens, system_message_tokens)
-        planning_tokens = min(
-            estimate_tokens(getattr(self, "_planning_context_cache", "")),
-            max(0, system_message_tokens - repo_map_tokens),
+        planning_context = getattr(self, "_planning_context_cache", "")
+        planning_tokens = (
+            min(
+                estimate_tokens(planning_context),
+                max(0, system_message_tokens - repo_map_tokens),
+            )
+            if planning_context
+            else 0
         )
         system_tokens = max(0, system_message_tokens - repo_map_tokens - planning_tokens)
         tool_schema_tokens = estimate_tool_schemas_tokens(tools)

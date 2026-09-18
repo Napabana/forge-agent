@@ -501,3 +501,17 @@ def test_shared_history_preflight_never_sees_previous_run_plan(tmp_path: Path):
 
     second_preflight = observed_systems[before_second]
     assert "OLD-RUN-PLAN-DO-NOT-LEAK" not in second_preflight
+
+
+def test_empty_planning_context_has_zero_diagnostic_tokens(tmp_path: Path):
+    result, _, _, _, trace = _run_agent(
+        tmp_path,
+        [Action(ActionType.FINISH, "done", message="done")],
+        planning_mode="off",
+    )
+    assert result.status is RunStatus.SUCCESS
+    llm_finished = [
+        row for row in _event_rows(trace) if row["event_type"] == "llm_call_finished"
+    ]
+    assert len(llm_finished) == 1
+    assert llm_finished[0]["payload"]["token_breakdown"]["planning_tokens"] == 0
