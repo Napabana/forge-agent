@@ -295,3 +295,15 @@ pytest -q
 - 本轮 13 个相关 Python 文件的静态编译检查通过；`git diff --check` 仅报告既有 LF/CRLF 提示。
 - 工作区原有 Smoke Test / Model-aware Token Budget 修改、`config/default.yaml` 修改及 stash 均未覆盖或处理；当前分支仍为 `dev`。
 - 本轮更新日志：`docs/changes/2026-09-18/Chat-Direct默认CWD统一修复.md`。
+
+### 最后交接（2026-09-18，GitHub Issue Live Progress / 共享 Event Renderer）
+
+- 新增 `entry/event_renderer.py::RunEventRenderer`，CLI、Chat、GitHub Issue 统一消费 EventLog event，不再各自维护 step/tool/observation 打印逻辑。
+- CLI direct 改为实时 `on_event`，Chat 使用 per-session renderer；GitHub Issue 的 Runner、acceptance 和 delivery 追加阶段复用同一个 observer。
+- `ExecutionRunner` / `orchestrate_run` 已贯通 isolate `on_event`；既有 AgentBus 转发与 UI observer 共用一次 EventLog append，不新增执行或日志状态机。
+- 统一实时展示 step、action、tool、observation status、acceptance、delivery，并保留任务终态、Reflection、Context Compaction 标记。
+- CLI run、Chat、GitHub Issue 新增独立 `--reasoning-stream/--no-reasoning-stream`；CLI/Chat 未显式设置时兼容跟随 `--stream`，GitHub Issue 默认关闭 reasoning，生命周期进度始终显示。
+- 回归：入口/renderer 定向 104 passed；Trace/lifecycle/stream 123 passed；reasoning 契约复跑 40 passed。
+- WSL 全量 pytest：822 passed、14 skipped、2 个 AnyIO/Python 3.11 deprecation warnings，118.33s；13 个相关 Python 文件静态编译通过。
+- 用户原有 `config/default.yaml` 修改、B1/B2 fixture、`evals/results` 与 stash 均未处理；当前分支仍为 `dev`。
+- 本轮更新日志：`docs/changes/2026-09-18/GitHub-Issue-Live-Progress共享EventRenderer.md`。

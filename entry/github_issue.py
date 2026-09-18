@@ -296,6 +296,7 @@ def _record_delivery_trace(
     branch: str,
     issue_number: int,
     pr_url: str | None = None,
+    on_event=None,
 ) -> None:
     """Append product delivery outcome without making delivery depend on Trace I/O."""
     if not result.trace_path:
@@ -308,6 +309,8 @@ def _record_delivery_trace(
             task_id=result.task_id,
             entrypoint="github_issue",
         ) as log:
+            if on_event is not None:
+                log.on_append(on_event)
             log.log_delivery(
                 steps=result.steps_taken,
                 requested=requested,
@@ -333,6 +336,7 @@ def run_on_issue(
     create_pr: bool = True,
     base_branch: str = "main",
     verify_command: str | None = None,
+    reasoning_stream: bool = False,
 ) -> int:
     """
     拉取 Issue，运行 agent，创建 PR。
@@ -344,6 +348,7 @@ def run_on_issue(
     from agent.core import AgentConfig
     from agent.runner import AcceptanceContract, ExecutionRunner, RunRequest
     from agent.task import Task, infer_completion_requirements
+    from entry.event_renderer import RunEventRenderer
     from llm.router import create_backend_from_config
 
     config = load_config(config_path)
@@ -425,9 +430,17 @@ def run_on_issue(
         registry._tools.pop("git_add", None)
         registry._tools.pop("git_commit", None)
 
+    renderer = RunEventRenderer(compact=True)
+
+    def _thought_cb(text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
     agent_config = AgentConfig(
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
+        stream=reasoning_stream,
+        thought_callback=_thought_cb if reasoning_stream else None,
     )
     require_changes, require_tests = infer_completion_requirements(description)
     task = Task(
@@ -453,11 +466,14 @@ def run_on_issue(
         registry=registry,
         config=agent_config,
         log_dir=config.agent.log_dir,
-    ).run(RunRequest(
-        task=task,
-        acceptance=acceptance,
-        entrypoint="github_issue",
-    ))
+    ).run(
+        RunRequest(
+            task=task,
+            acceptance=acceptance,
+            entrypoint="github_issue",
+        ),
+        on_event=renderer,
+    )
 
     elapsed = time.time() - t0
     click.echo(f"  Status : {result.status.value}")
@@ -475,6 +491,7 @@ def run_on_issue(
             repo_name=repo_name,
             branch=branch,
             issue_number=issue_number,
+            on_event=renderer,
         )
         click.echo("  Agent did not complete the task.", err=True)
         return 1
@@ -505,6 +522,7 @@ def run_on_issue(
             branch=branch,
             issue_number=issue_number,
             pr_url=pr_url,
+            on_event=renderer,
         )
         if pr_url:
             click.echo(f"\n✓ PR created: {pr_url}\n")
@@ -521,6 +539,7 @@ def run_on_issue(
             repo_name=repo_name,
             branch=branch,
             issue_number=issue_number,
+            on_event=renderer,
         )
 
     return 0
@@ -545,6 +564,11 @@ def run_on_issue(
     default=None,
     help="Independent acceptance command required for automatic PR",
 )
+@click.option(
+    "--reasoning-stream/--no-reasoning-stream",
+    default=False,
+    help="Stream model reasoning separately from lifecycle progress.",
+)
 @click.option("--verbose", "-v", is_flag=True)
 def main(
     repo: str,
@@ -554,6 +578,7 @@ def main(
     no_pr: bool,
     base_branch: str,
     verify_command: str | None,
+    reasoning_stream: bool,
     verbose: bool,
 ) -> None:
     """Run the coding agent on a GitHub issue and create a PR."""
@@ -569,6 +594,7 @@ def main(
         create_pr=not no_pr,
         base_branch=base_branch,
         verify_command=verify_command,
+        reasoning_stream=reasoning_stream,
     ))
 
 

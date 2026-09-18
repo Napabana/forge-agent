@@ -42,6 +42,7 @@ from llm.router import create_backend_from_config            # noqa: E402
 
 # 模块级 import（供 patch 使用）
 from config.schema import load_config, merge_cli_overrides  # noqa: E402
+from entry.event_renderer import RunEventRenderer          # noqa: E402
 from llm.router import create_backend_from_config           # noqa: E402
 
 
@@ -120,58 +121,6 @@ def _build_registry(
     )
 
 
-def _print_step(event) -> None:
-    """实时打印单条 event。"""
-    from agent.task import EventType
-    etype = event.event_type
-    payload = event.payload
-
-    if etype == EventType.TASK_START:
-        task = payload["task"]
-        click.echo(bold(f"\n{'─'*60}"))
-        click.echo(bold(f"  Task : {task['description'][:80]}"))
-        click.echo(bold(f"  Repo : {task['repo_path']}"))
-        click.echo(bold(f"{'─'*60}\n"))
-
-    elif etype == EventType.ACTION:
-        step = payload["step"]
-        action = payload["action"]
-        thought = action.get("thought", "")[:160]
-        atype = action.get("action_type", "")
-        tc = action.get("tool_call")
-        click.echo(cyan(f"[Step {step}] {atype}"))
-        if thought:
-            click.echo(dim(f"  ↳ {thought}"))
-        if tc:
-            params_str = str(tc["params"])[:100]
-            click.echo(f"  Tool: {tc['name']}  params: {params_str}")
-
-    elif etype == EventType.OBSERVATION:
-        obs = payload["observation"]
-        status = obs.get("status", "")
-        tool = obs.get("tool_name", "")
-        output = obs.get("output", "")
-        if status == "success":
-            click.echo(green(f"  ✓ [{tool}]"))
-        else:
-            click.echo(red(f"  ✗ [{tool}] {obs.get('error', '')}"))
-        # 打印前 5 行输出
-        for line in output.splitlines()[:5]:
-            click.echo(dim(f"    {line}"))
-        if len(output.splitlines()) > 5:
-            click.echo(dim(f"    ... ({len(output.splitlines())-5} more lines)"))
-        click.echo()
-
-    elif etype == EventType.REFLECTION:
-        click.echo(yellow(f"\n  ⟳ Reflection: {payload.get('reason', '')}\n"))
-
-    elif etype == EventType.TASK_COMPLETE:
-        click.echo(green(bold(f"\n✓ COMPLETE: {payload.get('summary', '')}\n")))
-
-    elif etype == EventType.TASK_FAILED:
-        click.echo(red(bold(f"\n✗ FAILED: {payload.get('reason', '')}\n")))
-
-
 # ---------------------------------------------------------------------------
 # CLI 主命令组
 # ---------------------------------------------------------------------------
@@ -202,6 +151,11 @@ def cli(ctx: click.Context, config: str | None) -> None:
 @click.option("--protocol", default=None, help="Override LLM protocol: chat_completions or responses")
 @click.option("--max-steps", default=None, type=int, help="Override max steps")
 @click.option("--stream/--no-stream", "-s", default=True, help="Enable or disable streaming output (default: on)",)
+@click.option(
+    "--reasoning-stream/--no-reasoning-stream",
+    default=None,
+    help="Stream model reasoning independently; defaults to the --stream setting.",
+)
 @click.option("--confirm", is_flag=True, default=False, help="Ask confirmation before running dangerous shell commands")
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
 @click.option("--isolate", is_flag=True, default=False,help="Run in an isolated git worktree + TaskEngine tracking (M4). Combines with --sandbox for Docker hardening.")
@@ -224,6 +178,7 @@ def run(
     protocol: str | None,
     max_steps: int | None,
     stream: bool,
+    reasoning_stream: bool | None,
     confirm: bool,
     sandbox: bool,
     isolate: bool,
@@ -311,11 +266,15 @@ def run(
     except ImportError:
         is_tiktoken_available = lambda: False
 
+    resolved_reasoning_stream = stream if reasoning_stream is None else reasoning_stream
+    renderer = RunEventRenderer()
+
     # 流式回调：最终回答正常亮色
     def _stream_cb(text: str) -> None:
         import sys
         sys.stdout.write(text)
         sys.stdout.flush()
+        renderer.record_streamed_text(text)
 
     # 推理回调：思考过程 dim 暗色
     def _thought_cb(text: str) -> None:
@@ -328,9 +287,9 @@ def run(
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
         history_max_messages=config.context.history_window * 2,
-        stream=stream,
+        stream=stream or resolved_reasoning_stream,
         stream_callback=_stream_cb if stream else None,
-        thought_callback=_thought_cb if stream else None,
+        thought_callback=_thought_cb if resolved_reasoning_stream else None,
         confirm_dangerous=confirm,
         confirm_callback=confirm_cb,
     )
@@ -364,12 +323,15 @@ def run(
         click.echo(dim("  Isolate: worktree + TaskEngine\n"))
 
         t0 = time.time()
-        result = runner.run(RunRequest(
-            task=task_obj,
-            isolate=True,
-            sandbox=sandbox,
-            result_policy=result_policy,
-        ))
+        result = runner.run(
+            RunRequest(
+                task=task_obj,
+                isolate=True,
+                sandbox=sandbox,
+                result_policy=result_policy,
+            ),
+            on_event=renderer,
+        )
         elapsed = time.time() - t0
         _print_run_result(result, elapsed)
         ctx.exit(0 if result.is_success() else 1)
@@ -383,10 +345,9 @@ def run(
         with EventLog.create(task_obj, log_dir=config.agent.log_dir) as log:
             click.echo(dim(f"  Log: {log.path}\n"))
             #真正的执行核心。它的职责包括维护对话历史、组装 messages 调用 LLM、拿到 Action 后执行工具、写入 Action 和 Observation 到 EventLog、检测终止条件和 reflection 条件，最后返回 RunResult。
-            result = runner.run(RunRequest(task=task_obj), log=log)
-            # 打印所有 events
-            for event in log.replay():
-                _print_step(event)
+            result = runner.run(
+                RunRequest(task=task_obj), log=log, on_event=renderer,
+            )
     finally:
         if runtime is not None:
             runtime.cleanup()
@@ -439,6 +400,11 @@ def _print_run_result(result, elapsed: float) -> None:
     default=True,
     help="Enable or disable streaming output (default: on)",
 )
+@click.option(
+    "--reasoning-stream/--no-reasoning-stream",
+    default=None,
+    help="Stream model reasoning independently; defaults to the --stream setting.",
+)
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
 @click.option(
     "--continue",
@@ -458,6 +424,7 @@ def chat(
     protocol: str | None,
     max_steps: int | None,
     stream: bool,
+    reasoning_stream: bool | None,
     sandbox: bool,
     continue_session: bool,
     resume_session: str | None,
@@ -545,6 +512,7 @@ def chat(
             log_dir=config.agent.log_dir,
             confirm_callback=terminal_confirm,   # chat 模式默认开启确认
             stream=stream,
+            reasoning_stream=reasoning_stream,
             session_store=session_store,
             session_id=initial_session_id,
             prepare_next_turn=context_policy,

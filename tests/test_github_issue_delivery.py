@@ -156,6 +156,9 @@ def test_issue_registry_uses_target_repo(tmp_path, monkeypatch, create_pr):
         def __init__(self, **kwargs):
             expected = [] if create_pr else ["git_add", "git_commit"]
             assert kwargs["registry"].tool_names == expected
+
+        def run(self, _request, **kwargs):
+            assert callable(kwargs["on_event"])
             raise RegistryReached
 
     monkeypatch.setattr(cli, "_build_registry", assert_registry)
@@ -254,6 +257,7 @@ def test_delivery_outcome_appends_to_existing_trace(tmp_path):
         delivery_status="delivered",
         termination_reason="completion_satisfied",
     )
+    observed = []
     github_issue._record_delivery_trace(
         result,
         requested=True,
@@ -261,6 +265,7 @@ def test_delivery_outcome_appends_to_existing_trace(tmp_path):
         branch=_BRANCH,
         issue_number=1,
         pr_url="https://example.invalid/pr/1",
+        on_event=observed.append,
     )
 
     read_log = EventLog.open_existing(trace_path)
@@ -276,3 +281,4 @@ def test_delivery_outcome_appends_to_existing_trace(tmp_path):
     assert delivery.payload["run_span_id"] == events[0].payload["run_span_id"]
     assert delivery.payload["status"] == "delivered"
     assert delivery.payload["pr_url"] == "https://example.invalid/pr/1"
+    assert observed[-1].event_type is EventType.DELIVERY

@@ -223,6 +223,8 @@ class TestCliRun:
         result = self._invoke_run(tmp_path)
         assert result.exit_code == 0, result.output
         assert "SUCCESS" in result.output
+        assert "action=finish" in result.output
+        assert "Acceptance:" in result.output
 
     def test_run_shows_model_info(self, tmp_path):
         result = self._invoke_run(tmp_path)

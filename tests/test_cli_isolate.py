@@ -83,6 +83,7 @@ def test_isolate_invokes_orchestrate_run(tmp_path, monkeypatch):
     assert kw.get("sandbox") is False
     assert kw.get("result_policy") == "keep-if-changed"
     assert kw.get("backend") is not None
+    assert callable(kw.get("on_event"))
     # task 的 repo_path 指向传入的 repo
     assert kw["task"].repo_path == str(repo)
     # exit code 反映 is_success

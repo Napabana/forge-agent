@@ -101,10 +101,10 @@ agent:
 tools:
   shell:
     timeout: 30 # 秒
-    max_output_tokens: 8000 # 截断长度
+    max_output_tokens: 10000 # 截断长度
   file:
     max_view_lines: 100 # view 命令每次显示行数
 
 context:
-  repo_map_budget: 8000 # repo-map 最大 token 数
+  repo_map_budget: 12000 # repo-map 最大 token 数
   history_window: 20 # 保留最近 N 轮对话

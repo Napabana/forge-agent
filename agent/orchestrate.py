@@ -187,6 +187,7 @@ async def orchestrate_run(
     confirm_callback: Callable[[str], bool] | None = None,
     agent_factory: AgentFactory | None = None,
     on_log_created: LogCreatedCallback | None = None,
+    on_event: Callable[[Any], None] | None = None,
     result_policy: WorktreeResultPolicy | str = WorktreeResultPolicy.KEEP_IF_CHANGED,
 ) -> RunResult:
     """
@@ -250,8 +251,15 @@ async def orchestrate_run(
     forwarder_task: asyncio.Task | None = None
     if bus is not None:
         bus_q = asyncio.Queue()
-        log.on_append(lambda ev: bus_q.put_nowait(ev))
         forwarder_task = asyncio.create_task(_bus_forwarder(bus_q, bus, task_id))
+    if bus_q is not None or on_event is not None:
+        def _observe(event) -> None:
+            if bus_q is not None:
+                bus_q.put_nowait(event)
+            if on_event is not None:
+                on_event(event)
+
+        log.on_append(_observe)
 
     result: RunResult | None = None
     run_error: BaseException | None = None

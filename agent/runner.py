@@ -174,6 +174,7 @@ class ExecutionRunner:
                         confirm_callback=self.confirm_callback,
                         result_policy=request.result_policy,
                         on_log_created=log_created,
+                        on_event=on_event,
                     ))
             except BaseException as exc:
                 if trace_path:
@@ -203,6 +204,7 @@ class ExecutionRunner:
                     acceptance_requested=acceptance.has_independent_checks(),
                     entrypoint=entrypoint,
                     session_id=request.session_id,
+                    on_event=on_event,
                 )
             return result
 
@@ -373,6 +375,7 @@ def _record_post_run_trace(
     acceptance_requested: bool,
     entrypoint: str,
     session_id: str | None,
+    on_event=None,
 ) -> None:
     try:
         with EventLog.open_existing(
@@ -381,6 +384,8 @@ def _record_post_run_trace(
             entrypoint=entrypoint,
             session_id=session_id,
         ) as trace_log:
+            if on_event is not None:
+                trace_log.on_append(on_event)
             _record_post_run_trace_log(
                 trace_log,
                 result=result,

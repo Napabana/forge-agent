@@ -371,7 +371,7 @@ def test_chat_live_printer_surfaces_context_compaction_marker(capsys):
         payload={"step": 2},
     ))
 
-    assert "[压缩上下文]" in capsys.readouterr().out
+    assert "[Context compaction]" in capsys.readouterr().out
 
 
 def test_chat_merges_semantic_summary_usage_into_round_and_session_usage(tmp_path):

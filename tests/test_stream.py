@@ -354,6 +354,26 @@ class TestCliStreamOption:
         assert result.exit_code == 0
         assert "--no-stream" in result.output
 
+    @pytest.mark.parametrize("command", ["run", "chat"])
+    def test_reasoning_stream_has_independent_switch(self, command):
+        from click.testing import CliRunner
+        from entry.cli import cli
+
+        result = CliRunner().invoke(cli, [command, "--help"])
+
+        assert result.exit_code == 0
+        assert "--reasoning-stream" in result.output
+        assert "--no-reasoning-stream" in result.output
+
+    def test_github_issue_reasoning_stream_switch_registered(self):
+        from click.testing import CliRunner
+        from entry.github_issue import main
+
+        result = CliRunner().invoke(main, ["--help"])
+
+        assert result.exit_code == 0
+        assert "--reasoning-stream" in result.output
+
 
 # ---------------------------------------------------------------------------
 # AnthropicBackend / OpenAICompatBackend stream() 方法存在性

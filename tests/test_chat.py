@@ -53,6 +53,23 @@ def make_session(backend, registry, cfg, tmp_path) -> ChatSession:
 # ---------------------------------------------------------------------------
 
 class TestChatSessionBasic:
+    def test_reasoning_stream_is_independent_from_message_stream(
+        self, tmp_path, cfg, registry,
+    ):
+        session = ChatSession(
+            backend=MockBackend([]),
+            registry=registry,
+            config=cfg,
+            repo_path=str(tmp_path),
+            log_dir=cfg.agent.log_dir,
+            stream=False,
+            reasoning_stream=True,
+        )
+
+        assert session.runner.config.stream is True
+        assert session.runner.config.stream_callback is None
+        assert callable(session.runner.config.thought_callback)
+
     def test_single_round_succeeds(self, tmp_path, cfg, registry):
         script = [Action(ActionType.FINISH, "done", message="ok")]
         session = make_session(MockBackend(script), registry, cfg, tmp_path)

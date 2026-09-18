@@ -26,6 +26,8 @@ from typing import Callable
 
 import click
 
+from entry.event_renderer import RunEventRenderer
+
 _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -72,119 +74,12 @@ def _repository_revision(repo_path: str | Path) -> str:
     return repository_fingerprint(repo_path)
 
 
-# ---------------------------------------------------------------------------
-# 实时 event 打印（比 cli.py 的版本更简洁，适合持续对话）
-# ---------------------------------------------------------------------------
+_compat_renderer = RunEventRenderer(preview_lines=20, compact=True, show_task=False)
+
 
 def _print_event_live(event) -> None:
-    """每条 event 写入 log 后立刻调用，实时显示。"""
-    from agent.task import EventType
-    etype = event.event_type
-    p = event.payload
-
-    if etype == EventType.ACTION:
-        step = p["step"]
-        action = p["action"]
-        thought = (action.get("thought") or "").strip()
-        atype = action.get("action_type", "")
-        tc = action.get("tool_call")
-
-        # 流式模式：thought 已经被 stream_callback 实时打印出来了
-        # 非流式模式或 thought 为空时，在这里补打
-        # finish/give_up 的 thought 就是回答内容，已在 TASK_COMPLETE 里显示，不重复
-        if thought and thought != "(no thought)" and atype not in ("finish", "give_up"):
-            # 流式时 thought 已打印，只需换行；非流式时完整打印
-            import sys
-            sys.stdout.write("\n")   # 确保工具调用从新行开始
-            sys.stdout.flush()
-
-        if tc:
-            _print_event_live._last_tool_name = tc['name']  # 供 observation 判断
-            click.echo(cyan(f"  [{step}] {tc['name']}"), nl=False)
-            # 打印关键参数
-            params = tc.get("params", {})
-            key_param = (
-                params.get("cmd")
-                or params.get("path")
-                or params.get("pattern")
-                or params.get("symbol")
-                or params.get("message")
-                or ""
-            )
-            if key_param:
-                short_param = str(key_param)[:60]
-                suffix = "..." if len(str(key_param)) > 60 else ""
-                click.echo(cyan(f"  {short_param}{suffix}"))
-            else:
-                click.echo()
-        elif atype == "finish":
-            click.echo(green(f"\n  [{step}] ✓ finish"))
-            # 把 message 存到全局，供 TASK_COMPLETE event 打印
-            _finish_message = action.get("message", "") or ""
-            _print_event_live._pending_message = _finish_message
-        elif atype == "give_up":
-            click.echo(red(f"\n  [{step}] ✗ give_up"))
-
-    elif etype == EventType.OBSERVATION:
-        obs = p["observation"]
-        status = obs.get("status", "")
-        output = (obs.get("output") or "").strip()
-        error = obs.get("error")
-
-        # 从上一条 action event 取工具名（_last_tool_name 由 ACTION 分支设置）
-        tool_name = getattr(_print_event_live, "_last_tool_name", "")
-
-        # 只读类工具：只显示 ✓ 或 ✗，不打印内容（内容已被模型读取，用户不需要看）
-        SILENT_TOOLS = {"file_read", "file_view", "file_write", "find_files", "find_symbol"}
-        silent = tool_name in SILENT_TOOLS
-
-        if status == "success":
-            if silent:
-                click.echo(green("  ✓"))
-            else:
-                lines = output.splitlines()
-                MAX_PREVIEW = 20
-                preview = "\n".join(f"    {l}" for l in lines[:MAX_PREVIEW])
-                if lines:
-                    click.echo(green("  ✓") + dim(f"\n{preview}"))
-                    if len(lines) > MAX_PREVIEW:
-                        click.echo(dim(f"    ... ({len(lines)-MAX_PREVIEW} more lines)"))
-                else:
-                    click.echo(green("  ✓"))
-        else:
-            click.echo(red(f"  ✗ {error or output[:120]}"))
-
-    elif etype == EventType.CONTEXT_COMPACTION_STARTED:
-        click.echo(dim("\n  [压缩上下文]\n"))
-
-    elif etype == EventType.CONTEXT_COMPACTION_FAILED:
-        click.echo(yellow("\n  [压缩上下文失败，使用安全回退]\n"))
-
-    elif etype == EventType.REFLECTION:
-        reason = p.get("reason", "")
-        click.echo(yellow(f"\n  ⟳ Reflection ({reason}) — reconsidering approach...\n"))
-
-    elif etype == EventType.TASK_COMPLETE:
-        # 取出 finish action 存的 message
-        message = getattr(_print_event_live, "_pending_message", "")
-        _print_event_live._pending_message = ""
-
-        if message:
-            # 获取流式打印的 thought（存在 stream_callback 里）
-            streamed = getattr(_print_event_live, "_streamed_thought", "").strip()
-            msg_stripped = message.strip()
-
-            if msg_stripped and msg_stripped != streamed:
-                # thought 和 message 不同（如 Claude）→ 单独打印最终回答
-                import sys
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                click.echo(msg_stripped)
-            # thought == message（如 DeepSeek flash）→ 已经流式打印过，不重复
-
-    elif etype == EventType.TASK_FAILED:
-        reason = p.get("reason", "")
-        click.echo(red(bold(f"\n  ❌ Failed: {reason}")))
+    """Compatibility wrapper; product code uses a per-session shared renderer."""
+    _compat_renderer(event)
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +107,7 @@ class ChatSession:
         log_dir: str,
         confirm_callback=None,
         stream: bool = True,
+        reasoning_stream: bool | None = None,
         session_store=None,
         session_id: str | None = None,
         prepare_next_turn=None,
@@ -232,11 +128,14 @@ class ChatSession:
         self._state = None
         self.recovery_warning: str | None = None
         self._history_max_messages = config.context.history_window * 2
+        resolved_reasoning_stream = stream if reasoning_stream is None else reasoning_stream
+        self._event_renderer = RunEventRenderer(
+            preview_lines=20, compact=True, show_task=False,
+        )
 
         # 流式回调：每个 token 立刻 flush 到终端
         _stream_started = [False]
         _thought_printed = [False]  # 标记是否打过 thought，用于 message 前换行
-        _streamed_buf = []   # 记录流式打印的内容，用于和 message 比较
 
         def _thought_cb(text: str) -> None:
             """推理过程：dim 暗色，表示模型在思考"""
@@ -264,8 +163,7 @@ class ChatSession:
                 _thought_printed[0] = False  # 只换一次
             sys.stdout.write(text)
             sys.stdout.flush()
-            _streamed_buf.append(text)
-            _print_event_live._streamed_thought = "".join(_streamed_buf)
+            self._event_renderer.record_streamed_text(text)
 
         agent_cfg = AgentConfig(
             max_steps=config.agent.max_steps,
@@ -273,9 +171,9 @@ class ChatSession:
             history_max_messages=config.context.history_window * 2,
             llm_max_retries=3,
             llm_retry_delay=1.0,
-            stream=stream,
+            stream=stream or resolved_reasoning_stream,
             stream_callback=_stream_cb if stream else None,
-            thought_callback=_thought_cb if stream else None,
+            thought_callback=_thought_cb if resolved_reasoning_stream else None,
             confirm_dangerous=confirm_callback is not None,
             confirm_callback=confirm_callback,
             prepare_next_turn=prepare_next_turn,
@@ -658,6 +556,8 @@ class ChatSession:
         """
         from agent.runner import RunRequest
 
+        self._event_renderer.reset()
+
         return self.runner.run(
             RunRequest(
                 task=task,
@@ -666,7 +566,7 @@ class ChatSession:
                 session_id=self.session_id,
             ),
             log=log,
-            on_event=_print_event_live,
+            on_event=self._event_renderer,
         )
 
     def print_stats(self) -> None:
