@@ -429,13 +429,15 @@ pytest -q
 - P2-4 已完成首版代码实现，当前状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`；实现起点为 `dev@1a3e72318ba2df1722a0dede0ec55ca916282abd`，最终交接以当前 dev 最新 HEAD 为准。
 - 新增 `mcp_integration/manager.py` / `adapter.py` / `registry.py`，基于 official MCP Python SDK v2；没有手写 JSON-RPC，也没有新增第二套 Agent loop。
 - 正式调用链保持 `LLM → ToolRegistry → ToolExecutor → Hook → Permission → MCPToolAdapter → MCPClientManager → official SDK`；MCP 不绕过现有 Permission / Hook / cooperative cancel / Planning mutation gate / Trace。
-- `MCPClientManager` 用专用 asyncio loop thread 长期持有 official `Client` context；同步 Forge Tool 通过 thread-safe future 调 async client，不为每次 ToolCall 重建连接。direct/Chat 与 isolate/worktree 的 ownership/cleanup 已分别接入 Runner/orchestrator。
-- 首版支持 stdio；Streamable HTTP 因 v2 `Client(URL)` 与 stdio 共用同一 lifecycle abstraction，也以薄 transport 分支一并接入；旧 SSE 不作为新主线。
-- remote Tool 名统一 namespaced 为 `mcp__<server_id>__<tool>`；schema/collision/output/error mapping 有确定性规则。新增 `ToolErrorType.REMOTE_CAPABILITY`，server disconnect/protocol failure 保持 recoverable Tool failure，Forge manager lifecycle invariant 才是 `INFRASTRUCTURE`。
-- ToolAnnotations 默认不可信。server 只有显式 `trust_read_only_annotations=true` 时才允许 `read_only_hint=true` 映射 `READ_ONLY`；否则保守 `MAY_MUTATE_REPOSITORY → CONFIRM`。
-- Trace v2 增加 `mcp_tool_discovered`，tool lifecycle event 增加 server id / remote tool / transport / safety-hint correlation；不记录 MCP env/secret。
-- P2-0 Eval 新增 `planning_recovery_skills_mcp` variant，固定使用仓库内 local stdio fixture，不读取用户随机 MCP 配置；TrialMetrics 增加 MCP discovery/call/failure counts。
-- 新增 `tests/test_mcp_integration.py` 与 crash fixture，覆盖 official SDK in-process、real local stdio Host E2E、多 server、schema、timeout/error/disconnect、permission、hooks、cancel、Planning、Recovery、package discovery。
-- 当前尚未记录用户本地专项/全量 pytest 通过，因此状态不能写 DONE；Evidence Pack 只新增 Implementation / Local Validation Pending claim，不声明 MCP effectiveness。
-- 本轮没有实现 P2-5 Evolution、Multi-Agent、MCP Server、完整 resources/prompts runtime、OAuth 平台化或 real-model MCP A/B。
+- `MCPClientManager` 用专用 asyncio loop thread 长期持有 official `Client` context；同步 Forge Tool 通过 thread-safe future 调 async client，不为每次 ToolCall 重建连接。direct/Chat 跨 run 复用 manager；isolate/worktree 每次 run 创建独立 manager；CLI/API/GitHub/Eval 都显式 cleanup。
+- 首版支持 stdio；Streamable HTTP 因 v2 `Client(URL)` 与 stdio 共用同一 lifecycle abstraction，以薄 transport 分支一并接入；旧 SSE 不作为新主线。
+- remote Tool 名统一 namespaced 为 `mcp__<server_id>__<tool>`；schema/collision/output/error mapping 有确定性规则。schema/description/tool-count 分别有 32k/2k/128 硬上限，避免不可信 capability metadata 无界占用。
+- 新增 `ToolErrorType.REMOTE_CAPABILITY`：stdio startup/discovery、disconnect/protocol/server failure 都属于 remote capability failure，可由 P2-2 当普通 Tool failure 消费；只有 Forge manager/lifecycle invariant 才是 `INFRASTRUCTURE`。
+- ToolAnnotations 默认不可信。server 只有显式 `trust_read_only_annotations=true` 时才允许 `read_only_hint=true` 映射 `READ_ONLY`；否则保守 `MAY_MUTATE_REPOSITORY → CONFIRM`。MCP CONFIRM 会向用户展示 namespaced tool + bounded 参数预览。
+- Trace v2 增加 `mcp_server_capabilities / mcp_tool_discovered`，并在 tool lifecycle event 记录 server id / remote tool / transport / safety-hint correlation；不记录 URL/env/secret。
+- Eval 新增 `planning_recovery_skills_mcp` variant，固定使用仓库内 local stdio fixture，不读取用户随机 MCP 配置；TrialMetrics 增加 MCP discovery/call/failure counts。另新增独立 `evals/fixtures/coding_agent/mcp_suite.json`，不修改 P2-0 冻结的 8-case suite，并用 required_tool grader 锁定“实际调用 MCP guidance”。
+- `tests/test_mcp_integration.py` 覆盖 official SDK in-process、local stdio Host E2E、tools/resources/prompts capability negotiation、multi-server、startup failure、server crash、schema/metadata bounds、permission、hooks、cancel、direct reuse、isolate ownership、Planning、Recovery、Eval mapping/package discovery。
+- ChatGPT 执行容器仍无法解析 `github.com`，GitHub connector 也没有启动新 workflow run 的动作，因此本轮没有真实运行仓库 pytest；当前状态不能写 DONE。用户本地验证通过后再补本地回归 DONE 日志和 Evidence Pack regression claim。
+- 本轮没有执行 real-model `planning_recovery_skills vs planning_recovery_skills_mcp` A/B，不产生 success-rate/pass@1/token/latency/MCP effectiveness 数字。
+- 本轮没有实现 P2-5 Evolution、Multi-Agent、Forge MCP Server、完整 resources/prompts runtime、OAuth 平台化或 dangerous external account E2E。
 - 本轮更新日志：`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter.md`。
