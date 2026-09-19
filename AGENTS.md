@@ -64,13 +64,14 @@ python -m pytest -q
 - `agent/trace_v2.py`：Trace v2 schema 常量、entrypoint/session 传播和统一 redaction。
 - `harness/executor.py`：低层 Tool lifecycle：validation → pre-hook → permission → tool → post-hook；支持显式透明组合。
 - `harness/__init__.py`：产品组合根导出的安全默认 ToolExecutor，默认启用 PermissionManager。
-- `harness/permission.py`：shell deny/confirm、文件 workspace 边界、deploy confirm 的策略层。
+- `harness/permission.py`：shell deny/confirm、文件 workspace 边界、MCP capability effect/confirm 的策略层。
 - `llm/`：Anthropic、OpenAI-compatible Chat Completions、OpenAI Responses；provider 错误分类见 `llm/errors.py`。
 - `context/`：ConversationHistory、Repo Map、Token Budget、Compaction。
 - `entry/cli.py`、`entry/chat.py`、`entry/api.py`、`entry/github_issue.py`：四个产品入口。
 - `task/engine.py`：SQLite WAL 任务状态与条件认领。
 - `runtime/worktree.py`、`agent/orchestrate.py`：隔离 worktree、成果检测和保留策略。
 - `tools/`：具体工具与 runtime 适配。
+- `mcp_integration/`：P2-4 MCP Host client bridge；official SDK connection lifecycle、remote Tool adapter 与 ToolRegistry registration。
 - `tests/test_failure_harness.py`、`tests/test_failure_harness_isolate.py`：P1-4 默认离线 deterministic failure matrix；fake 只注入故障，不实现第二套 Agent loop。
 - `docs/evidence/README.md`：P1-6 统一 Evidence Index，记录 Claim→Evidence→Result→Limitation 与简历/面试表述边界。
 - `evals/verify_evidence_pack.py`：P1-6 默认离线只读证据校验入口。
@@ -107,7 +108,7 @@ python -m pytest -q
 
 **P0/P1 主线已整体 DONE。**
 
-明确延期：完整 Resource Manager、强制终止任意同步 Tool 的通用 async runtime 重写、hidden-verifier feedback、C6 `context_recall(event_ref)`、MCP、多 Agent、multi-tool call、tree-structured session、自动 merge/无人监督发布。
+明确延期：完整 Resource Manager、强制终止任意同步 Tool 的通用 async runtime 重写、hidden-verifier feedback、C6 `context_recall(event_ref)`、多 Agent、multi-tool call、tree-structured session、自动 merge/无人监督发布。
 
 ### P0-2 Tool lifecycle 当前事实
 
@@ -421,3 +422,20 @@ pytest -q
 - 本轮没有执行 real-model `planning_recovery vs planning_recovery_skills` A/B，不产生 success-rate、pass@1、trigger accuracy、token、latency 或 Skill effectiveness 数字。
 - 下一阶段进入 P2-4 MCP Client / Tool Adapter；MCP 只作为 capability source，真实 invocation 必须适配成 Forge Tool 并继续经过 ToolExecutor/Permission/Hook/Cancel/Trace。
 - 验证日志：`docs/changes/2026-09-19/P2-3-Agent-Skills本地回归-DONE.md`。
+
+
+### 最后交接（2026-09-19，P2-4 MCP Client / Tool Adapter）
+
+- P2-4 已完成首版代码实现，当前状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`；实现起点为 `dev@1a3e72318ba2df1722a0dede0ec55ca916282abd`，最终交接以当前 dev 最新 HEAD 为准。
+- 新增 `mcp_integration/manager.py` / `adapter.py` / `registry.py`，基于 official MCP Python SDK v2；没有手写 JSON-RPC，也没有新增第二套 Agent loop。
+- 正式调用链保持 `LLM → ToolRegistry → ToolExecutor → Hook → Permission → MCPToolAdapter → MCPClientManager → official SDK`；MCP 不绕过现有 Permission / Hook / cooperative cancel / Planning mutation gate / Trace。
+- `MCPClientManager` 用专用 asyncio loop thread 长期持有 official `Client` context；同步 Forge Tool 通过 thread-safe future 调 async client，不为每次 ToolCall 重建连接。direct/Chat 与 isolate/worktree 的 ownership/cleanup 已分别接入 Runner/orchestrator。
+- 首版支持 stdio；Streamable HTTP 因 v2 `Client(URL)` 与 stdio 共用同一 lifecycle abstraction，也以薄 transport 分支一并接入；旧 SSE 不作为新主线。
+- remote Tool 名统一 namespaced 为 `mcp__<server_id>__<tool>`；schema/collision/output/error mapping 有确定性规则。新增 `ToolErrorType.REMOTE_CAPABILITY`，server disconnect/protocol failure 保持 recoverable Tool failure，Forge manager lifecycle invariant 才是 `INFRASTRUCTURE`。
+- ToolAnnotations 默认不可信。server 只有显式 `trust_read_only_annotations=true` 时才允许 `read_only_hint=true` 映射 `READ_ONLY`；否则保守 `MAY_MUTATE_REPOSITORY → CONFIRM`。
+- Trace v2 增加 `mcp_tool_discovered`，tool lifecycle event 增加 server id / remote tool / transport / safety-hint correlation；不记录 MCP env/secret。
+- P2-0 Eval 新增 `planning_recovery_skills_mcp` variant，固定使用仓库内 local stdio fixture，不读取用户随机 MCP 配置；TrialMetrics 增加 MCP discovery/call/failure counts。
+- 新增 `tests/test_mcp_integration.py` 与 crash fixture，覆盖 official SDK in-process、real local stdio Host E2E、多 server、schema、timeout/error/disconnect、permission、hooks、cancel、Planning、Recovery、package discovery。
+- 当前尚未记录用户本地专项/全量 pytest 通过，因此状态不能写 DONE；Evidence Pack 只新增 Implementation / Local Validation Pending claim，不声明 MCP effectiveness。
+- 本轮没有实现 P2-5 Evolution、Multi-Agent、MCP Server、完整 resources/prompts runtime、OAuth 平台化或 real-model MCP A/B。
+- 本轮更新日志：`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter.md`。
