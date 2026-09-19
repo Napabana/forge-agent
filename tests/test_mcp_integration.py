@@ -234,11 +234,15 @@ def test_permission_allows_explicit_read_only_and_confirms_unknown_mutation():
 
     accepted_manager = _FakeManager()
     accepted_registry = ToolRegistry().register(_adapter(accepted_manager))
+    prompts: list[str] = []
     accepted = ToolExecutor(
-        accepted_registry, confirm_callback=lambda _: True
+        accepted_registry,
+        confirm_callback=lambda prompt: prompts.append(prompt) or True,
     ).execute(accepted_registry.tool_names[0], {"value": "x"})
     assert accepted.success
     assert len(accepted_manager.calls) == 1
+    assert accepted_registry.tool_names[0] in prompts[0]
+    assert '"value":"x"' in prompts[0]
 
 
 def test_hooks_wrap_mcp_tool_like_native_tool():
