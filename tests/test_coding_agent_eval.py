@@ -74,6 +74,27 @@ def test_metrics_extract_from_run_result_and_trace(tmp_path: Path):
         {"event_type": "tool_execution_started", "payload": {"tool_name": "file_read"}},
         {"event_type": "tool_execution_started", "payload": {"tool_name": "pytest"}},
         {"event_type": "tool_execution_started", "payload": {"tool_name": "shell"}},
+        {
+            "event_type": "mcp_tool_discovered",
+            "payload": {
+                "tool_name": "mcp__eval_docs__echo_text",
+                "capability_provider": "mcp",
+            },
+        },
+        {
+            "event_type": "tool_execution_started",
+            "payload": {
+                "tool_name": "mcp__eval_docs__echo_text",
+                "capability_provider": "mcp",
+            },
+        },
+        {
+            "event_type": "tool_execution_failed",
+            "payload": {
+                "tool_name": "mcp__eval_docs__echo_text",
+                "capability_provider": "mcp",
+            },
+        },
         {"event_type": "completion_rejected", "payload": {}},
         {"event_type": "reflection", "payload": {}},
         {"event_type": "plan_created", "payload": {}},
@@ -93,7 +114,7 @@ def test_metrics_extract_from_run_result_and_trace(tmp_path: Path):
     result = RunResult("trial", RunStatus.SUCCESS, "ok", 3, usage=usage, trace_path=str(trace))
     metrics = extract_metrics(result, wall_time_seconds=1.25)
     assert metrics.steps == 3 and metrics.total_tokens == 25
-    assert metrics.tool_call_count == 3 and metrics.test_attempt_count == 1
+    assert metrics.tool_call_count == 4 and metrics.test_attempt_count == 1
     assert metrics.completion_rejection_count == 1 and metrics.reflection_count == 1
     assert metrics.file_read_count == 1 and metrics.shell_call_count == 1
     assert metrics.plan_created_count == 1 and metrics.plan_revision_count == 1
@@ -106,6 +127,9 @@ def test_metrics_extract_from_run_result_and_trace(tmp_path: Path):
     assert metrics.skill_selected_count == 1
     assert metrics.skill_loaded_count == 1
     assert metrics.skill_reference_loaded_count == 1
+    assert metrics.mcp_tool_discovered_count == 1
+    assert metrics.mcp_tool_call_count == 1
+    assert metrics.mcp_tool_failure_count == 1
 
 
 def test_agent_failure_still_emits_trial_result(tmp_path: Path):
