@@ -73,6 +73,7 @@ class EventType(str, Enum):
     SKILL_LOADED = "skill_loaded"
     SKILL_REFERENCE_LOADED = "skill_reference_loaded"
     SKILL_REJECTED = "skill_rejected"
+    MCP_TOOL_DISCOVERED = "mcp_tool_discovered"
     TASK_INCOMPLETE = "task_incomplete"
     # Trace v2 的 Runner / product 生命周期。旧 JSONL 不包含这些事件也可照常读取。
     RUN_TERMINATED = "run_terminated"
