@@ -505,8 +505,15 @@ skill enabled
 
 # P2-4 MCP Client / Tool Adapter
 
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
+状态：**DONE**  
 依赖：P2-0；在 P2-3 Skills 后实现
+
+本地收口（2026-09-19）：
+
+- 用户已在本地完成 P2-4 修复并 push 到 `dev`，随后明确要求进入 P2-5；按当前项目交接约定，P2-4 正式收口为 DONE。
+- 当前可核验的修复提交为 `dev@f842902e1753bdc69b0217d5aa89033bacd2ae82`：修正 MCP description 截断边界，并补齐 Chat / GitHub Issue 测试替身的 `close()` 清理契约。
+- 该提交日志明确记录定向测试 3 passed、Chat/GitHub Issue 相关测试 25 passed，以及 `git diff --check` 通过。
+- 用户本轮没有提供最终全量 pytest 的 passed 数量、完整 stdout 或耗时，因此不补造数字；也没有执行 real-model MCP A/B，不能宣称 MCP 提升 success rate / pass@1 / token / latency。
 
 实现摘要（2026-09-19）：
 
