@@ -18,6 +18,7 @@ from agent.runner import ExecutionRunner, RunRequest
 from agent.task import Action, ActionType, EventType, RunStatus, Task, ToolCall
 from config.schema import MCPConfig, MCPServerConfig, _parse
 from entry.cli import _build_registry
+from evals.coding_agent.__main__ import _mcp_config_for_variant
 from evals.coding_agent.runner import validate_suite_references
 from evals.coding_agent.schema import EvaluationSuite
 from harness import HookEvent, Hooks, ToolExecutionCanceled, ToolExecutor
@@ -795,6 +796,20 @@ def test_remote_capability_failure_is_visible_to_structured_recovery(tmp_path: P
     classified = [row for row in rows if row["event_type"] == "failure_classified"]
     assert classified
     assert classified[0]["payload"]["error_type"] == ToolErrorType.REMOTE_CAPABILITY.value
+
+
+def test_eval_variant_uses_only_fixed_repository_mcp_fixture():
+    assert _mcp_config_for_variant("baseline_react").enabled is False
+    assert _mcp_config_for_variant("planning_recovery_skills").enabled is False
+    config = _mcp_config_for_variant("planning_recovery_skills_mcp")
+    assert config.enabled is True
+    assert len(config.servers) == 1
+    server = config.servers[0]
+    assert server.id == "eval_docs"
+    assert server.transport == "stdio"
+    assert server.command == sys.executable
+    assert server.args == (str(_SERVER),)
+    assert server.trust_read_only_annotations is True
 
 
 def test_mcp_specific_eval_suite_is_deterministic_and_requires_guidance(tmp_path: Path):
