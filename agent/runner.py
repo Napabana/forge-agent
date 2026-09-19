@@ -18,8 +18,10 @@ from agent.trace_v2 import bind_trace_context
 from context.history import ConversationHistory
 from context.repo_map import RepoMap
 from context.token_budget import TokenBudget
+from config.schema import MCPConfig
 from harness import Hooks, PermissionManager, ToolExecutor
 from llm.usage import SessionUsage
+from mcp_integration.registry import attach_mcp_tools
 from runtime.worktree import WorktreeResultPolicy
 from task.engine import TaskEngine
 from tools.base import ToolRegistry
@@ -82,6 +84,7 @@ class ExecutionRunner:
         engine: TaskEngine | None = None,
         confirm_callback=None,
         bus=None,
+        mcp_config: MCPConfig | None = None,
     ) -> None:
         self.backend = backend
         self.registry = registry
@@ -91,6 +94,8 @@ class ExecutionRunner:
         self.engine = engine
         self.confirm_callback = confirm_callback
         self.bus = bus
+        self.mcp_config = mcp_config
+        self._mcp_manager = None
         executor = ToolExecutor(
             registry,
             hooks=self.config.hooks,
@@ -175,6 +180,7 @@ class ExecutionRunner:
                         result_policy=request.result_policy,
                         on_log_created=log_created,
                         on_event=on_event,
+                        mcp_config=self.mcp_config,
                     ))
             except BaseException as exc:
                 if trace_path:
@@ -208,6 +214,7 @@ class ExecutionRunner:
                 )
             return result
 
+        self._ensure_direct_mcp()
         executor = ToolExecutor(
             self.registry,
             hooks=config.hooks,
@@ -277,6 +284,16 @@ class ExecutionRunner:
                 log.on_append(None)
             if own_log:
                 log.close()
+
+    def _ensure_direct_mcp(self) -> None:
+        if self._mcp_manager is None and self.mcp_config is not None and self.mcp_config.enabled:
+            self._mcp_manager = attach_mcp_tools(self.registry, self.mcp_config)
+
+    def close(self) -> None:
+        """Close long-lived external capability connections owned by this Runner."""
+        if self._mcp_manager is not None:
+            manager, self._mcp_manager = self._mcp_manager, None
+            manager.close()
 
     def _prepare_shared_history_boundary(
         self,
