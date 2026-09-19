@@ -235,6 +235,9 @@ class TrialMetrics:
     skill_selected_count: int = 0
     skill_loaded_count: int = 0
     skill_reference_loaded_count: int = 0
+    mcp_tool_discovered_count: int = 0
+    mcp_tool_call_count: int = 0
+    mcp_tool_failure_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
