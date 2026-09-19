@@ -11,6 +11,9 @@ from mcp import Client, MCPError, StdioServerParameters
 from config.schema import MCPConfig, MCPServerConfig
 
 
+_MAX_TOOLS_PER_SERVER = 128
+
+
 class MCPIntegrationError(RuntimeError):
     """MCP integration base error."""
 
@@ -173,6 +176,11 @@ class MCPClientManager:
                         tool_items = await self._list_all_tools(client)
                 else:
                     tool_items = ()
+                if len(tool_items) > _MAX_TOOLS_PER_SERVER:
+                    raise MCPRemoteFailure(
+                        f"MCP server {server.id!r} exposed {len(tool_items)} tools; "
+                        f"maximum supported is {_MAX_TOOLS_PER_SERVER}"
+                    )
                 snapshot = self._snapshot(server, client, len(tool_items))
                 self._connections[server.id] = _Connection(server, client, snapshot)
                 for tool in tool_items:
@@ -316,7 +324,9 @@ class MCPClientManager:
             ) from exc
         except MCPError as exc:
             error = getattr(exc, "error", None)
-            code = getattr(error, "code", None)
+            code = getattr(exc, "code", None)
+            if code is None:
+                code = getattr(error, "code", None)
             raise MCPRemoteFailure(
                 str(exc),
                 code=code if isinstance(code, int) else None,
