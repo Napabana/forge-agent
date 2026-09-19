@@ -1,0 +1,89 @@
+"""Fixed offline MCP server for P2-4 evaluation and local protocol E2E."""
+from __future__ import annotations
+
+import asyncio
+
+from mcp.server import MCPServer
+from mcp.types import ToolAnnotations
+
+mcp = MCPServer("forge-eval-mcp")
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+)
+def lookup_project_guidance(topic: str) -> dict[str, str]:
+    """Return deterministic repository guidance without network access."""
+    normalized = topic.strip().lower()
+    guidance = {
+        "configuration": "Use the canonical setting in src/app/config.py rather than hardcoding a duplicate value.",
+        "tests": "Run the repository tests after the final code change before finishing.",
+        "navigation": "Inspect the canonical configuration module before editing callers.",
+    }
+    return {
+        "topic": normalized,
+        "guidance": guidance.get(normalized, guidance["navigation"]),
+        "source": "forge-eval-mcp-fixture",
+    }
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+)
+def echo_text(value: str) -> str:
+    """Echo deterministic text for protocol/output tests."""
+    return f"echo:{value}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+)
+def record_note(note: str) -> dict[str, str]:
+    """Mutation-classified fixture tool; it intentionally performs no real I/O."""
+    return {"recorded": note}
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+)
+async def slow_lookup(delay_seconds: float = 0.2) -> str:
+    """Sleep only inside the fixture process so timeout mapping is deterministic."""
+    await asyncio.sleep(delay_seconds)
+    return "slow-ok"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+)
+def fail_lookup(message: str = "fixture error") -> str:
+    """Raise a deterministic application-level tool error."""
+    raise ValueError(message)
+
+
+if __name__ == "__main__":
+    mcp.run()
