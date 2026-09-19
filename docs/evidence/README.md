@@ -164,7 +164,7 @@ reason = provider_credentials_not_available_in_ci
 
 证据：`mcp_integration/manager.py`、`mcp_integration/adapter.py`、`mcp_integration/registry.py`、`agent/runner.py`、`agent/orchestrate.py`、`tests/test_mcp_integration.py`、`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter.md`。
 
-已实现 Forge Host → official MCP Python SDK v2 client → remote Tool 的 capability integration；remote Tool 被适配成普通 Forge Tool，调用仍必须经过 ToolRegistry / ToolExecutor / Hook / Permission / cooperative cancel / Trace。stdio 与 Streamable HTTP 复用同一 manager lifecycle；Chat 长会话复用连接，direct/isolate/API/GitHub/Eval 均显式 cleanup。
+已实现 Forge Host → official MCP Python SDK v2 client → remote Tool 的 capability integration；remote Tool 被适配成普通 Forge Tool，调用仍必须经过 ToolRegistry / ToolExecutor / Hook / Permission / cooperative cancel / Trace。stdio 与 Streamable HTTP 复用同一 manager lifecycle；Chat/direct 长会话复用连接，isolate/worktree 每次 run 独立连接，CLI/API/GitHub/Eval 均显式 cleanup。Trace 记录 server capability negotiation 与 tool correlation，但不记录 URL/env/secret；独立 MCP-specific eval case 要求 process trace 真正调用固定 guidance tool。
 
 安全边界：remote ToolAnnotations 默认不可信；只有 server 显式配置 `trust_read_only_annotations=true` 且 tool 声明 read-only 时才映射为 `READ_ONLY`，否则保守映射为 mutation-capable 并进入 CONFIRM。Trace 不记录 MCP env/secret。
 
