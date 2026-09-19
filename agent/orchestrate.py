@@ -37,7 +37,7 @@ from typing import Any, Callable
 
 from agent.core import Agent, AgentConfig
 from agent.event_log import EventLog
-from agent.task import RunResult, RunStatus, Task
+from agent.task import EventType, RunResult, RunStatus, Task
 from harness.executor import ToolExecutor
 from harness.permission import PermissionDecision, PermissionManager
 from ipc.bus import AgentBus
