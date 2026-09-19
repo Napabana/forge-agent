@@ -442,10 +442,7 @@ def test_stdio_server_process_crash_maps_to_remote_capability_and_closes():
         )
         result = MCPToolAdapter(manager, descriptor).execute({})
         assert not result.success
-        assert result.error_type in {
-            ToolErrorType.REMOTE_CAPABILITY,
-            ToolErrorType.TIMEOUT,
-        }
+        assert result.error_type is ToolErrorType.REMOTE_CAPABILITY
     finally:
         manager.close()
     assert not manager.is_started
