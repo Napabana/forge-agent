@@ -35,6 +35,7 @@ class ToolErrorType(str, Enum):
     PERMISSION_DENIED = "permission_denied"
     TIMEOUT = "timeout"
     TOOL_EXECUTION = "tool_execution"
+    REMOTE_CAPABILITY = "remote_capability"
     INFRASTRUCTURE = "infrastructure"
     HOOK_BLOCKED = "hook_blocked"
     HOOK_FAILED = "hook_failed"
@@ -129,6 +130,11 @@ class BaseTool(ABC):
         return ToolEffect.MAY_MUTATE_REPOSITORY
 
     @property
+    def metadata(self) -> dict[str, Any]:
+        """Optional non-secret execution metadata for policy and Trace correlation."""
+        return {}
+
+    @property
     @abstractmethod
     def name(self) -> str:
         """工具名称，如 "shell", "file_read"。必须全局唯一。"""
@@ -199,6 +205,13 @@ class ToolRegistry:
         """Conservative gate: unknown tools may mutate repository state."""
         tool = self._tools.get(name)
         return tool is None or tool.effect is ToolEffect.MAY_MUTATE_REPOSITORY
+
+    def get_tool(self, name: str) -> BaseTool | None:
+        return self._tools.get(name)
+
+    def get_metadata(self, name: str) -> dict[str, Any]:
+        tool = self._tools.get(name)
+        return dict(tool.metadata) if tool is not None else {}
 
     def validate_tool_call(self, name: str, params: Any) -> ToolResult | None:
         if name not in self._tools:
