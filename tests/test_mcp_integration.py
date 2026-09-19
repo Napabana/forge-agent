@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -16,6 +17,7 @@ from agent.core import AgentConfig
 from agent.runner import ExecutionRunner, RunRequest
 from agent.task import Action, ActionType, EventType, RunStatus, Task, ToolCall
 from config.schema import MCPConfig, MCPServerConfig, _parse
+from entry.cli import _build_registry
 from evals.coding_agent.runner import validate_suite_references
 from evals.coding_agent.schema import EvaluationSuite
 from harness import HookEvent, Hooks, ToolExecutionCanceled, ToolExecutor
@@ -105,6 +107,27 @@ class _FakeManager:
 
 def _adapter(manager=None, **kwargs) -> MCPToolAdapter:
     return MCPToolAdapter(manager or _FakeManager(), _descriptor(**kwargs))
+
+
+def _init_git_repo(root: Path) -> Path:
+    root.mkdir(parents=True)
+    (root / "README.md").write_text("fixture\n", encoding="utf-8")
+    commands = (
+        ("git", "init", "-q"),
+        ("git", "config", "user.email", "mcp-test@example.invalid"),
+        ("git", "config", "user.name", "MCP Test"),
+        ("git", "add", "-A"),
+        ("git", "commit", "-qm", "baseline"),
+    )
+    for command in commands:
+        subprocess.run(
+            command,
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    return root
 
 
 def _events(path: str | None) -> list[dict]:
@@ -503,6 +526,99 @@ def test_multiple_stdio_servers_are_isolated_by_server_id():
         assert len(names) == len(manager.tools)
     finally:
         manager.close()
+
+
+def test_direct_runner_reuses_one_mcp_manager_across_runs(tmp_path: Path):
+    backend = MockBackend(
+        [
+            Action(
+                ActionType.TOOL_CALL,
+                "first external call",
+                ToolCall(
+                    namespaced_tool_name("eval_docs", "echo_text"),
+                    {"value": "first"},
+                ),
+            ),
+            Action(ActionType.FINISH, "done", message="first done"),
+            Action(
+                ActionType.TOOL_CALL,
+                "second external call",
+                ToolCall(
+                    namespaced_tool_name("eval_docs", "echo_text"),
+                    {"value": "second"},
+                ),
+            ),
+            Action(ActionType.FINISH, "done", message="second done"),
+        ]
+    )
+    runner = ExecutionRunner(
+        backend=backend,
+        registry=ToolRegistry(),
+        config=AgentConfig(max_steps=4, repo_map_mode="none"),
+        log_dir=str(tmp_path / "reuse-logs"),
+        mcp_config=_config(),
+    )
+    try:
+        first = runner.run(
+            RunRequest(Task("Use external echo once.", str(tmp_path), task_id="mcp-r1"))
+        )
+        manager = runner._mcp_manager
+        assert manager is not None and manager.is_started
+        second = runner.run(
+            RunRequest(Task("Use external echo again.", str(tmp_path), task_id="mcp-r2"))
+        )
+        assert runner._mcp_manager is manager
+        assert first.status is RunStatus.SUCCESS
+        assert second.status is RunStatus.SUCCESS
+    finally:
+        manager = runner._mcp_manager
+        runner.close()
+    assert manager is not None and not manager.is_started
+
+
+def test_isolated_run_owns_independent_mcp_lifecycle(tmp_path: Path):
+    repo = _init_git_repo(tmp_path / "repo")
+    backend = MockBackend(
+        [
+            Action(
+                ActionType.TOOL_CALL,
+                "external read in isolated worktree",
+                ToolCall(
+                    namespaced_tool_name("eval_docs", "echo_text"),
+                    {"value": "isolated"},
+                ),
+            ),
+            Action(ActionType.FINISH, "done", message="done"),
+        ]
+    )
+    runner = ExecutionRunner(
+        backend=backend,
+        registry=ToolRegistry(),
+        config=AgentConfig(max_steps=4, repo_map_mode="none"),
+        log_dir=str(tmp_path / "isolate-logs"),
+        registry_builder=_build_registry,
+        mcp_config=_config(),
+    )
+    try:
+        result = runner.run(
+            RunRequest(
+                Task("Use external read-only capability.", str(repo)),
+                isolate=True,
+                result_policy="discard",
+            )
+        )
+    finally:
+        runner.close()
+    assert result.status is RunStatus.SUCCESS
+    assert runner._mcp_manager is None
+    started = [
+        row
+        for row in _events(result.trace_path)
+        if row["event_type"] == EventType.TOOL_EXECUTION_STARTED.value
+        and row["payload"].get("capability_provider") == "mcp"
+    ]
+    assert len(started) == 1
+    assert started[0]["payload"]["mcp_server_id"] == "eval_docs"
 
 
 def test_runner_agent_tool_executor_real_stdio_host_e2e(tmp_path: Path):
