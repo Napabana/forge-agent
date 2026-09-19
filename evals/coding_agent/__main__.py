@@ -96,6 +96,7 @@ def _mcp_config_for_variant(variant: str) -> MCPConfig:
                 command=sys.executable,
                 args=(str(_DEFAULT_MCP_SERVER),),
                 timeout_seconds=5.0,
+                trust_read_only_annotations=True,
             ),
         ),
     )
