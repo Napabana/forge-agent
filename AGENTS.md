@@ -387,3 +387,13 @@ pytest -q
 - 新增 `tests/test_structured_recovery.py`，并扩展 `tests/test_failure_harness.py`、`tests/test_day6.py`、`tests/test_coding_agent_eval.py`，覆盖 recovery off compatibility、test failure→replan、replan gate、completion rejection→retest、budget exhaustion、provider retry separation、permission deny 与 infra boundary。
 - 当前 ChatGPT 环境没有可执行仓库 checkout，因此尚未运行 pytest；不要把本状态写成 DONE，也不要声明 real-model recovery 收益。
 - 本轮更新日志：`docs/changes/2026-09-19/P2-2-Failure-aware-Recovery-Replanning.md`。
+
+### 验证补充（2026-09-19，P2-2 Failure-aware Recovery + Replanning 本地回归）
+
+- 用户完成 P2-2 新增专项、关键兼容、全量 pytest 和 Evidence Pack 校验，并明确确认全部通过。
+- 用户未提供最终通过轮次的具体 passed 数量、完整 stdout 或耗时，因此不补造数字。
+- P2-2 状态由 `IMPLEMENTED / LOCAL VALIDATION PENDING` 正式收口为 `DONE`。
+- deterministic evidence 覆盖 typed FailureContext/RecoveryDecision、bounded RecoveryPolicy、replan runtime gate、compaction-surviving recovery state、Trace v2 recovery events、P2-0 `planning_recovery` variant，以及 Provider retry / cancel / infrastructure contract 不回归。
+- 本轮没有执行 real-model `planning vs planning_recovery` A/B，不产生 success-rate、pass@1、token、latency 或 recovery effectiveness 数字。
+- 下一阶段进入 P2-3 Agent Skills；Skill 必须作为 workflow/context capability 接入现有 Agent 与 ToolExecutor，不得绕过 Permission/Hook/Cancel/Trace。
+- 验证日志：`docs/changes/2026-09-19/P2-2-Failure-aware-Recovery-Replanning本地回归-DONE.md`。

@@ -2,7 +2,7 @@
 
 日期：2026-09-19  
 实现基线：`dev@1ad7850b8e84ebad650ccc3f16d46c791368f14a`  
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**
+状态：**DONE**
 
 ## 目标
 
@@ -319,3 +319,22 @@ python -m pytest -q
 ```
 
 没有 `--real-model` 的 eval 命令只生成显式 not-executed artifact，不提供任何 Recovery effectiveness 结论。
+
+## 本地回归补充（最终，2026-09-19）
+
+用户按交接顺序完成 P2-2 新增专项、关键兼容、全量 `python -m pytest -q` 与 `python -m evals.verify_evidence_pack`，并明确确认全部通过。
+
+最终通过轮次没有提供完整 stdout、passed 数量或耗时，因此本文只记录“全部通过”，不根据上一轮测试数量推断或补造统计。
+
+据此：
+
+```text
+P2-2 Failure-aware Recovery + Replanning
+IMPLEMENTED / LOCAL VALIDATION PENDING
+                ↓
+               DONE
+```
+
+本地回归能够证明 structured recovery 与既有单一 Agent loop 兼容；recovery off 保持旧 Reflection / retry / fatal 行为；failure classification / recovery selection / bounded budget contract 可 deterministic 验证；replan gate 在 plan revision 前阻止 mutation / FINISH，并在 plan version 更新后解除；recovery state 不因 history override / compaction 丢失；Provider retry、cancel 与 infrastructure contract 未被重复接管。
+
+本阶段仍未执行正式 real-model `planning vs planning_recovery` A/B，因此不能声明 Recovery 提高 success rate、pass@1、降低 steps/tokens/latency 或提升故障恢复成功率。

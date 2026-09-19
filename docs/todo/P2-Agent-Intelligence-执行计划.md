@@ -261,7 +261,7 @@ Structured Planning + ReAct
 
 # P2-2 Failure-aware Recovery + Replanning
 
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
+状态：**DONE**  
 依赖：P2-1
 
 实现摘要（2026-09-19）：
@@ -274,7 +274,7 @@ Structured Planning + ReAct
 - pending replan gate 作为 bounded runtime system context 每轮重新注入，因此 HistoryWindow / Context Compaction 不会通过裁剪旧 history 丢失当前 recovery requirement。
 - Trace v2 新增 `failure_classified / recovery_selected / recovery_exhausted / recovery_blocked`；P2-0 TrialMetrics 增加 failure/recovery/replan/exhaustion metrics。
 - Evaluation CLI 新增正式 architecture variant `planning_recovery`：`planning_mode=always + recovery_mode=structured`；既有 `baseline_react` 与 `planning` 语义保持不变。
-- 新增 `tests/test_structured_recovery.py`，并扩展 Failure Harness、config 与 coding-agent eval regression；当前 ChatGPT 环境未执行仓库 pytest，因此状态保持 LOCAL VALIDATION PENDING，不声明测试通过或真实模型效果。
+- 新增 `tests/test_structured_recovery.py`，并扩展 Failure Harness、config 与 coding-agent eval regression；用户随后在本地完成专项、兼容、全量 pytest 与 Evidence Pack 校验并明确确认全部通过。最终通过轮次未提供具体 passed 数量或耗时，因此不补造数字；真实模型效果仍未执行。
 
 
 ## 当前缺口

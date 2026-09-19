@@ -136,6 +136,17 @@ reason = provider_credentials_not_available_in_ci
 
 机器校验锚点：**P2-1 Structured Planning: deterministic regression passed; real-model A/B not executed**
 
+### P2-2 Failure-aware Recovery + Replanning — Deterministic Regression
+
+证据：`agent/recovery.py`、`agent/core.py`、`tests/test_structured_recovery.py`、`tests/test_failure_harness.py`、`tests/test_coding_agent_eval.py`、`docs/changes/2026-09-19/P2-2-Failure-aware-Recovery-Replanning本地回归-DONE.md`。
+
+已实现 typed `FailureContext / RecoveryDecision / RecoveryPolicy / RecoveryRuntime`、bounded recovery budget、P2-1 replan runtime gate、compaction-surviving recovery state、Trace v2 recovery events，以及 P2-0 `planning_recovery` architecture mapping。
+
+用户本地专项、关键兼容、全量 pytest 与 Evidence Pack 校验均已明确确认通过；最终通过轮次没有提供具体 passed 数量或耗时，因此不补造数字。
+
+边界：没有执行 real-model `planning vs planning_recovery` A/B，因此不能宣称 Recovery 提升 success rate、pass@1、token efficiency、latency 或故障恢复成功率。
+
+机器校验锚点：**P2-2 Structured Recovery: deterministic regression passed; real-model A/B not executed**
 ## 面试可说 / 不可说
 
 | 能力 | 可以安全说 | 追问证据 | 过度宣称 |
@@ -143,7 +154,9 @@ reason = provider_credentials_not_available_in_ci
 | Agent loop | “实现同步 ReAct coding Agent 主循环，并把 finish/completion guard 映射成明确终止状态。” | `agent/core.py`, completion guard tests | “异步高并发 Agent 内核”“真实任务成功率 X%” |
 | Tool lifecycle | “统一 validate/pre-hook/permission/tool/post-hook 顺序，并把 policy/tool/infra 失败分层。” | `harness/executor.py`, `tests/test_tool_lifecycle_p0_2.py` | “工具调用无失败”“所有异常都自动恢复” |
 | cooperative cancellation | “在 Provider、tool lifecycle 和 step 边界做 cooperative cancel，并保留 Trace 终止语义。” | `agent/core.py`, `harness/executor.py`, failure tests | “可以立即强杀任意同步工具或 Provider 请求” |
-| Structured Planning | “在单一 Agent loop 内实现 typed Plan/Step/Revision，支持 off/auto/always、计划生命周期 Trace，并在 context compaction 后持续注入 current plan。” | `agent/planning.py`, `agent/core.py`, `tests/test_structured_planning.py` | “Planning 已证明提升成功率/pass@1/降低 token” |\n| Error Recovery / Failure Harness | “对 transient provider retry、工具失败 Observation、循环/完成性失败和基础设施异常做了确定性故障回归。” | `tests/test_failure_harness*.py` | “Fault tolerance 达到生产级”“故障恢复成功率 X%” |
+| Structured Planning | “在单一 Agent loop 内实现 typed Plan/Step/Revision，支持 off/auto/always、计划生命周期 Trace，并在 context compaction 后持续注入 current plan。” | `agent/planning.py`, `agent/core.py`, `tests/test_structured_planning.py` | “Planning 已证明提升成功率/pass@1/降低 token” |
+| Failure-aware Recovery | “在单一 Agent loop 内实现 typed FailureContext/RecoveryDecision、bounded recovery 与 plan revision gate；Provider retry、cancel、infra 保持独立语义。” | `agent/recovery.py`, `agent/core.py`, `tests/test_structured_recovery.py` | “已证明提升成功率”“生产级 fault tolerance”“恢复成功率 X%” |
+| Error Recovery / Failure Harness | “对 transient provider retry、工具失败 Observation、循环/完成性失败和基础设施异常做了确定性故障回归。” | `tests/test_failure_harness*.py` | “Fault tolerance 达到生产级”“故障恢复成功率 X%” |
 | Trace v2 | “用 append-only JSONL 记录 run/step/tool/acceptance/delivery correlation，并在落盘边界递归脱敏。” | `agent/event_log.py`, `agent/trace_v2.py`, trace tests | “Trace 可以确定性重放 Agent 执行” |
 | Context Compaction | “canonical history 不被覆盖，模型视图做 deterministic pruning + structured compaction，并有 checkpoint lineage。” | implementation + B1/B2 | “B2 证明稳定提升 2 倍成功率”“总结成本为 0” |
 | Repo Map retrieval | “query-aware ranking 在 12-case commit-history 冻结集上把 MRR 0.097 提到 0.319，预算内 target recall 0.365 提到 0.635。” | formal report/script/fixture | “因此 coding task success rate 提升 X%” |
@@ -162,7 +175,9 @@ reason = provider_credentials_not_available_in_ci
 | ReAct coding Agent | KEEP | “实现同步 ReAct coding Agent 主循环，覆盖 ToolCall、Observation、Reflection 与 completion guard。” | `agent/core.py` + completion tests；不要加总体成功率 |
 | 多 Provider abstraction | REWORD | “抽象统一 `LLMBackend`，路由 Anthropic、OpenAI 与 OpenAI-compatible provider/protocol。” | `llm/base.py`, `llm/router.py`；不要说所有 provider 都做过同等 E2E |
 | Tool Calling | KEEP | “统一 Tool schema/validation、Hook、Permission、execution 与 Observation 生命周期。” | executor/lifecycle tests |
-| Structured Planning | KEEP | “实现 typed ExecutionPlan/PlanStep/PlanRevision，并将 current plan 作为 runtime context 注入单一 Agent loop，支持 off/auto/always 与 Trace lifecycle。” | deterministic regression 已通过；没有 real-model A/B，不能写效果提升 |\n| Error recovery | REWORD | “实现 transient provider retry、typed failure Observation、loop/completion guard，并用 Failure Harness 做确定性故障回归。” | Failure Harness；不要说生产级容错率 |
+| Structured Planning | KEEP | “实现 typed ExecutionPlan/PlanStep/PlanRevision，并将 current plan 作为 runtime context 注入单一 Agent loop，支持 off/auto/always 与 Trace lifecycle。” | deterministic regression 已通过；没有 real-model A/B，不能写效果提升 |
+| Failure-aware recovery | KEEP | “实现 typed FailureContext/RecoveryDecision 与 bounded RecoveryPolicy，并把 repeated failure 与 P2-1 plan revision gate 联动。” | deterministic regression 已通过；没有 real-model A/B，不能写效果百分比 |
+| Error recovery | REWORD | “实现 transient provider retry、typed failure Observation、loop/completion guard，并用 Failure Harness 做确定性故障回归。” | Failure Harness；不要说生产级容错率 |
 | Loop detection | KEEP | “对重复 Action/Observation 指纹与无进展循环做检测和终止/恢复控制。” | `agent/loop_detector.py`, loop tests | 只能写 contract，不写效果百分比 |
 | Context compaction | REWORD | “实现 canonical-history-preserving 的 pruning + structured compaction，并用 7-case frozen replay 与 9-run real-model 小样本审计。” | B1/B2；明确小样本边界 |
 | Repo Map retrieval | KEEP | “query-aware Repo Map 在 12-case frozen commit-history benchmark 上 MRR 0.097→0.319、budget target recall 0.365→0.635。” | 可写数字，但必须带 12-case/frozen 范围 |
