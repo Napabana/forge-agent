@@ -278,7 +278,8 @@ class MCPClientManager:
                 f"MCP call timed out after {timeout_seconds:g}s"
             ) from exc
         except MCPError as exc:
-            code = getattr(exc, "code", None)
+            error = getattr(exc, "error", None)
+            code = getattr(error, "code", None)
             raise MCPRemoteFailure(
                 str(exc),
                 code=code if isinstance(code, int) else None,
