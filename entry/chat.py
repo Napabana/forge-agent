@@ -194,6 +194,7 @@ class ChatSession:
             config=agent_cfg,
             log_dir=log_dir,
             confirm_callback=confirm_callback,
+            mcp_config=config.mcp,
         )
         self.agent = self.runner.agent
         self._shared_history = ConversationHistory(
@@ -578,6 +579,10 @@ class ChatSession:
             log=log,
             on_event=self._event_renderer,
         )
+
+    def close(self) -> None:
+        """Close external capability connections owned by this chat session."""
+        self.runner.close()
 
     def print_stats(self) -> None:
         """打印会话总统计。"""
