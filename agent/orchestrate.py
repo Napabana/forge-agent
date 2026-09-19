@@ -189,6 +189,7 @@ async def orchestrate_run(
     on_log_created: LogCreatedCallback | None = None,
     on_event: Callable[[Any], None] | None = None,
     result_policy: WorktreeResultPolicy | str = WorktreeResultPolicy.KEEP_IF_CHANGED,
+    mcp_config=None,
 ) -> RunResult:
     """
     在隔离的 git worktree 内跑一次完整的 ReAct 循环，全程 TaskEngine 记账 +
@@ -314,6 +315,7 @@ async def orchestrate_run(
             # 不需要额外的路径映射或挂载。
             runtime = LocalRuntime()
 
+        mcp_manager = None
         try:
             if sandbox:
                 # 在调用模型前确认镜像工具和 worktree 可见性。
@@ -333,7 +335,9 @@ async def orchestrate_run(
                 agent_cfg, confirm_callback, runtime,
                 default_cwd=wt.path, workspace=wt.path,
             )
-            permission = PermissionManager(workspace=str(wt.path))
+            from mcp_integration.registry import attach_mcp_tools
+            mcp_manager = attach_mcp_tools(registry, mcp_config)
+            permission = PermissionManager(workspace=str(wt.path), registry=registry)
 
             # 每次权限决策都写入 EventLog，便于审计与回放。
             def _on_decision(
@@ -356,6 +360,8 @@ async def orchestrate_run(
             # Agent.run() 保持同步；EventLog 事件先入队，随后由 forwarder 转发。
             result = agent.run(task_in_wt, log)
         finally:
+            if mcp_manager is not None:
+                mcp_manager.close()
             # runtime 生命周期与 worktree 成果保留策略彼此独立。
             runtime.cleanup()
 
