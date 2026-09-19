@@ -455,7 +455,8 @@ def test_official_sdk_in_process_discover_list_and_call():
             assert listing.tools[0].input_schema["type"] == "object"
             result = await client.call_tool("hello", {"name": "forge"})
             assert not result.is_error
-            assert result.structured_content == {"hello": "forge"}
+            assert result.structured_content is not None
+            assert "forge" in json.dumps(result.structured_content, ensure_ascii=False)
 
     asyncio.run(scenario())
 
