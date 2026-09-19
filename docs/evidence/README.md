@@ -174,6 +174,19 @@ reason = provider_credentials_not_available_in_ci
 
 机器校验锚点：**P2-4 MCP: local fix/validation completed and pushed; real-model A/B not executed**
 
+
+### P2-5 Trajectory-driven Skill Evolution — Implementation Fact / Local Validation Pending
+
+证据：`experience/schema.py`、`experience/trajectory.py`、`experience/candidate.py`、`experience/store.py`、`experience/evaluation.py`、`experience/promotion.py`、`tests/test_skill_evolution.py`、`evals/fixtures/skill_evolution/`、`docs/changes/2026-09-19/P2-5-Trajectory-driven-Skill-Evolution.md`。
+
+已实现 post-run、trajectory-driven、eval-gated Skill improvement pipeline：复用 Trace v2 / TrialResult 作为 canonical artifact，deterministic 提取 verified workflow 与 typed failure→recovery pattern，生成与正式 SkillCatalog 物理隔离的 candidate Skill，再复用 P2-0 Evaluation Harness 做 target / should-trigger / should-not-trigger / non-regression 对照，并由 deterministic PromotionGate 产生 PASS / REJECT / INSUFFICIENT_EVIDENCE / EVALUATION_FAILED。只有持久化 PASS decision 后显式 `promote()` 才能进入现有 project SkillCatalog；用户手工 Skill 不会被静默覆盖。
+
+当前验证边界：ChatGPT 执行环境只完成新模块 `py_compile` 与 standalone core smoke；尚未完成用户本地 P2-5 专项、P2-0/P2-1/P2-2/P2-3/Trace/Failure Harness 回归、Evidence Pack 与全量 pytest，因此本项不是 Deterministic Regression DONE。独立 fixture 证明的是 mechanism design 可测试，不是现实 trajectory 已产生持续智能提升。
+
+边界：没有执行 real-model candidate A/B，没有证明 success rate、pass@1、trigger accuracy、token/step efficiency 或长期 self-improvement 提升；没有在线学习、模型参数训练、当前 run 自改 prompt、自动 promotion、global Skill 自动覆盖。
+
+机器校验锚点：**P2-5 Skill Evolution: implemented; local validation pending; real-model improvement not executed**
+
 ## 面试可说 / 不可说
 
 | 能力 | 可以安全说 | 追问证据 | 过度宣称 |
@@ -183,6 +196,7 @@ reason = provider_credentials_not_available_in_ci
 | cooperative cancellation | “在 Provider、tool lifecycle 和 step 边界做 cooperative cancel，并保留 Trace 终止语义。” | `agent/core.py`, `harness/executor.py`, failure tests | “可以立即强杀任意同步工具或 Provider 请求” |
 | Structured Planning | “在单一 Agent loop 内实现 typed Plan/Step/Revision，支持 off/auto/always、计划生命周期 Trace，并在 context compaction 后持续注入 current plan。” | `agent/planning.py`, `agent/core.py`, `tests/test_structured_planning.py` | “Planning 已证明提升成功率/pass@1/降低 token” |
 | Agent Skills | “实现 filesystem Skill catalog 与 progressive disclosure：metadata 常驻、完整 Skill/reference 按需加载，SkillRuntime 跨 compaction 保留；Skill 不绕过 ToolExecutor 执行脚本。” | `skills/catalog.py`, `skills/runtime.py`, `tests/test_agent_skills.py` | “已证明 Skills 提升成功率/trigger accuracy”“Skill script 可直接绕过权限执行” |
+| Trajectory-driven Skill Evolution | “基于落盘 Trace/Eval artifact 做 deterministic experience mining，将 candidate Skill 与正式 catalog 隔离，并通过现有 Evaluation Harness + deterministic PromotionGate 后显式 promotion。” | `experience/*`, `tests/test_skill_evolution.py`；当前本地回归待验证 | “Agent 会自主进化”“自动学习越来越聪明”“已证明成功率提升” |
 | MCP capability integration | “将 official MCP Python SDK v2 作为 external capability source 接入现有 ToolRegistry/ToolExecutor；remote Tool 继续受 Hook、Permission、Cancel、Planning effect gate 与 Trace 约束，并显式管理 server connection lifecycle。” | `mcp_integration/*`, `agent/runner.py`, `tests/test_mcp_integration.py` | “MCP regression 已通过”“接任意 MCP server 都安全”“MCP 已提升 coding 成功率/pass@1” |
 | Failure-aware Recovery | “在单一 Agent loop 内实现 typed FailureContext/RecoveryDecision、bounded recovery 与 plan revision gate；Provider retry、cancel、infra 保持独立语义。” | `agent/recovery.py`, `agent/core.py`, `tests/test_structured_recovery.py` | “已证明提升成功率”“生产级 fault tolerance”“恢复成功率 X%” |
 | Error Recovery / Failure Harness | “对 transient provider retry、工具失败 Observation、循环/完成性失败和基础设施异常做了确定性故障回归。” | `tests/test_failure_harness*.py` | “Fault tolerance 达到生产级”“故障恢复成功率 X%” |
@@ -206,6 +220,7 @@ reason = provider_credentials_not_available_in_ci
 | Tool Calling | KEEP | “统一 Tool schema/validation、Hook、Permission、execution 与 Observation 生命周期。” | executor/lifecycle tests |
 | Structured Planning | KEEP | “实现 typed ExecutionPlan/PlanStep/PlanRevision，并将 current plan 作为 runtime context 注入单一 Agent loop，支持 off/auto/always 与 Trace lifecycle。” | deterministic regression 已通过；没有 real-model A/B，不能写效果提升 |
 | Agent Skills | KEEP | “实现 project/global filesystem Skill catalog 与 progressive disclosure，按需加载 Skill/reference，并将当前 Skill state 作为 runtime context 保留。” | deterministic regression 已通过；没有 real-model A/B，不能写 trigger/成功率百分比 |
+| Trajectory-driven Skill Evolution | HOLD UNTIL LOCAL VALIDATION | “基于 Trace / Eval artifact 实现 trajectory-driven Skill candidate mining，通过 deterministic promotion gate 检查 target/non-regression/trigger/overhead，显式 promotion 后才进入正式 SkillCatalog。” | Implementation 已落地；本地专项/回归/全量 pytest 尚待用户验证，不能写效果提升或‘自主进化’ |
 | MCP Client / Tool Adapter | KEEP | “基于 official MCP Python SDK v2 将外部 MCP Tool 适配进既有 ToolRegistry/ToolExecutor，并统一复用 Permission、Hook、cooperative cancel、Planning effect gate 与 Trace。” | 本地修复/验证已完成并 push；当前无 real-model A/B，不能写效果提升或生产级外部服务可靠性 |
 | Failure-aware recovery | KEEP | “实现 typed FailureContext/RecoveryDecision 与 bounded RecoveryPolicy，并把 repeated failure 与 P2-1 plan revision gate 联动。” | deterministic regression 已通过；没有 real-model A/B，不能写效果百分比 |
 | Error recovery | REWORD | “实现 transient provider retry、typed failure Observation、loop/completion guard，并用 Failure Harness 做确定性故障回归。” | Failure Harness；不要说生产级容错率 |

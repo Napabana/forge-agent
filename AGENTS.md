@@ -72,6 +72,7 @@ python -m pytest -q
 - `runtime/worktree.py`、`agent/orchestrate.py`：隔离 worktree、成果检测和保留策略。
 - `tools/`：具体工具与 runtime 适配。
 - `mcp_integration/`：P2-4 MCP Host client bridge；official SDK connection lifecycle、remote Tool adapter 与 ToolRegistry registration。
+- `experience/`：P2-5 offline trajectory/experience/candidate/evaluation/promotion pipeline；不进入 Agent 主循环，正式生效仍由 P2-3 SkillCatalog/SkillRuntime 负责。
 - `tests/test_failure_harness.py`、`tests/test_failure_harness_isolate.py`：P1-4 默认离线 deterministic failure matrix；fake 只注入故障，不实现第二套 Agent loop。
 - `docs/evidence/README.md`：P1-6 统一 Evidence Index，记录 Claim→Evidence→Result→Limitation 与简历/面试表述边界。
 - `evals/verify_evidence_pack.py`：P1-6 默认离线只读证据校验入口。
@@ -459,3 +460,19 @@ pytest -q
 - 本轮没有执行 real-model `planning_recovery_skills vs planning_recovery_skills_mcp` A/B；不得宣称 MCP 提升 success rate、pass@1、token efficiency、latency 或任意外部 MCP server 的生产可靠性。
 - 验证日志：`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter本地回归-DONE.md`。
 - P2 Agent Intelligence 现在只剩 P2-5 Trajectory-driven Skill Evolution。
+
+
+### 最后交接（2026-09-19，P2-5 Trajectory-driven Skill Evolution）
+
+- P2-5 首版实现已落地，当前状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`；实现代码提交为 `af363b2acb536e8d9b169a57bce826e7ef6c0412`，最终交接以当前 dev 最新 HEAD 为准。
+- 新增 `experience/schema.py / trajectory.py / candidate.py / store.py / evaluation.py / promotion.py`；P2-5 是 post-run offline subsystem，不修改 `ExecutionRunner → Agent → ToolExecutor` 主执行链，也不新增第二套 Agent loop。
+- Trajectory 不复制 transcript：Trace v2 是 process canonical source，P2-0 TrialResult/GraderResult 是 eval judgment；`TrajectoryRef` 只保存 run/task/trace hash/ref 与可选 trial correlation。
+- positive mining 只接受成功且 independent acceptance passed 的 trajectory；cancel、infrastructure failure、incomplete/gave_up、未请求/未通过 acceptance 不生成成功经验。Recovery pattern 直接消费 P2-2 typed `failure_classified / recovery_selected / plan_revised`，不从自然语言猜。
+- Candidate 使用 P2-3 标准 `SKILL.md`，但隔离在 repository-bounded `.forge-agent/experience/` store，普通 Agent/SkillCatalog 默认看不到。Candidate/evaluation/decision 为 immutable artifact，state 独立维护，所有身份由 version/hash/provenance 关联。
+- Candidate evaluation 复用 P2-0 `EvaluationHarness`，正式比较 baseline 与 candidate-enabled 两个 variant；fixture suite 独立覆盖 target、should-trigger、should-not-trigger、non-regression，不修改 P2-0 frozen 8-case suite。
+- deterministic PromotionGate 区分 `PASS / REJECT / INSUFFICIENT_EVIDENCE / EVALUATION_FAILED`，检查 evidence count、outcome/non-regression、trigger/process、token/step overhead 和 stale hash/version；evaluation infrastructure failure 不算 candidate reject。
+- `PromotionManager.promote()` 是显式动作：必须验证 persisted PASS decision、matching evaluation record、candidate status/hash/version。首版只支持 project Skill；用户手工 Skill 无 Forge evolution provenance 时禁止覆盖；managed Skill 支持 parent version/hash 升级校验与 approved snapshot rollback。
+- P2-5 不修改 source Trace、不创建 Trace v3；offline lifecycle 另写 bounded `evolution_events.jsonl`，只保存 candidate/eval/run/trace hash/reference 等 metadata，不重新塞完整 trajectory、prompt 或 Skill 内容。
+- 新增 `tests/test_skill_evolution.py`、`evals/fixtures/skill_evolution/`，并在 `pyproject.toml` 加入 `experience*` package/coverage discovery。
+- ChatGPT 容器已实际运行 `py_compile` 与 standalone core smoke，均通过；由于容器无法解析 github.com，未运行当前仓库级 pytest。不得把本轮写成 DONE，也不得宣称 Skill Evolution 提升真实 coding success、pass@1、token/latency 或长期智能。
+- 本轮更新日志：`docs/changes/2026-09-19/P2-5-Trajectory-driven-Skill-Evolution.md`。
