@@ -343,6 +343,36 @@ def test_config_defaults_disabled_and_validates_ids_env_and_transport(monkeypatc
         )
 
 
+def test_stdio_startup_failure_is_remote_mcp_error_not_forge_infrastructure():
+    manager = MCPClientManager(
+        MCPConfig(
+            enabled=True,
+            servers=(
+                MCPServerConfig(
+                    id="missing",
+                    transport="stdio",
+                    command="forge-definitely-missing-mcp-command",
+                    timeout_seconds=0.5,
+                ),
+            ),
+        )
+    )
+    with pytest.raises(MCPRemoteFailure, match="startup/discovery failed"):
+        manager.start()
+    manager.close()
+
+
+def test_streamable_http_transport_uses_official_client_url_target():
+    server = MCPServerConfig(
+        id="web",
+        transport="streamable_http",
+        url="https://example.invalid/mcp",
+        timeout_seconds=1.0,
+    )
+    client = MCPClientManager._make_client(server)
+    assert client.server == "https://example.invalid/mcp"
+
+
 def test_official_sdk_in_process_discover_list_and_call():
     async def scenario() -> None:
         server = MCPServer("in-process-fixture")
@@ -376,6 +406,8 @@ def test_official_stdio_discover_invoke_structured_error_timeout_and_cleanup():
         descriptors = {descriptor.remote_name: descriptor for descriptor in manager.tools}
         assert {"lookup_project_guidance", "echo_text", "record_note", "slow_lookup", "fail_lookup"} <= set(descriptors)
         assert manager.snapshots[0].tools_supported is True
+        assert manager.snapshots[0].resources_supported is True
+        assert manager.snapshots[0].prompts_supported is True
 
         registry = ToolRegistry()
         for descriptor in manager.tools:
