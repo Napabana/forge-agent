@@ -83,6 +83,15 @@ def build_report(results: Iterable[TrialResult], *, suite_id: str) -> dict[str, 
                 "mean_skill_references_loaded": _mean([
                     row.metrics.skill_reference_loaded_count for row in group
                 ]),
+                "mean_mcp_tools_discovered": _mean([
+                    row.metrics.mcp_tool_discovered_count for row in group
+                ]),
+                "mean_mcp_tool_calls": _mean([
+                    row.metrics.mcp_tool_call_count for row in group
+                ]),
+                "mean_mcp_tool_failures": _mean([
+                    row.metrics.mcp_tool_failure_count for row in group
+                ]),
                 "skill_selection_process_checks": len(skill_selection_checks),
                 "skill_selection_process_passes": sum(
                     grader.passed for grader in skill_selection_checks
