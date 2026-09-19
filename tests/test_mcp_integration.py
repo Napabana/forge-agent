@@ -16,6 +16,8 @@ from agent.core import AgentConfig
 from agent.runner import ExecutionRunner, RunRequest
 from agent.task import Action, ActionType, EventType, RunStatus, Task, ToolCall
 from config.schema import MCPConfig, MCPServerConfig, _parse
+from evals.coding_agent.runner import validate_suite_references
+from evals.coding_agent.schema import EvaluationSuite
 from harness import HookEvent, Hooks, ToolExecutionCanceled, ToolExecutor
 from llm.base import MockBackend
 from mcp_integration.adapter import MCPToolAdapter, namespaced_tool_name
@@ -32,6 +34,7 @@ from tools.base import ToolEffect, ToolErrorType, ToolRegistry
 _ROOT = Path(__file__).resolve().parents[1]
 _SERVER = _ROOT / "evals" / "fixtures" / "coding_agent" / "mcp" / "server.py"
 _CRASH_SERVER = _ROOT / "tests" / "fixtures" / "mcp_crash_server.py"
+_MCP_SUITE = _ROOT / "evals" / "fixtures" / "coding_agent" / "mcp_suite.json"
 
 
 def _config(*, ids: tuple[str, ...] = ("eval_docs",)) -> MCPConfig:
@@ -637,6 +640,21 @@ def test_remote_capability_failure_is_visible_to_structured_recovery(tmp_path: P
     classified = [row for row in rows if row["event_type"] == "failure_classified"]
     assert classified
     assert classified[0]["payload"]["error_type"] == ToolErrorType.REMOTE_CAPABILITY.value
+
+
+def test_mcp_specific_eval_suite_is_deterministic_and_requires_guidance(tmp_path: Path):
+    suite = EvaluationSuite.load(_MCP_SUITE)
+    assert suite.suite_id == "p2-4-mcp-capability-smoke"
+    assert len(suite.tasks) == 1
+    task = suite.tasks[0]
+    trace_graders = [grader for grader in task.graders if grader.kind == "run_trace"]
+    assert len(trace_graders) == 1
+    assert (
+        trace_graders[0].params["required_tool"]
+        == "mcp__eval_docs__lookup_project_guidance"
+    )
+    references = validate_suite_references(suite, tmp_path / "references")
+    assert references[task.task_id] == ["behavior", "canonical-setting"]
 
 
 def test_mcp_package_is_in_setuptools_discovery():
