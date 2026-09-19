@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "suite_id": "p2-4-mcp-capability-smoke",
+  "description": "Single deterministic coding task for the MCP capability variant. The required policy value is supplied by the fixed local MCP guidance server, while outcome grading remains repository-local and deterministic.",
+  "defaults": {
+    "max_steps": 20,
+    "budget_tokens": 40000
+  },
+  "tasks": [
+    {
+      "id": "external-policy-guidance",
+      "description": "Update this repository to the organization-required policy mode. The required value and canonical file are documented in the available external project guidance capability. Use that guidance rather than guessing, update the canonical setting, and finish only after verifying the resulting behavior.",
+      "files": {
+        "src/app/__init__.py": "",
+        "src/app/config.py": "POLICY_MODE = 'legacy'\n",
+        "src/app/runtime.py": "from .config import POLICY_MODE\n\n\ndef policy_mode():\n    return POLICY_MODE\n"
+      },
+      "reference_files": {
+        "src/app/config.py": "POLICY_MODE = 'strict'\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "mcp",
+        "external-guidance",
+        "configuration",
+        "single-file"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys; sys.path.insert(0, 'src'); from app.runtime import policy_mode; assert policy_mode() == 'strict'"
+            ]
+          }
+        },
+        {
+          "id": "canonical-setting",
+          "kind": "file",
+          "params": {
+            "path": "src/app/config.py",
+            "contains": "POLICY_MODE = 'strict'"
+          }
+        },
+        {
+          "id": "mcp-guidance-used",
+          "kind": "run_trace",
+          "params": {
+            "required_tool": "mcp__eval_docs__lookup_project_guidance"
+          }
+        }
+      ]
+    }
+  ]
+}
