@@ -150,8 +150,7 @@ class MCPClientManager:
                     await client.__aenter__()
                 entered.append(client)
                 async with asyncio.timeout(server.timeout_seconds):
-                    listing = await client.list_tools()
-                tool_items = tuple(listing.tools)
+                    tool_items = await self._list_all_tools(client)
                 snapshot = self._snapshot(server, client, len(tool_items))
                 self._connections[server.id] = _Connection(server, client, snapshot)
                 for tool in tool_items:
@@ -189,6 +188,22 @@ class MCPClientManager:
                 # Cleanup stays best-effort here; the owning thread still terminates.
                 pass
         self._connections.clear()
+
+    @staticmethod
+    async def _list_all_tools(client: Client) -> tuple[Any, ...]:
+        items: list[Any] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            listing = await client.list_tools(cursor=cursor, cache_mode="bypass")
+            items.extend(listing.tools)
+            next_cursor = getattr(listing, "next_cursor", None)
+            if not next_cursor:
+                return tuple(items)
+            if next_cursor in seen_cursors:
+                raise MCPRemoteFailure("MCP tools/list returned a repeated pagination cursor")
+            seen_cursors.add(next_cursor)
+            cursor = str(next_cursor)
 
     @staticmethod
     def _make_client(server: MCPServerConfig) -> Client:
