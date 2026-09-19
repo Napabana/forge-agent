@@ -99,12 +99,31 @@ class ContextConfig:
     semantic_packet_max_tokens: int = 16_000
 
 
+@dataclass(frozen=True)
+class MCPServerConfig:
+    id: str
+    enabled: bool = True
+    transport: str = "stdio"
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = field(default_factory=dict)
+    url: str | None = None
+    timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
+class MCPConfig:
+    enabled: bool = False
+    servers: tuple[MCPServerConfig, ...] = ()
+
+
 @dataclass
 class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     agent: AgentCfg = field(default_factory=AgentCfg)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
 
 
 _ENV_RE = re.compile(r"\$\{(\w+)\}")
@@ -184,6 +203,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     agent_raw = data.get("agent", {})
     tools_raw = data.get("tools", {})
     context_raw = data.get("context", {})
+    mcp_raw = data.get("mcp", {})
 
     semantic_packet_max_tokens = int(context_raw.get("semantic_packet_max_tokens", 16_000))
     if semantic_packet_max_tokens <= 0:
@@ -248,6 +268,73 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     if skills_max_chars < 1 or skills_reference_max_chars < 1:
         raise ValueError("agent skill context limits must be positive")
 
+    if not isinstance(mcp_raw, dict):
+        raise ValueError("mcp must be an object")
+    mcp_enabled = mcp_raw.get("enabled", False)
+    if not isinstance(mcp_enabled, bool):
+        raise ValueError("mcp.enabled must be boolean")
+    servers_raw = mcp_raw.get("servers", [])
+    if not isinstance(servers_raw, list):
+        raise ValueError("mcp.servers must be a list")
+    server_ids: set[str] = set()
+    mcp_servers: list[MCPServerConfig] = []
+    for index, server_raw in enumerate(servers_raw):
+        if not isinstance(server_raw, dict):
+            raise ValueError(f"mcp.servers[{index}] must be an object")
+        server_id = str(server_raw.get("id", "")).strip()
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", server_id):
+            raise ValueError(
+                f"mcp.servers[{index}].id must match [A-Za-z][A-Za-z0-9_-]{{0,63}}"
+            )
+        if server_id in server_ids:
+            raise ValueError(f"duplicate MCP server id: {server_id}")
+        server_ids.add(server_id)
+        enabled = server_raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"mcp server {server_id!r} enabled must be boolean")
+        transport = str(server_raw.get("transport", "stdio")).strip().lower()
+        if transport not in {"stdio", "streamable_http"}:
+            raise ValueError(
+                f"mcp server {server_id!r} transport must be stdio or streamable_http"
+            )
+        timeout_seconds = float(server_raw.get("timeout_seconds", 30.0))
+        if timeout_seconds <= 0:
+            raise ValueError(f"mcp server {server_id!r} timeout_seconds must be positive")
+        args_raw = server_raw.get("args", [])
+        if not isinstance(args_raw, list) or any(not isinstance(v, str) for v in args_raw):
+            raise ValueError(f"mcp server {server_id!r} args must be a string list")
+        env_raw = server_raw.get("env", {})
+        if not isinstance(env_raw, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str)
+            for k, v in env_raw.items()
+        ):
+            raise ValueError(f"mcp server {server_id!r} env must be a string mapping")
+        command_raw = server_raw.get("command")
+        command = command_raw.strip() if isinstance(command_raw, str) else None
+        url_raw = server_raw.get("url")
+        url = url_raw.strip() if isinstance(url_raw, str) else None
+        if transport == "stdio" and not command:
+            raise ValueError(f"mcp stdio server {server_id!r} requires command")
+        if transport == "streamable_http" and not (
+            url and (url.startswith("http://") or url.startswith("https://"))
+        ):
+            raise ValueError(
+                f"mcp streamable_http server {server_id!r} requires an http(s) url"
+            )
+        mcp_servers.append(
+            MCPServerConfig(
+                id=server_id,
+                enabled=enabled,
+                transport=transport,
+                command=command,
+                args=tuple(args_raw),
+                env=dict(env_raw),
+                url=url,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+    mcp = MCPConfig(enabled=mcp_enabled, servers=tuple(mcp_servers))
+
     llm = LLMConfig(provider=llm_raw.get("provider", "anthropic"), protocol=llm_raw.get("protocol", "auto"), model=llm_raw.get("model", "claude-sonnet-4-5"), api_key=llm_raw.get("api_key", ""), base_url=llm_raw.get("base_url", "") or "", context_window=context_window, model_max_output_tokens=model_max_output_tokens, max_output_tokens=max_output_tokens)
     agent = AgentCfg(
         max_steps=int(agent_raw.get("max_steps", 40)),
@@ -267,7 +354,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     file_raw = tools_raw.get("file", {})
     tools = ToolsConfig(shell=ShellToolConfig(timeout=int(shell_raw.get("timeout", 30)), max_output_tokens=int(shell_raw.get("max_output_tokens", 8_000))), file=FileToolConfig(max_view_lines=int(file_raw.get("max_view_lines", 100))))
     context = ContextConfig(repo_map_budget=int(context_raw.get("repo_map_budget", 8_000)), history_window=int(context_raw.get("history_window", 20)), semantic_packet_max_tokens=semantic_packet_max_tokens)
-    config = AppConfig(llm=llm, agent=agent, tools=tools, context=context)
+    config = AppConfig(llm=llm, agent=agent, tools=tools, context=context, mcp=mcp)
     _refresh_budget_bridges(config)
     return config
 
