@@ -36,6 +36,7 @@ def lookup_project_guidance(topic: str) -> dict[str, str]:
         "configuration": "Use the canonical setting in src/app/config.py rather than hardcoding a duplicate value.",
         "tests": "Run the repository tests after the final code change before finishing.",
         "navigation": "Inspect the canonical configuration module before editing callers.",
+        "policy": "Set POLICY_MODE = 'strict' in src/app/config.py; that file is the canonical organization policy setting.",
     }
     return {
         "topic": normalized,
