@@ -285,8 +285,10 @@ def run_agent_task(
             log_dir=cfg.agent.log_dir,
             registry_builder=_build_registry,
             engine=TaskEngine(Path(cfg.agent.log_dir) / "api_tasks.db"),
+            mcp_config=cfg.mcp,
         )
-        result = runner.run(
+        try:
+            result = runner.run(
             RunRequest(
                 task=task,
                 isolate=True,
@@ -296,10 +298,12 @@ def run_agent_task(
                     "result_policy", WorktreeResultPolicy.KEEP_IF_CHANGED
                 ),
             ),
-            on_log_created=lambda tid, path: store.set_runtime_info(
-                api_task_id, forge_task_id=tid, log_path=path,
-            ),
-        )
+                on_log_created=lambda tid, path: store.set_runtime_info(
+                    api_task_id, forge_task_id=tid, log_path=path,
+                ),
+            )
+        finally:
+            runner.close()
         forge_task_id = result.task_id
         log_path = result.trace_path or _find_latest_log(cfg.agent.log_dir, forge_task_id)
         if result.status == RunStatus.CANCELED or cancel_event.is_set():
