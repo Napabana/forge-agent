@@ -289,15 +289,15 @@ def run_agent_task(
         )
         try:
             result = runner.run(
-            RunRequest(
-                task=task,
-                isolate=True,
-                sandbox=bool(request.get("sandbox", False)),
-                cancel_event=cancel_event,
-                result_policy=request.get(
-                    "result_policy", WorktreeResultPolicy.KEEP_IF_CHANGED
+                RunRequest(
+                    task=task,
+                    isolate=True,
+                    sandbox=bool(request.get("sandbox", False)),
+                    cancel_event=cancel_event,
+                    result_policy=request.get(
+                        "result_policy", WorktreeResultPolicy.KEEP_IF_CHANGED
+                    ),
                 ),
-            ),
                 on_log_created=lambda tid, path: store.set_runtime_info(
                     api_task_id, forge_task_id=tid, log_path=path,
                 ),
