@@ -162,6 +162,33 @@ def test_malformed_remote_schema_is_rejected_deterministically(schema):
         _adapter(schema=schema)
 
 
+def test_untrusted_capability_metadata_is_bounded():
+    huge_schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "string",
+                "description": "x" * 40_000,
+            }
+        },
+    }
+    with pytest.raises(ValueError, match="exceeds"):
+        _adapter(schema=huge_schema)
+    with pytest.raises(ValueError, match="name cannot be empty"):
+        _adapter(remote_name="")
+
+    descriptor = _descriptor()
+    descriptor = MCPToolDescriptor(
+        **{
+            **descriptor.__dict__,
+            "description": "d" * 5_000,
+        }
+    )
+    adapter = MCPToolAdapter(_FakeManager(), descriptor)
+    assert len(adapter.description) <= 2_000
+    assert adapter.description.endswith("[description truncated]")
+
+
 def test_remote_annotations_map_conservatively_to_tool_effect():
     read_only = _adapter(annotations={"read_only_hint": True})
     unknown = _adapter(annotations={})
