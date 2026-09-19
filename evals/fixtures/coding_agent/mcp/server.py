@@ -9,6 +9,18 @@ from mcp.types import ToolAnnotations
 mcp = MCPServer("forge-eval-mcp")
 
 
+@mcp.resource("fixture://guidance")
+def guidance_resource() -> str:
+    """Expose one deterministic resource so capability negotiation is observable."""
+    return "Forge MCP fixture guidance resource."
+
+
+@mcp.prompt()
+def guidance_prompt(topic: str = "navigation") -> str:
+    """Expose one deterministic prompt; Forge P2-4 records capability only."""
+    return f"Inspect repository guidance for {topic}."
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         read_only_hint=True,
