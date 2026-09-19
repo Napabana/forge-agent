@@ -65,12 +65,15 @@ def _descriptor(
         transport="stdio",
         remote_name=remote_name,
         description="fixture tool",
-        input_schema=schema
-        or {
-            "type": "object",
-            "properties": {"value": {"type": "string"}},
-            "required": ["value"],
-        },
+        input_schema=(
+            schema
+            if schema is not None
+            else {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+            }
+        ),
         annotations=annotations or {},
         timeout_seconds=timeout_seconds,
         trust_read_only_annotations=trust_read_only_annotations,
@@ -549,9 +552,16 @@ def test_runner_agent_tool_executor_real_stdio_host_e2e(tmp_path: Path):
 
 
 def test_planning_mutation_classification_applies_to_mcp_adapter(tmp_path: Path):
-    read_only = _adapter(annotations={"read_only_hint": True})
+    read_only = _adapter(
+        annotations={"read_only_hint": True},
+        remote_name="read_value",
+    )
     mutation_manager = _FakeManager()
-    mutation = _adapter(mutation_manager, annotations={})
+    mutation = _adapter(
+        mutation_manager,
+        annotations={},
+        remote_name="write_value",
+    )
     registry = ToolRegistry().register(read_only).register(mutation)
     assert registry.is_mutating(read_only.name) is False
     assert registry.is_mutating(mutation.name) is True
