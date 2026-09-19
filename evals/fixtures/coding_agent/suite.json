@@ -49,6 +49,18 @@
           "params": {
             "changed": true
           }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "forbidden": [
+              "bug-fix",
+              "test-and-verify",
+              "repository-navigation"
+            ]
+          },
+          "required": false
         }
       ]
     },
@@ -86,6 +98,19 @@
           "params": {
             "changed": true
           }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "bug-fix"
+            ],
+            "forbidden": [
+              "repository-navigation"
+            ]
+          },
+          "required": false
         }
       ]
     },
@@ -126,6 +151,17 @@
             "run_status": "success",
             "min_test_attempts": 1
           }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "bug-fix",
+              "test-and-verify"
+            ]
+          },
+          "required": false
         }
       ]
     },
@@ -222,6 +258,16 @@
             "path": "src/app/client.py",
             "not_contains": "return 10"
           }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "repository-navigation"
+            ]
+          },
+          "required": false
         }
       ]
     },
@@ -262,6 +308,16 @@
             "run_status": "success",
             "min_test_attempts": 1
           }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "test-and-verify"
+            ]
+          },
+          "required": false
         }
       ]
     },
@@ -302,6 +358,17 @@
             "run_status": "success",
             "min_test_attempts": 2
           }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "bug-fix",
+              "test-and-verify"
+            ]
+          },
+          "required": false
         }
       ]
     },
@@ -353,6 +420,16 @@
             "termination_reason": "completion_satisfied",
             "min_test_attempts": 1
           }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "test-and-verify"
+            ]
+          },
+          "required": false
         }
       ]
     }

@@ -68,6 +68,11 @@ class AgentCfg:
     planning_mode: str = "off"
     recovery_mode: str = "off"
     recovery_max_attempts: int = 4
+    skills_enabled: bool = False
+    skills_global_dir: str | None = "~/.forge-agent/skills"
+    skills_max_loaded: int = 3
+    skills_max_chars: int = 12_000
+    skills_reference_max_chars: int = 8_000
 
 
 @dataclass
@@ -222,6 +227,27 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     if recovery_max_attempts < 1:
         raise ValueError("agent.recovery_max_attempts must be >= 1")
 
+    skills_enabled_raw = agent_raw.get("skills_enabled", False)
+    if not isinstance(skills_enabled_raw, bool):
+        raise ValueError("agent.skills_enabled must be boolean")
+    skills_enabled = skills_enabled_raw
+    skills_global_dir_raw = agent_raw.get("skills_global_dir", "~/.forge-agent/skills")
+    if skills_global_dir_raw is None:
+        skills_global_dir = None
+    elif isinstance(skills_global_dir_raw, str):
+        skills_global_dir = skills_global_dir_raw.strip() or None
+    else:
+        raise ValueError("agent.skills_global_dir must be a string or null")
+    skills_max_loaded = int(agent_raw.get("skills_max_loaded", 3))
+    skills_max_chars = int(agent_raw.get("skills_max_chars", 12_000))
+    skills_reference_max_chars = int(
+        agent_raw.get("skills_reference_max_chars", 8_000)
+    )
+    if skills_max_loaded < 1:
+        raise ValueError("agent.skills_max_loaded must be >= 1")
+    if skills_max_chars < 1 or skills_reference_max_chars < 1:
+        raise ValueError("agent skill context limits must be positive")
+
     llm = LLMConfig(provider=llm_raw.get("provider", "anthropic"), protocol=llm_raw.get("protocol", "auto"), model=llm_raw.get("model", "claude-sonnet-4-5"), api_key=llm_raw.get("api_key", ""), base_url=llm_raw.get("base_url", "") or "", context_window=context_window, model_max_output_tokens=model_max_output_tokens, max_output_tokens=max_output_tokens)
     agent = AgentCfg(
         max_steps=int(agent_raw.get("max_steps", 40)),
@@ -231,6 +257,11 @@ def _parse(data: dict[str, Any]) -> AppConfig:
         planning_mode=planning_mode,
         recovery_mode=recovery_mode,
         recovery_max_attempts=recovery_max_attempts,
+        skills_enabled=skills_enabled,
+        skills_global_dir=skills_global_dir,
+        skills_max_loaded=skills_max_loaded,
+        skills_max_chars=skills_max_chars,
+        skills_reference_max_chars=skills_reference_max_chars,
     )
     shell_raw = tools_raw.get("shell", {})
     file_raw = tools_raw.get("file", {})

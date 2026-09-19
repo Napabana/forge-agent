@@ -442,6 +442,11 @@ def run_on_issue(
         planning_mode=config.agent.planning_mode,
         recovery_mode=config.agent.recovery_mode,
         recovery_max_attempts=config.agent.recovery_max_attempts,
+        skills_enabled=config.agent.skills_enabled,
+        skills_global_dir=config.agent.skills_global_dir,
+        skills_max_loaded=config.agent.skills_max_loaded,
+        skills_max_chars=config.agent.skills_max_chars,
+        skills_reference_max_chars=config.agent.skills_reference_max_chars,
         stream=reasoning_stream,
         thought_callback=_thought_cb if reasoning_stream else None,
     )

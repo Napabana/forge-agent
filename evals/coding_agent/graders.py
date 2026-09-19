@@ -105,6 +105,32 @@ def grade(spec: GraderSpec, context: GraderContext) -> GraderResult:
             {"status_porcelain": completed.stdout[-4000:]},
         )
 
+    if spec.kind == "skill_selection":
+        trace_path = context.run_result.trace_path if context.run_result else None
+        selected = {
+            str((event.get("payload") or {}).get("skill") or "")
+            for event in load_trace_events(trace_path)
+            if event.get("event_type") == "skill_loaded"
+        }
+        selected.discard("")
+        expected_any = {str(value) for value in spec.params.get("expected_any", [])}
+        forbidden = {str(value) for value in spec.params.get("forbidden", [])}
+        expected_ok = not expected_any or bool(selected & expected_any)
+        forbidden_ok = not bool(selected & forbidden)
+        passed = expected_ok and forbidden_ok
+        detail = (
+            f"selected={sorted(selected)}, expected_any={sorted(expected_any)}, "
+            f"forbidden={sorted(forbidden)}"
+        )
+        return GraderResult(
+            spec.grader_id,
+            spec.kind,
+            passed,
+            spec.required,
+            detail,
+            {"selected_skills": sorted(selected)},
+        )
+
     metrics = context.metrics or TrialMetrics()
     result = context.run_result
     checks: list[tuple[str, bool]] = []
@@ -187,6 +213,10 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
     recovery_selected_count = 0
     recovery_replan_count = 0
     recovery_exhausted_count = 0
+    skill_discovered_count = 0
+    skill_selected_count = 0
+    skill_loaded_count = 0
+    skill_reference_loaded_count = 0
     for event in events:
         event_type = event.get("event_type")
         payload = event.get("payload") or {}
@@ -215,6 +245,14 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
             recovery_replan_count += int(payload.get("strategy") == "replan")
         elif event_type == "recovery_exhausted":
             recovery_exhausted_count += 1
+        elif event_type == "skill_discovered":
+            skill_discovered_count += 1
+        elif event_type == "skill_selected":
+            skill_selected_count += 1
+        elif event_type == "skill_loaded":
+            skill_loaded_count += 1
+        elif event_type == "skill_reference_loaded":
+            skill_reference_loaded_count += 1
     return TrialMetrics(
         steps=run_result.steps_taken,
         total_tokens=run_result.total_tokens,
@@ -234,4 +272,8 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
         recovery_selected_count=recovery_selected_count,
         recovery_replan_count=recovery_replan_count,
         recovery_exhausted_count=recovery_exhausted_count,
+        skill_discovered_count=skill_discovered_count,
+        skill_selected_count=skill_selected_count,
+        skill_loaded_count=skill_loaded_count,
+        skill_reference_loaded_count=skill_reference_loaded_count,
     )

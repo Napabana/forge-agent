@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-_SUPPORTED_GRADERS = {"command", "file", "repository_state", "run_trace"}
+_SUPPORTED_GRADERS = {"command", "file", "repository_state", "run_trace", "skill_selection"}
 
 
 def _validate_id(value: str, *, field_name: str) -> None:
@@ -47,6 +47,25 @@ class GraderSpec:
         elif self.kind == "repository_state":
             if "changed" not in self.params:
                 raise ValueError(f"repository_state grader {self.grader_id!r} requires params.changed")
+        elif self.kind == "skill_selection":
+            supported = {"expected_any", "forbidden"}
+            unknown = sorted(set(self.params) - supported)
+            if unknown:
+                raise ValueError(
+                    f"skill_selection grader {self.grader_id!r} has unsupported params: {unknown}"
+                )
+            if not any(key in self.params for key in supported):
+                raise ValueError(
+                    f"skill_selection grader {self.grader_id!r} requires expected_any or forbidden"
+                )
+            for key in supported:
+                values = self.params.get(key, [])
+                if not isinstance(values, list) or not all(
+                    isinstance(value, str) and value for value in values
+                ):
+                    raise ValueError(
+                        f"skill_selection grader {self.grader_id!r} {key} must be a string list"
+                    )
         elif self.kind == "run_trace":
             supported = {
                 "run_status", "termination_reason", "required_tool", "min_test_attempts",
@@ -212,6 +231,10 @@ class TrialMetrics:
     recovery_selected_count: int = 0
     recovery_replan_count: int = 0
     recovery_exhausted_count: int = 0
+    skill_discovered_count: int = 0
+    skill_selected_count: int = 0
+    skill_loaded_count: int = 0
+    skill_reference_loaded_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

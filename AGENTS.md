@@ -397,3 +397,17 @@ pytest -q
 - 本轮没有执行 real-model `planning vs planning_recovery` A/B，不产生 success-rate、pass@1、token、latency 或 recovery effectiveness 数字。
 - 下一阶段进入 P2-3 Agent Skills；Skill 必须作为 workflow/context capability 接入现有 Agent 与 ToolExecutor，不得绕过 Permission/Hook/Cancel/Trace。
 - 验证日志：`docs/changes/2026-09-19/P2-2-Failure-aware-Recovery-Replanning本地回归-DONE.md`。
+
+### 最后交接（2026-09-19，P2-3 Agent Skills）
+
+- P2-3 已完成首版代码实现，当前状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`；实现基线为 P2-2 DONE 后的当前 dev。
+- 新增 `skills/catalog.py` / `skills/runtime.py`：扫描 `<repo>/.agents/skills/` 与 global root，校验 `SKILL.md` frontmatter，project 同名 Skill 覆盖 global，单个坏 Skill 只记 discovery issue，不阻断 Agent。
+- progressive disclosure：system 首轮只包含 metadata；模型显式 `skill_load` 后才加载完整 instructions；已加载 Skill 的 reference 可通过 `skill_reference_load` 再按需进入 runtime context。
+- SkillRuntime 与 Planning/Recovery 一样是 per-run runtime state；loaded Skill/reference 每轮重新注入 system context，不依赖 canonical history，因此 compaction/history override 不会丢当前 Skill state。
+- Skill scripts 只暴露 manifest，Skill subsystem 不执行脚本；任何 executable action 仍必须使用现有 Tool/Shell，经 ToolExecutor/Permission/Hook/Cancel/Trace。
+- 新增 Trace v2 Skill events：`skill_discovered / skill_selected / skill_loaded / skill_reference_loaded / skill_rejected`。
+- 正式 config 增加 `skills_enabled`、global dir、loaded/context 上限；默认关闭并接入 CLI/Chat/API/GitHub Issue。
+- P2-0 Eval 新增 `planning_recovery_skills` variant，固定使用 eval fixture Skills；`skill_selection` 是 required=false 的 process grader，不参与 coding task success/acceptance。
+- `pyproject.toml` 已加入 `skills*` package discovery，避免源码测试通过但安装包漏掉新 package。
+- 新增 `tests/test_agent_skills.py`，并扩展 `tests/test_coding_agent_eval.py`、`tests/test_day6.py`。当前 ChatGPT 环境未运行 pytest，不得写 DONE，也不得宣称 Skill 提升成功率/token/latency。
+- 更新日志：`docs/changes/2026-09-19/P2-3-Agent-Skills.md`。

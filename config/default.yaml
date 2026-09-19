@@ -97,6 +97,11 @@ agent:
   planning_mode: "off" # off | auto | always；默认保持 baseline ReAct
   recovery_mode: "off" # off | structured；P2-2 默认关闭以保持旧行为
   recovery_max_attempts: 4
+  skills_enabled: false # P2-3 默认关闭；启用后仅 metadata 常驻，正文按需加载
+  skills_global_dir: "~/.forge-agent/skills"
+  skills_max_loaded: 3
+  skills_max_chars: 12000
+  skills_reference_max_chars: 8000
   context_budget_cap: 384000
   context_safety_margin_tokens: 40000
   log_dir: ./logs

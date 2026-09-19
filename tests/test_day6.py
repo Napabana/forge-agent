@@ -98,6 +98,29 @@ class TestParseConfig:
         ):
             _parse({"agent": {"recovery_max_attempts": 0}})
 
+    def test_skills_config_defaults_and_validation(self):
+        config = _parse({})
+        assert config.agent.skills_enabled is False
+        assert config.agent.skills_global_dir == "~/.forge-agent/skills"
+        assert config.agent.skills_max_loaded == 3
+
+        configured = _parse({
+            "agent": {
+                "skills_enabled": True,
+                "skills_global_dir": None,
+                "skills_max_loaded": 2,
+                "skills_max_chars": 5000,
+                "skills_reference_max_chars": 2000,
+            }
+        })
+        assert configured.agent.skills_enabled is True
+        assert configured.agent.skills_global_dir is None
+        assert configured.agent.skills_max_loaded == 2
+        with pytest.raises(ValueError, match="agent.skills_enabled must be boolean"):
+            _parse({"agent": {"skills_enabled": "yes"}})
+        with pytest.raises(ValueError, match="agent.skills_max_loaded must be >= 1"):
+            _parse({"agent": {"skills_max_loaded": 0}})
+
     def test_tools_section(self):
         config = _parse({"tools": {"shell": {"timeout": 60}}})
         assert config.tools.shell.timeout == 60

@@ -83,6 +83,10 @@ def test_metrics_extract_from_run_result_and_trace(tmp_path: Path):
         {"event_type": "failure_classified", "payload": {"category": "tool_failure"}},
         {"event_type": "recovery_selected", "payload": {"strategy": "replan"}},
         {"event_type": "recovery_exhausted", "payload": {}},
+        {"event_type": "skill_discovered", "payload": {"skill": "bug-fix"}},
+        {"event_type": "skill_selected", "payload": {"skill": "bug-fix"}},
+        {"event_type": "skill_loaded", "payload": {"skill": "bug-fix"}},
+        {"event_type": "skill_reference_loaded", "payload": {"skill": "bug-fix"}},
     ]
     trace.write_text("\n".join(json.dumps(item) for item in events) + "\n", encoding="utf-8")
     usage = SessionUsage(input_tokens=20, output_tokens=5, llm_calls=1)
@@ -98,6 +102,10 @@ def test_metrics_extract_from_run_result_and_trace(tmp_path: Path):
     assert metrics.recovery_selected_count == 1
     assert metrics.recovery_replan_count == 1
     assert metrics.recovery_exhausted_count == 1
+    assert metrics.skill_discovered_count == 1
+    assert metrics.skill_selected_count == 1
+    assert metrics.skill_loaded_count == 1
+    assert metrics.skill_reference_loaded_count == 1
 
 
 def test_agent_failure_still_emits_trial_result(tmp_path: Path):
@@ -195,3 +203,38 @@ def test_reference_solutions_self_check_for_frozen_suite(tmp_path: Path):
     result = validate_suite_references(suite, tmp_path / "references")
     assert set(result) == {task.task_id for task in suite.tasks}
     assert all(result[task.task_id] for task in suite.tasks)
+
+
+def test_skill_selection_grader_is_optional_process_evidence(tmp_path: Path):
+    trace = tmp_path / "skill-trace.jsonl"
+    trace.write_text(
+        json.dumps({"event_type": "skill_loaded", "payload": {"skill": "bug-fix"}})
+        + "\n",
+        encoding="utf-8",
+    )
+    run_result = RunResult(
+        "skill-trial",
+        RunStatus.SUCCESS,
+        "ok",
+        1,
+        trace_path=str(trace),
+    )
+    matched = GraderSpec(
+        "skill-match",
+        "skill_selection",
+        {"expected_any": ["bug-fix"], "forbidden": ["repository-navigation"]},
+        required=False,
+    )
+    missed = GraderSpec(
+        "skill-miss",
+        "skill_selection",
+        {"expected_any": ["test-and-verify"]},
+        required=False,
+    )
+    results = grade_many(
+        (matched, missed),
+        GraderContext(repo=tmp_path, run_result=run_result),
+    )
+    assert results[0].passed is True
+    assert results[1].passed is False
+    assert required_graders_passed(results) is True

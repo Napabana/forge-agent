@@ -16,6 +16,7 @@ from llm.router import create_backend_from_config
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_SUITE = _ROOT / "evals" / "fixtures" / "coding_agent" / "suite.json"
+_DEFAULT_SKILLS = _ROOT / "evals" / "fixtures" / "coding_agent" / "skills"
 
 
 def _planning_mode_for_variant(variant: str) -> str:
@@ -23,6 +24,7 @@ def _planning_mode_for_variant(variant: str) -> str:
         "baseline_react": "off",
         "planning": "always",
         "planning_recovery": "always",
+        "planning_recovery_skills": "always",
     }
     try:
         return mapping[variant]
@@ -38,6 +40,23 @@ def _recovery_mode_for_variant(variant: str) -> str:
         "baseline_react": "off",
         "planning": "off",
         "planning_recovery": "structured",
+        "planning_recovery_skills": "structured",
+    }
+    try:
+        return mapping[variant]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported coding-agent architecture variant {variant!r}; "
+            f"expected one of: {', '.join(mapping)}"
+        ) from exc
+
+
+def _skills_enabled_for_variant(variant: str) -> bool:
+    mapping = {
+        "baseline_react": False,
+        "planning": False,
+        "planning_recovery": False,
+        "planning_recovery_skills": True,
     }
     try:
         return mapping[variant]
@@ -54,6 +73,8 @@ def _real_runner_factory(
     suite: EvaluationSuite,
     planning_mode: str,
     recovery_mode: str,
+    skills_enabled: bool,
+    skills_global_dir: str | None,
 ):
     def factory(task, repo, trace_dir, trial_id):
         registry = _build_registry(cfg, default_cwd=str(repo), workspace=str(repo))
@@ -64,6 +85,11 @@ def _real_runner_factory(
             planning_mode=planning_mode,
             recovery_mode=recovery_mode,
             recovery_max_attempts=cfg.agent.recovery_max_attempts,
+            skills_enabled=skills_enabled,
+            skills_global_dir=skills_global_dir,
+            skills_max_loaded=cfg.agent.skills_max_loaded,
+            skills_max_chars=cfg.agent.skills_max_chars,
+            skills_reference_max_chars=cfg.agent.skills_reference_max_chars,
             stream=False,
             repo_map_mode="incremental",
             repo_map_cache_dir=str(trace_dir.parent / "repo-map-cache"),
@@ -87,6 +113,7 @@ def main() -> int:
     suite = EvaluationSuite.load(args.suite)
     planning_mode = _planning_mode_for_variant(args.variant)
     recovery_mode = _recovery_mode_for_variant(args.variant)
+    skills_enabled = _skills_enabled_for_variant(args.variant)
     with tempfile.TemporaryDirectory(prefix="forge-agent-eval-reference-") as temp_dir:
         reference = validate_suite_references(suite, temp_dir)
 
@@ -140,7 +167,13 @@ def main() -> int:
         suite=suite,
         output_dir=args.output_dir,
         runner_factory=_real_runner_factory(
-            cfg, backend, suite, planning_mode, recovery_mode
+            cfg,
+            backend,
+            suite,
+            planning_mode,
+            recovery_mode,
+            skills_enabled,
+            str(_DEFAULT_SKILLS) if skills_enabled else cfg.agent.skills_global_dir,
         ),
         variant=args.variant,
         repetitions=args.repetitions,
@@ -153,6 +186,10 @@ def main() -> int:
             "planning_mode": planning_mode,
             "recovery_mode": recovery_mode,
             "recovery_max_attempts": cfg.agent.recovery_max_attempts,
+            "skills_enabled": skills_enabled,
+            "skills_global_dir": (
+                str(_DEFAULT_SKILLS) if skills_enabled else cfg.agent.skills_global_dir
+            ),
         },
     )
     results = harness.run(args.task)

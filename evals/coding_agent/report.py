@@ -35,6 +35,12 @@ def build_report(results: Iterable[TrialResult], *, suite_id: str) -> dict[str, 
         aggregate: dict[str, Any] = {}
         for variant in sorted({row.variant for row in real_rows}):
             group = [row for row in real_rows if row.variant == variant]
+            skill_selection_checks = [
+                grader
+                for row in group
+                for grader in row.grader_results
+                if grader.kind == "skill_selection"
+            ]
             aggregate[variant] = {
                 "runs": len(group),
                 "observed_successes": sum(row.success for row in group),
@@ -65,9 +71,28 @@ def build_report(results: Iterable[TrialResult], *, suite_id: str) -> dict[str, 
                 "recovery_exhausted_runs": sum(
                     row.metrics.recovery_exhausted_count > 0 for row in group
                 ),
+                "mean_skills_discovered": _mean([
+                    row.metrics.skill_discovered_count for row in group
+                ]),
+                "mean_skills_selected": _mean([
+                    row.metrics.skill_selected_count for row in group
+                ]),
+                "mean_skills_loaded": _mean([
+                    row.metrics.skill_loaded_count for row in group
+                ]),
+                "mean_skill_references_loaded": _mean([
+                    row.metrics.skill_reference_loaded_count for row in group
+                ]),
+                "skill_selection_process_checks": len(skill_selection_checks),
+                "skill_selection_process_passes": sum(
+                    grader.passed for grader in skill_selection_checks
+                ),
             }
         real_model_small_sample = aggregate
-        claim_boundary += " Real-model rates are observed small-sample values, not stable pass@1 estimates."
+        claim_boundary += (
+            " Real-model rates are observed small-sample values, not stable pass@1 estimates."
+            " Skill-selection checks are non-blocking process evidence and do not change task success."
+        )
 
     return EvalReport(
         suite_id=suite_id,

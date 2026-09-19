@@ -261,6 +261,11 @@ def run_agent_task(
             planning_mode=cfg.agent.planning_mode,
             recovery_mode=cfg.agent.recovery_mode,
             recovery_max_attempts=cfg.agent.recovery_max_attempts,
+            skills_enabled=cfg.agent.skills_enabled,
+            skills_global_dir=cfg.agent.skills_global_dir,
+            skills_max_loaded=cfg.agent.skills_max_loaded,
+            skills_max_chars=cfg.agent.skills_max_chars,
+            skills_reference_max_chars=cfg.agent.skills_reference_max_chars,
             stream=False,
             cancel_event=cancel_event,
         )

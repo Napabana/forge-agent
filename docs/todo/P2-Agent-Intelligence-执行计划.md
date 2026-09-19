@@ -394,8 +394,22 @@ P2-0 增加至少以下 case：
 
 # P2-3 Agent Skills
 
-状态：**TODO**  
+状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
 依赖：P2-0；与 P2-1/P2-2 可组合
+
+实现摘要（2026-09-19）：
+
+- 新增 `skills/catalog.py` 与 `skills/runtime.py`，实现 filesystem Skill catalog、frontmatter 校验、project/global 分层、progressive disclosure runtime；没有新增 selector Agent 或第二套 Agent loop。
+- 发现路径固定为 `<repo>/.agents/skills/` 与可配置 global root（默认 `~/.forge-agent/skills`）；project 同名 Skill 覆盖 global，同目录中的坏 Skill 被隔离为 `skill_rejected`，不会阻断整个 Agent。
+- startup/system context 只常驻 name/description/source/resource counts；完整 `SKILL.md` 必须通过内部 `skill_load` 显式加载，reference 再通过 `skill_reference_load` 二次按需加载。
+- loaded Skill / reference 保存在 per-run SkillRuntime 并每轮重新注入 system runtime context，不依赖 canonical ConversationHistory，因此 history trimming / compaction 不会丢当前 Skill state。
+- scripts 仅暴露 manifest，Skill subsystem 没有任何 execute API；真正脚本/Shell/文件操作仍必须由模型显式调用现有 Tool，再走 ToolExecutor → Hook → Permission → Tool → Trace。
+- Trace v2 新增 `skill_discovered / skill_selected / skill_loaded / skill_reference_loaded / skill_rejected`。
+- 正式 config 新增 `skills_enabled`、global dir、loaded/context 上限；默认关闭，CLI / Chat / API / GitHub Issue 统一接线。
+- P2-0 Eval 新增 `planning_recovery_skills` architecture variant，固定使用 `evals/fixtures/coding_agent/skills/` 的 bug-fix / test-and-verify / repository-navigation 三个 Skill，不依赖用户本地目录。
+- Eval 新增 non-blocking `skill_selection` process grader 与 Skill lifecycle metrics；should-trigger / should-not-trigger 不改变 task success/acceptance。
+- 新增 `tests/test_agent_skills.py`，并扩展 config / coding-agent eval regression；当前 ChatGPT 环境未执行仓库 pytest，因此状态保持 LOCAL VALIDATION PENDING，不声明 Skill effectiveness。
+
 
 ## 参考设计
 

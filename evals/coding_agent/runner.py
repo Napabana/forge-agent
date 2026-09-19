@@ -74,7 +74,11 @@ def apply_reference_solution(task: EvalTask, repo: Path) -> None:
 
 
 def _outcome_graders(task: EvalTask):
-    return tuple(grader for grader in task.graders if grader.kind != "run_trace")
+    return tuple(
+        grader
+        for grader in task.graders
+        if grader.kind not in {"run_trace", "skill_selection"}
+    )
 
 
 def validate_reference_solution(task: EvalTask, target: str | Path) -> tuple[GraderResult, ...]:
@@ -239,7 +243,11 @@ class EvaluationHarness:
             metrics = extract_metrics(run_result, wall_time_seconds=elapsed)
             outcome = cached_outcome or grade_many(_outcome_graders(task), GraderContext(repo=repo))
             process = grade_many(
-                (grader for grader in task.graders if grader.kind == "run_trace"),
+                (
+                    grader
+                    for grader in task.graders
+                    if grader.kind in {"run_trace", "skill_selection"}
+                ),
                 GraderContext(repo=repo, run_result=run_result, metrics=metrics),
             )
             graders = outcome + process

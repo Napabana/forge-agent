@@ -66,6 +66,8 @@ from harness.executor import ToolExecutionCanceled, ToolExecutorInfrastructureEr
 from llm.base import LLMBackend, LLMMessage, LLMToolSchema
 from llm.errors import LLMCallbackError, LLMErrorInfo, classify_llm_error
 from llm.usage import SessionUsage
+from skills.catalog import SkillCatalog
+from skills.runtime import SKILL_LOAD, SkillRuntime
 from tools.base import ToolErrorType, ToolRegistry
 
 if TYPE_CHECKING:
@@ -117,6 +119,11 @@ class AgentConfig:
     planning_mode: str = "off"
     recovery_mode: str = "off"
     recovery_max_attempts: int = 4
+    skills_enabled: bool = False
+    skills_global_dir: str | None = "~/.forge-agent/skills"
+    skills_max_loaded: int = 3
+    skills_max_chars: int = 12_000
+    skills_reference_max_chars: int = 8_000
     llm_max_retries: int = 3
     llm_retry_delay: float = 2.0
     llm_retry_max_delay: float = 30.0
@@ -161,12 +168,16 @@ class Agent:
         self._planning_runtime: PlanningRuntime | None = None
         self._planning_context_cache = ""
         self._recovery_runtime: RecoveryRuntime | None = None
+        self._skill_runtime: SkillRuntime | None = None
+        self._skill_context_cache = ""
 
     def reset_run_runtime_state(self) -> None:
         """Clear transient per-run state before a Runner shared-history preflight."""
         self._planning_runtime = None
         self._planning_context_cache = ""
         self._recovery_runtime = None
+        self._skill_runtime = None
+        self._skill_context_cache = ""
 
     def invalidate_repo_map_cache(self, repo_path: str | Path | None = None) -> bool:
         """Invalidate the cached repository summary, optionally by repo."""
@@ -200,6 +211,11 @@ class Agent:
     def current_plan(self):
         """Expose current typed plan for diagnostics; completion never depends on it."""
         return self._planning_runtime.current_plan if self._planning_runtime else None
+
+    @property
+    def loaded_skills(self) -> tuple[str, ...]:
+        """Expose loaded Skill names for diagnostics/tests only."""
+        return self._skill_runtime.loaded_names if self._skill_runtime else ()
 
     @property
     def repo_map_telemetry(self) -> dict[str, object]:
@@ -241,6 +257,32 @@ class Agent:
             self._cfg.recovery_mode,
             max_attempts=self._cfg.recovery_max_attempts,
         )
+        skill_catalog = (
+            SkillCatalog.discover(
+                task.repo_path,
+                global_root=self._cfg.skills_global_dir,
+            )
+            if self._cfg.skills_enabled
+            else SkillCatalog()
+        )
+        self._skill_runtime = SkillRuntime(
+            skill_catalog,
+            enabled=self._cfg.skills_enabled,
+            max_loaded=self._cfg.skills_max_loaded,
+            skill_max_chars=self._cfg.skills_max_chars,
+            reference_max_chars=self._cfg.skills_reference_max_chars,
+        )
+        self._skill_context_cache = ""
+        if self._cfg.skills_enabled:
+            for skill in skill_catalog.skills:
+                log.log_trace(EventType.SKILL_DISCOVERED, 0, **skill.metadata())
+            for issue in skill_catalog.issues:
+                log.log_trace(
+                    EventType.SKILL_REJECTED,
+                    0,
+                    control="discovery",
+                    **issue.to_payload(),
+                )
         recent_actions: list[str] = []
         if planning_decision.mode is PlanningMode.AUTO and not planning_decision.enabled:
             log.log_trace(
@@ -424,6 +466,25 @@ class Agent:
             if len(recent_actions) > 4:
                 del recent_actions[:-4]
             logger.info("Step %d: %r", step, action)
+
+            if (
+                action.action_type == ActionType.TOOL_CALL
+                and action.tool_call
+                and self._skill_runtime
+                and self._skill_runtime.is_control(action.tool_call.name)
+            ):
+                if action.tool_call.name == SKILL_LOAD:
+                    log.log_trace(
+                        EventType.SKILL_SELECTED,
+                        step,
+                        skill=str(action.tool_call.params.get("name", "")),
+                    )
+                control = self._skill_runtime.apply_control(
+                    action.tool_call.name, action.tool_call.params
+                )
+                log.log_trace(control.event_type, step, **control.payload)
+                history.add(LLMMessage(role="user", content=control.message))
+                continue
 
             if (
                 action.action_type == ActionType.TOOL_CALL
@@ -1279,7 +1340,12 @@ class Agent:
     ) -> tuple[str, str, tuple[LLMToolSchema, ...]]:
         """统一生成下一请求固定部分，供 pressure 计算与最终消息组装复用。"""
         planning_schemas = self._planning_runtime.schemas() if self._planning_runtime else ()
-        schemas = tuple(self._registry.get_schemas()) + tuple(planning_schemas)
+        skill_schemas = self._skill_runtime.schemas() if self._skill_runtime else ()
+        schemas = (
+            tuple(self._registry.get_schemas())
+            + tuple(planning_schemas)
+            + tuple(skill_schemas)
+        )
         mode = self._repo_map_mode()
         if not hasattr(self, "_repo_map_cache"):
             map_budget = token_budget.default_plan().repo_map
@@ -1306,9 +1372,11 @@ class Agent:
         repo_map_content = self._repo_map_cache
         planning_context = self._planning_runtime.render_context() if self._planning_runtime else ""
         recovery_context = self._recovery_runtime.render_context() if self._recovery_runtime else ""
+        skill_context = self._skill_runtime.render_context() if self._skill_runtime else ""
         self._planning_context_cache = planning_context
+        self._skill_context_cache = skill_context
         runtime_context = "\n\n".join(
-            part for part in (planning_context, recovery_context) if part
+            part for part in (planning_context, recovery_context, skill_context) if part
         )
         system_content = build_system_prompt(
             repo_path=getattr(self, "_model_repo_path", "."),
