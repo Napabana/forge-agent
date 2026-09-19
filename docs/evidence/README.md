@@ -160,7 +160,7 @@ reason = provider_credentials_not_available_in_ci
 
 机器校验锚点：**P2-3 Agent Skills: deterministic regression passed; real-model A/B not executed**
 
-### P2-4 MCP Client / Tool Adapter — Implementation / Local Validation Pending
+### P2-4 MCP Client / Tool Adapter — Deterministic Regression
 
 证据：`mcp_integration/manager.py`、`mcp_integration/adapter.py`、`mcp_integration/registry.py`、`agent/runner.py`、`agent/orchestrate.py`、`tests/test_mcp_integration.py`、`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter.md`。
 
@@ -168,9 +168,11 @@ reason = provider_credentials_not_available_in_ci
 
 安全边界：remote ToolAnnotations 默认不可信；只有 server 显式配置 `trust_read_only_annotations=true` 且 tool 声明 read-only 时才映射为 `READ_ONLY`，否则保守映射为 mutation-capable 并进入 CONFIRM。Trace 不记录 MCP env/secret。
 
-当前状态仍是 **Local Validation Pending**：测试代码和固定 local stdio fixture 已加入，但尚未记录用户本地专项/全量 pytest 通过，也没有 real-model `planning_recovery_skills vs planning_recovery_skills_mcp` A/B。因此不能宣称 MCP regression passed、MCP 提升 coding success/pass@1/token/latency，或真实外部服务可靠性。
+用户已在本地完成修复并 push，P2-4 按项目交接约定收口为 DONE。当前可核验修复提交 `f842902e1753bdc69b0217d5aa89033bacd2ae82` 的日志记录定向测试 3 passed、Chat/GitHub Issue 相关测试 25 passed 与 `git diff --check` 通过；用户未提供最终全量 pytest 的 passed 数量、完整 stdout 或耗时，因此不补造数字。
 
-机器校验锚点：**P2-4 MCP: implementation present; local validation pending; real-model A/B not executed**
+边界：没有执行 real-model `planning_recovery_skills vs planning_recovery_skills_mcp` A/B，因此不能宣称 MCP 提升 coding success/pass@1/token/latency，也不能把 local fixture regression 外推为任意外部 MCP 服务的生产可靠性。
+
+机器校验锚点：**P2-4 MCP: local fix/validation completed and pushed; real-model A/B not executed**
 
 ## 面试可说 / 不可说
 
@@ -204,7 +206,7 @@ reason = provider_credentials_not_available_in_ci
 | Tool Calling | KEEP | “统一 Tool schema/validation、Hook、Permission、execution 与 Observation 生命周期。” | executor/lifecycle tests |
 | Structured Planning | KEEP | “实现 typed ExecutionPlan/PlanStep/PlanRevision，并将 current plan 作为 runtime context 注入单一 Agent loop，支持 off/auto/always 与 Trace lifecycle。” | deterministic regression 已通过；没有 real-model A/B，不能写效果提升 |
 | Agent Skills | KEEP | “实现 project/global filesystem Skill catalog 与 progressive disclosure，按需加载 Skill/reference，并将当前 Skill state 作为 runtime context 保留。” | deterministic regression 已通过；没有 real-model A/B，不能写 trigger/成功率百分比 |
-| MCP Client / Tool Adapter | KEEP AFTER LOCAL VALIDATION | “基于 official MCP Python SDK v2 将外部 MCP Tool 适配进既有 ToolRegistry/ToolExecutor，并统一复用 Permission、Hook、cooperative cancel、Planning effect gate 与 Trace。” | Implementation 已落地；当前本地回归待确认，确认前不要写“已验证通过”或效果提升 |
+| MCP Client / Tool Adapter | KEEP | “基于 official MCP Python SDK v2 将外部 MCP Tool 适配进既有 ToolRegistry/ToolExecutor，并统一复用 Permission、Hook、cooperative cancel、Planning effect gate 与 Trace。” | 本地修复/验证已完成并 push；当前无 real-model A/B，不能写效果提升或生产级外部服务可靠性 |
 | Failure-aware recovery | KEEP | “实现 typed FailureContext/RecoveryDecision 与 bounded RecoveryPolicy，并把 repeated failure 与 P2-1 plan revision gate 联动。” | deterministic regression 已通过；没有 real-model A/B，不能写效果百分比 |
 | Error recovery | REWORD | “实现 transient provider retry、typed failure Observation、loop/completion guard，并用 Failure Harness 做确定性故障回归。” | Failure Harness；不要说生产级容错率 |
 | Loop detection | KEEP | “对重复 Action/Observation 指纹与无进展循环做检测和终止/恢复控制。” | `agent/loop_detector.py`, loop tests | 只能写 contract，不写效果百分比 |
