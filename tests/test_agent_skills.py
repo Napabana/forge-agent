@@ -343,3 +343,6 @@ def test_eval_variant_maps_to_real_skill_architecture():
     assert _planning_mode_for_variant("planning_recovery_skills") == "always"
     assert _recovery_mode_for_variant("planning_recovery_skills") == "structured"
     assert _skills_enabled_for_variant("planning_recovery_skills") is True
+    assert _planning_mode_for_variant("planning_recovery_skills_mcp") == "always"
+    assert _recovery_mode_for_variant("planning_recovery_skills_mcp") == "structured"
+    assert _skills_enabled_for_variant("planning_recovery_skills_mcp") is True
