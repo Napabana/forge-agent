@@ -109,6 +109,7 @@ class MCPServerConfig:
     env: dict[str, str] = field(default_factory=dict)
     url: str | None = None
     timeout_seconds: float = 30.0
+    trust_read_only_annotations: bool = False
 
 
 @dataclass(frozen=True)
@@ -298,6 +299,11 @@ def _parse(data: dict[str, Any]) -> AppConfig:
                 f"mcp server {server_id!r} transport must be stdio or streamable_http"
             )
         timeout_seconds = float(server_raw.get("timeout_seconds", 30.0))
+        trust_read_only_annotations = server_raw.get("trust_read_only_annotations", False)
+        if not isinstance(trust_read_only_annotations, bool):
+            raise ValueError(
+                f"mcp server {server_id!r} trust_read_only_annotations must be boolean"
+            )
         if timeout_seconds <= 0:
             raise ValueError(f"mcp server {server_id!r} timeout_seconds must be positive")
         args_raw = server_raw.get("args", [])
@@ -331,6 +337,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
                 env=dict(env_raw),
                 url=url,
                 timeout_seconds=timeout_seconds,
+                trust_read_only_annotations=trust_read_only_annotations,
             )
         )
     mcp = MCPConfig(enabled=mcp_enabled, servers=tuple(mcp_servers))
