@@ -45,7 +45,7 @@ agent = "entry.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*", "runtime*", "ipc*", "harness*", "evals*", "skills*", "mcp_integration*"]
+include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*", "runtime*", "ipc*", "harness*", "evals*", "skills*", "mcp_integration*", "experience*"]
 
 [tool.setuptools.package-data]
 tools = ["sandbox.Dockerfile"]
@@ -57,5 +57,5 @@ addopts = "-v --tb=short"
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["agent", "llm", "tools", "context", "entry", "skills", "mcp_integration"]
+source = ["agent", "llm", "tools", "context", "entry", "skills", "mcp_integration", "experience"]
 omit = ["tests/*"]

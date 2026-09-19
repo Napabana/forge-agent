@@ -1,0 +1,4 @@
+{"event_type":"task_start","task_id":"canceled","payload":{"run_id":"run-canceled","task":{"task_id":"canceled"}}}
+{"event_type":"tool_execution_started","task_id":"canceled","payload":{"tool_name":"file_read"}}
+{"event_type":"acceptance","task_id":"canceled","payload":{"acceptance_status":"skipped"}}
+{"event_type":"run_terminated","task_id":"canceled","payload":{"run_id":"run-canceled","status":"canceled","termination_reason":"canceled"}}

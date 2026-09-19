@@ -1,0 +1,6 @@
+{"event_type":"task_start","task_id":"unrelated","payload":{"run_id":"run-unrelated","task":{"task_id":"unrelated"}}}
+{"event_type":"tool_execution_started","task_id":"unrelated","payload":{"tool_name":"file_read"}}
+{"event_type":"tool_execution_started","task_id":"unrelated","payload":{"tool_name":"shell"}}
+{"event_type":"task_complete","task_id":"unrelated","payload":{"steps":2}}
+{"event_type":"acceptance","task_id":"unrelated","payload":{"acceptance_status":"passed"}}
+{"event_type":"run_terminated","task_id":"unrelated","payload":{"run_id":"run-unrelated","status":"success","termination_reason":"completion_satisfied"}}

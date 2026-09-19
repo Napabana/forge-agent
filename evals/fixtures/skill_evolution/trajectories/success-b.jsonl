@@ -1,0 +1,7 @@
+{"event_type":"task_start","task_id":"success-b","payload":{"run_id":"run-success-b","task":{"task_id":"success-b"}}}
+{"event_type":"tool_execution_started","task_id":"success-b","payload":{"tool_name":"file_view"}}
+{"event_type":"tool_execution_started","task_id":"success-b","payload":{"tool_name":"file_write"}}
+{"event_type":"tool_execution_started","task_id":"success-b","payload":{"tool_name":"pytest"}}
+{"event_type":"task_complete","task_id":"success-b","payload":{"steps":3}}
+{"event_type":"acceptance","task_id":"success-b","payload":{"acceptance_status":"passed"}}
+{"event_type":"run_terminated","task_id":"success-b","payload":{"run_id":"run-success-b","status":"success","termination_reason":"completion_satisfied"}}

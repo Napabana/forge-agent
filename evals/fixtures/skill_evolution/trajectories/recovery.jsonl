@@ -1,0 +1,13 @@
+{"event_type":"task_start","task_id":"recovery","payload":{"run_id":"run-recovery","task":{"task_id":"recovery"}}}
+{"event_type":"plan_created","task_id":"recovery","payload":{"version":1}}
+{"event_type":"tool_execution_started","task_id":"recovery","payload":{"tool_name":"pytest"}}
+{"event_type":"failure_classified","task_id":"recovery","payload":{"category":"test_failure","source":"test"}}
+{"event_type":"recovery_selected","task_id":"recovery","payload":{"strategy":"inspect"}}
+{"event_type":"tool_execution_started","task_id":"recovery","payload":{"tool_name":"file_read"}}
+{"event_type":"recovery_selected","task_id":"recovery","payload":{"strategy":"replan"}}
+{"event_type":"plan_revised","task_id":"recovery","payload":{"version":2}}
+{"event_type":"tool_execution_started","task_id":"recovery","payload":{"tool_name":"file_write"}}
+{"event_type":"tool_execution_started","task_id":"recovery","payload":{"tool_name":"pytest"}}
+{"event_type":"task_complete","task_id":"recovery","payload":{"steps":5}}
+{"event_type":"acceptance","task_id":"recovery","payload":{"acceptance_status":"passed"}}
+{"event_type":"run_terminated","task_id":"recovery","payload":{"run_id":"run-recovery","status":"success","termination_reason":"completion_satisfied"}}
