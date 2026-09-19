@@ -6,8 +6,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
-from mcp import Client, StdioServerParameters
-from mcp.shared.exceptions import MCPError
+from mcp import Client, MCPError, StdioServerParameters
 
 from config.schema import MCPConfig, MCPServerConfig
 
@@ -104,8 +103,15 @@ class MCPClientManager:
             return
         if self._thread is not None:
             if self._start_error is not None:
-                raise MCPManagerLifecycleError(str(self._start_error)) from self._start_error
+                raise self._classify_start_error(self._start_error)
             return
+        # A manager normally starts once, but resetting these guards makes an
+        # explicit close -> start cycle deterministic rather than reading stale state.
+        self._ready.clear()
+        self._closed.clear()
+        self._start_error = None
+        self._connections.clear()
+        self._tools = ()
         self._thread = threading.Thread(
             target=self._thread_main,
             name="forge-mcp-client-loop",
@@ -122,9 +128,21 @@ class MCPClientManager:
         if self._start_error is not None:
             error = self._start_error
             self.close()
-            raise MCPManagerLifecycleError(
-                f"MCP client manager failed to start: {type(error).__name__}: {error}"
-            ) from error
+            raise self._classify_start_error(error) from error
+
+    @staticmethod
+    def _classify_start_error(error: BaseException) -> MCPIntegrationError:
+        if isinstance(error, MCPIntegrationError):
+            return error
+        if isinstance(error, (OSError, TimeoutError, MCPError)):
+            return MCPRemoteFailure(
+                f"MCP server startup/discovery failed: "
+                f"{type(error).__name__}: {error}"
+            )
+        return MCPManagerLifecycleError(
+            f"MCP client manager startup invariant failed: "
+            f"{type(error).__name__}: {error}"
+        )
 
     def _thread_main(self) -> None:
         try:
@@ -149,8 +167,12 @@ class MCPClientManager:
                 async with asyncio.timeout(server.timeout_seconds):
                     await client.__aenter__()
                 entered.append(client)
-                async with asyncio.timeout(server.timeout_seconds):
-                    tool_items = await self._list_all_tools(client)
+                capabilities = client.server_capabilities
+                if getattr(capabilities, "tools", None) is not None:
+                    async with asyncio.timeout(server.timeout_seconds):
+                        tool_items = await self._list_all_tools(client)
+                else:
+                    tool_items = ()
                 snapshot = self._snapshot(server, client, len(tool_items))
                 self._connections[server.id] = _Connection(server, client, snapshot)
                 for tool in tool_items:
