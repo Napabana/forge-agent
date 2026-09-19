@@ -2,7 +2,7 @@
 
 日期：2026-09-19  
 实现基线：`dev@1a3e72318ba2df1722a0dede0ec55ca916282abd`  
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**
+状态：**DONE**
 
 ## 目标与最终主链
 
