@@ -464,14 +464,14 @@ pytest -q
 
 ### 最后交接（2026-09-19，P2-5 Trajectory-driven Skill Evolution）
 
-- P2-5 首版实现已落地，当前状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`；实现代码提交为 `af363b2acb536e8d9b169a57bce826e7ef6c0412`，最终交接以当前 dev 最新 HEAD 为准。
+- P2-5 首版实现已落地，当前状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`；实现主提交为 `af363b2acb536e8d9b169a57bce826e7ef6c0412`，provenance/path hardening 提交为 `62076b792cfd18d5bb4473000a1538a4e4206e7c`，最终交接以当前 dev 最新 HEAD 为准。
 - 新增 `experience/schema.py / trajectory.py / candidate.py / store.py / evaluation.py / promotion.py`；P2-5 是 post-run offline subsystem，不修改 `ExecutionRunner → Agent → ToolExecutor` 主执行链，也不新增第二套 Agent loop。
 - Trajectory 不复制 transcript：Trace v2 是 process canonical source，P2-0 TrialResult/GraderResult 是 eval judgment；`TrajectoryRef` 只保存 run/task/trace hash/ref 与可选 trial correlation。
 - positive mining 只接受成功且 independent acceptance passed 的 trajectory；cancel、infrastructure failure、incomplete/gave_up、未请求/未通过 acceptance 不生成成功经验。Recovery pattern 直接消费 P2-2 typed `failure_classified / recovery_selected / plan_revised`，不从自然语言猜。
-- Candidate 使用 P2-3 标准 `SKILL.md`，但隔离在 repository-bounded `.forge-agent/experience/` store，普通 Agent/SkillCatalog 默认看不到。Candidate/evaluation/decision 为 immutable artifact，state 独立维护，所有身份由 version/hash/provenance 关联。
+- Candidate 使用 P2-3 标准 `SKILL.md`，但隔离在 repository-bounded `.forge-agent/experience/` store，普通 Agent/SkillCatalog 默认看不到。Candidate/evaluation/decision 为 immutable artifact，state 独立维护；stable identity 排除本机 artifact path，并对重复 source evidence 去重。
 - Candidate evaluation 复用 P2-0 `EvaluationHarness`，正式比较 baseline 与 candidate-enabled 两个 variant；fixture suite 独立覆盖 target、should-trigger、should-not-trigger、non-regression，不修改 P2-0 frozen 8-case suite。
 - deterministic PromotionGate 区分 `PASS / REJECT / INSUFFICIENT_EVIDENCE / EVALUATION_FAILED`，检查 evidence count、outcome/non-regression、trigger/process、token/step overhead 和 stale hash/version；evaluation infrastructure failure 不算 candidate reject。
-- `PromotionManager.promote()` 是显式动作：必须验证 persisted PASS decision、matching evaluation record、candidate status/hash/version。首版只支持 project Skill；用户手工 Skill 无 Forge evolution provenance 时禁止覆盖；managed Skill 支持 parent version/hash 升级校验与 approved snapshot rollback。
+- `PromotionManager.promote()` 是显式动作：必须验证 persisted PASS decision、matching evaluation record、candidate status/hash/version。首版只支持 project Skill；promotion/rollback 校验 project boundary 与父目录 symlink，用户手工 Skill 无 Forge evolution provenance 时禁止覆盖；managed Skill 支持 parent version/hash 升级校验与 approved snapshot rollback。
 - P2-5 不修改 source Trace、不创建 Trace v3；offline lifecycle 另写 bounded `evolution_events.jsonl`，只保存 candidate/eval/run/trace hash/reference 等 metadata，不重新塞完整 trajectory、prompt 或 Skill 内容。
 - 新增 `tests/test_skill_evolution.py`、`evals/fixtures/skill_evolution/`，并在 `pyproject.toml` 加入 `experience*` package/coverage discovery。
 - ChatGPT 容器已实际运行 `py_compile` 与 standalone core smoke，均通过；由于容器无法解析 github.com，未运行当前仓库级 pytest。不得把本轮写成 DONE，也不得宣称 Skill Evolution 提升真实 coding success、pass@1、token/latency 或长期智能。

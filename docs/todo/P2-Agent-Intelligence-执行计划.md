@@ -1,7 +1,7 @@
 # P2 Agent Intelligence 执行计划
 
 状态更新时间：2026-09-19  
-当前实现基线：`dev@a9c745f77db4adae4818f381261a2dd4c151e552`
+当前实现基线：`dev@62076b792cfd18d5bb4473000a1538a4e4206e7c`
 
 > 命名说明：仓库历史上已经存在 “P2 Repo Map” 实验与证据目录。本计划使用 **P2 Agent Intelligence** 作为新阶段名称，子任务编号为 P2-0 ～ P2-5，避免把旧 Repo Map P2 重新解释为未完成。
 
@@ -648,7 +648,7 @@ mcp_integration/
 - `experience/trajectory.py` 对落盘 Trace 做 bounded、deterministic normalization；只有 `RunStatus.SUCCESS + acceptance=passed`（且提供 Eval Trial 时 trial success）才进入 positive mining。cancel、infrastructure failure、incomplete/gave_up、acceptance 未验证均不进入成功经验。
 - 首版 `ExperienceMiner` 只消费 typed tool/planning/recovery events；successful workflow 与 failure→recovery→success 分开建模，不从自然语言猜 recovery 原因，不使用 embedding/vector DB。
 - `DeterministicCandidateGenerator` 作为首版 generator；Candidate 使用标准 P2-3 `SKILL.md` 格式，但保存在 repository-bounded `.forge-agent/experience/` CandidateStore，普通 `SkillCatalog` 默认不可见。
-- Candidate 版本、content hash、source run/trace/task、failure/recovery provenance、evaluation/decision 均保存为独立 artifact；candidate/eval/decision immutable，生命周期 state 单独维护。
+- Candidate 版本、content hash、source run/trace/task、failure/recovery provenance、evaluation/decision 均保存为独立 artifact；stable identity 不依赖本机 artifact path，同一 source run/trace 不重复计 evidence；candidate/eval/decision immutable，生命周期 state 单独维护。
 - `experience/evaluation.py` 复用现有 P2-0 `EvaluationHarness` 跑 baseline vs candidate-enabled，不新增第二套 Trial loop；fixture suite 明确覆盖 target / should-trigger / should-not-trigger / non-regression。
 - `PromotionGate` deterministic 区分 `PASS / REJECT / INSUFFICIENT_EVIDENCE / EVALUATION_FAILED`，检查 evidence count、outcome/non-regression、trigger/process、step/token overhead 与 stale candidate hash/version。
 - Gate PASS 不自动部署；`PromotionManager.promote()` 必须显式调用，并要求 persisted PASS decision + matching EvaluationRecord。首版只支持 project Skill；不覆盖无 Forge provenance 的手工 Skill，managed Skill 使用 parent version/hash 做升级检查，并保留 approved snapshot 支持显式 rollback。

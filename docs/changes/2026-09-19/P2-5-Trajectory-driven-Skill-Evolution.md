@@ -2,7 +2,8 @@
 
 日期：2026-09-19  
 状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
-实现代码提交：`af363b2acb536e8d9b169a57bce826e7ef6c0412`
+实现主提交：`af363b2acb536e8d9b169a57bce826e7ef6c0412`  
+provenance/path hardening：`62076b792cfd18d5bb4473000a1538a4e4206e7c`
 
 ## 目标
 
@@ -48,7 +49,7 @@ existing P2-3 SkillCatalog
 默认 project store：`<repo>/.forge-agent/experience/`。
 
 - candidate 与 `<repo>/.agents/skills/` 物理隔离，普通 Agent 默认不可加载。
-- candidate version、content hash、source run/trace/task、pattern、evaluation、promotion decision 独立保存。
+- candidate version、content hash、source run/trace/task、pattern、evaluation、promotion decision 独立保存；stable identity 排除本机 artifact path，同一 source run/trace 不会重复计入 minimum evidence。
 - candidate version 不可静默覆盖；store 有 path traversal、project boundary、artifact size、corrupt artifact 检查。
 - lifecycle state：`DRAFT / EVALUATING / REJECTED / APPROVED / PROMOTED`。
 - offline audit 使用 bounded `evolution_events.jsonl`；source Trace 保持 immutable。
@@ -59,7 +60,7 @@ existing P2-3 SkillCatalog
 - baseline 与 candidate-enabled 使用独立 output dir/variant。
 - candidate-enabled 通过临时 Skill root 走现有 P2-3 SkillCatalog/SkillRuntime；没有直接 prompt 注入。
 - 独立 `evals/fixtures/skill_evolution/suite.json` 覆盖 target / should-trigger / should-not-trigger / non-regression。
-- process evidence 继续复用现有 `skill_selection` grader。
+- process evidence 继续复用现有 `skill_selection` grader；EvaluationRecord 同时保留 baseline/candidate trial_id 与 trace_ref correlation。
 
 ### Promotion Gate / explicit promotion
 
@@ -86,7 +87,7 @@ existing P2-3 SkillCatalog
 - decision 已持久化且确实为 PASS；
 - evaluation record 与当前 candidate version/hash 一致；
 - candidate state 为 APPROVED；
-- project Skill target 无 symlink/collision；
+- project Skill target 与父目录不能通过 symlink/path traversal 越过 repository boundary；
 - 手工 Skill 无 Forge provenance 时禁止覆盖；
 - managed upgrade 必须匹配 parent Skill version/hash。
 
