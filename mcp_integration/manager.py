@@ -41,6 +41,7 @@ class MCPToolDescriptor:
     input_schema: dict[str, Any]
     annotations: dict[str, Any]
     timeout_seconds: float
+    trust_read_only_annotations: bool
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,7 @@ class MCPClientManager:
                             input_schema=dict(tool.input_schema),
                             annotations=dict(annotations),
                             timeout_seconds=server.timeout_seconds,
+                            trust_read_only_annotations=server.trust_read_only_annotations,
                         )
                     )
             self._tools = tuple(descriptors)
