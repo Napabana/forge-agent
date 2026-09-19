@@ -103,7 +103,10 @@ class MCPToolAdapter(BaseTool):
         self._schema = validate_remote_schema(descriptor.input_schema)
         self._effect = (
             ToolEffect.READ_ONLY
-            if descriptor.annotations.get("read_only_hint") is True
+            if (
+                descriptor.trust_read_only_annotations
+                and descriptor.annotations.get("read_only_hint") is True
+            )
             else ToolEffect.MAY_MUTATE_REPOSITORY
         )
 
@@ -144,6 +147,9 @@ class MCPToolAdapter(BaseTool):
             "mcp_read_only_hint": self._descriptor.annotations.get("read_only_hint"),
             "mcp_destructive_hint": self._descriptor.annotations.get(
                 "destructive_hint"
+            ),
+            "mcp_read_only_annotation_trusted": (
+                self._descriptor.trust_read_only_annotations
             ),
         }
 
