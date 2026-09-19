@@ -137,7 +137,7 @@ class MCPClientManager:
     def _classify_start_error(error: BaseException) -> MCPIntegrationError:
         if isinstance(error, MCPIntegrationError):
             return error
-        if isinstance(error, (OSError, TimeoutError, MCPError)):
+        if MCPClientManager._contains_remote_start_error(error):
             return MCPRemoteFailure(
                 f"MCP server startup/discovery failed: "
                 f"{type(error).__name__}: {error}"
@@ -145,6 +145,22 @@ class MCPClientManager:
         return MCPManagerLifecycleError(
             f"MCP client manager startup invariant failed: "
             f"{type(error).__name__}: {error}"
+        )
+
+    @staticmethod
+    def _contains_remote_start_error(error: BaseException) -> bool:
+        if isinstance(error, (OSError, TimeoutError, MCPError)):
+            return True
+        if isinstance(error, BaseExceptionGroup):
+            return any(
+                MCPClientManager._contains_remote_start_error(child)
+                for child in error.exceptions
+            )
+        cause = error.__cause__ or error.__context__
+        return (
+            MCPClientManager._contains_remote_start_error(cause)
+            if cause is not None and cause is not error
+            else False
         )
 
     def _thread_main(self) -> None:
