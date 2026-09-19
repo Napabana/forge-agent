@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -20,6 +21,42 @@ from experience.schema import (
     utc_now,
 )
 from experience.store import CandidateStore
+
+_SAFE_SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def _project_skill_file(
+    repo_root: Path,
+    skill_name: str,
+) -> Path:
+    if not _SAFE_SKILL_NAME.fullmatch(skill_name):
+        raise ValueError(
+            f"invalid project Skill name: {skill_name!r}"
+        )
+    skill_file = (
+        repo_root
+        / ".agents"
+        / "skills"
+        / skill_name
+        / "SKILL.md"
+    )
+    try:
+        skill_file.resolve(strict=False).relative_to(repo_root)
+    except ValueError as exc:
+        raise ValueError(
+            "project Skill target escaped repository boundary"
+        ) from exc
+    for parent in (
+        repo_root / ".agents",
+        repo_root / ".agents" / "skills",
+        skill_file.parent,
+        skill_file,
+    ):
+        if parent.is_symlink():
+            raise FileExistsError(
+                "refusing to use a symlinked project Skill target"
+            )
+    return skill_file
 
 
 @dataclass(frozen=True)
@@ -370,18 +407,12 @@ class PromotionManager:
                 "before promotion"
             )
 
-        skill_dir = (
-            self.repo_root
-            / ".agents"
-            / "skills"
-            / candidate.skill_name
+        skill_file = _project_skill_file(
+            self.repo_root,
+            candidate.skill_name,
         )
-        skill_file = skill_dir / "SKILL.md"
+        skill_dir = skill_file.parent
         skill_version = 1
-        if skill_dir.is_symlink() or skill_file.is_symlink():
-            raise FileExistsError(
-                "refusing to promote through a symlinked Skill target"
-            )
         if skill_dir.exists() and not skill_file.exists():
             raise FileExistsError(
                 "refusing to populate an existing Skill directory "
@@ -462,12 +493,9 @@ class PromotionManager:
         skill_name: str,
         skill_version: int,
     ) -> Path:
-        skill_file = (
-            self.repo_root
-            / ".agents"
-            / "skills"
-            / skill_name
-            / "SKILL.md"
+        skill_file = _project_skill_file(
+            self.repo_root,
+            skill_name,
         )
         if not skill_file.is_file():
             raise ValueError(

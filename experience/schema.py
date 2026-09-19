@@ -76,6 +76,18 @@ class TrajectoryRef:
     def __post_init__(self) -> None:
         if not self.run_id or not self.task_id or not self.trace_ref:
             raise ValueError("trajectory provenance requires run_id, task_id and trace_ref")
+        if len(self.run_id) > 256 or len(self.task_id) > 256:
+            raise ValueError("trajectory run/task ids must be <= 256 characters")
+        if (
+            len(self.trace_ref) > 4096
+            or (
+                self.trial_result_ref
+                and len(self.trial_result_ref) > 4096
+            )
+        ):
+            raise ValueError(
+                "trajectory artifact references must be <= 4096 characters"
+            )
         _validate_sha256(self.trace_sha256, field_name="trace_sha256")
 
     def identity_dict(self) -> dict[str, Any]:
@@ -269,10 +281,14 @@ class SkillCandidate:
         )
 
     def skill_markdown(self) -> str:
+        description = json.dumps(
+            self.description,
+            ensure_ascii=False,
+        )
         return (
             "---\n"
             f"name: {self.skill_name}\n"
-            f"description: {self.description}\n"
+            f"description: {description}\n"
             "---\n"
             f"{self.instructions.strip()}\n"
         )
@@ -306,6 +322,10 @@ class EvaluationCase:
     candidate_steps: int
     baseline_tokens: int
     candidate_tokens: int
+    baseline_trial_id: str | None = None
+    candidate_trial_id: str | None = None
+    baseline_trace_ref: str | None = None
+    candidate_trace_ref: str | None = None
     evaluation_failed: bool = False
     failure_reason: str | None = None
 

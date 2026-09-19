@@ -519,6 +519,16 @@ def test_candidate_evaluation_reuses_existing_harness_and_observes_trigger_contr
     assert all(
         case.candidate_success for case in record.cases
     )
+    assert all(
+        case.baseline_trial_id
+        and case.candidate_trial_id
+        for case in record.cases
+    )
+    assert all(
+        case.baseline_trace_ref
+        and case.candidate_trace_ref
+        for case in record.cases
+    )
     assert (
         tmp_path
         / "eval"
@@ -821,6 +831,25 @@ def test_promotion_requires_pass_and_never_overwrites_manual_skill(
         ).promote(
             candidate,
             decision,
+        )
+
+
+def test_promotion_and_rollback_reject_path_traversal(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    store = CandidateStore(repo)
+    with pytest.raises(
+        ValueError,
+        match="invalid project Skill name",
+    ):
+        PromotionManager(
+            repo,
+            store,
+        ).rollback(
+            "../escape",
+            1,
         )
 
 

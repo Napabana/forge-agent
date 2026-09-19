@@ -153,6 +153,10 @@ def build_evaluation_record(
             candidate_steps=right.metrics.steps,
             baseline_tokens=left.metrics.total_tokens,
             candidate_tokens=right.metrics.total_tokens,
+            baseline_trial_id=left.trial_id,
+            candidate_trial_id=right.trial_id,
+            baseline_trace_ref=left.trace_ref,
+            candidate_trace_ref=right.trace_ref,
             evaluation_failed=left_failed or right_failed,
             failure_reason=right_reason or left_reason,
         ))

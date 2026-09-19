@@ -70,6 +70,10 @@ class CandidateStore:
         store_dir: str | Path | None = None,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
+        if not self.repo_root.is_dir():
+            raise ValueError(
+                "candidate store repo_root must be an existing directory"
+            )
         raw = (
             Path(store_dir)
             if store_dir is not None
@@ -157,13 +161,14 @@ class CandidateStore:
             "candidate_version": candidate.candidate_version,
             "candidate_hash": candidate.content_hash,
             "pattern_id": candidate.pattern_id,
+            "source_count": len(candidate.source_trajectories),
             "source_run_ids": [
-                item.run_id
-                for item in candidate.source_trajectories
+                item.run_id[:256]
+                for item in candidate.source_trajectories[:32]
             ],
             "source_trace_hashes": [
                 item.trace_sha256
-                for item in candidate.source_trajectories
+                for item in candidate.source_trajectories[:32]
             ],
         })
         return target
