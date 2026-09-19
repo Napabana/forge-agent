@@ -1,7 +1,7 @@
 # P2-5 Trajectory-driven Skill Evolution
 
 日期：2026-09-19  
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
+状态：**DONE**  
 实现主提交：`af363b2acb536e8d9b169a57bce826e7ef6c0412`  
 provenance/path hardening：`62076b792cfd18d5bb4473000a1538a4e4206e7c`
 
@@ -151,3 +151,14 @@ standalone core smoke:
 - production continuous self-improvement。
 
 等待用户本地完成 P2-5 专项、P2-3/P2-2/P2-1/P2-0/Trace/Failure Harness 回归、Evidence Pack 与全量 pytest 后，才能把状态从 `IMPLEMENTED / LOCAL VALIDATION PENDING` 收口为 `DONE`。
+
+
+## 本地验证收口（2026-09-19）
+
+用户已对当前已推送实现 HEAD `ac5f30d4951cef8d2840fdbd8bbebe71352f1e48` 完成本轮建议的 P2-5 专项、关键兼容回归、Evidence Pack 与全量 pytest，并明确确认全部通过。
+
+最终通过轮次没有提供具体 passed 数量、完整 stdout 或耗时，因此本日志不补造数字。
+
+P2-5 当前正式状态：`DONE`。
+
+验证边界保持不变：本次证明 deterministic mechanism/regression contract 通过，不等价于 real-model candidate A/B，也不产生 success rate、pass@1、trigger accuracy、token/step efficiency、latency 或长期 self-improvement 数字。

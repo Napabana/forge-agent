@@ -476,3 +476,14 @@ pytest -q
 - 新增 `tests/test_skill_evolution.py`、`evals/fixtures/skill_evolution/`，并在 `pyproject.toml` 加入 `experience*` package/coverage discovery。
 - ChatGPT 容器已实际运行 `py_compile` 与 standalone core smoke，均通过；由于容器无法解析 github.com，未运行当前仓库级 pytest。不得把本轮写成 DONE，也不得宣称 Skill Evolution 提升真实 coding success、pass@1、token/latency 或长期智能。
 - 本轮更新日志：`docs/changes/2026-09-19/P2-5-Trajectory-driven-Skill-Evolution.md`。
+
+
+### 验证补充（2026-09-19，P2-5 Trajectory-driven Skill Evolution 本地收口）
+
+- 用户已在本地对当前已推送实现 HEAD `ac5f30d4951cef8d2840fdbd8bbebe71352f1e48` 完成 P2-5 专项、P2-3/P2-2/P2-1/P2-0、Trace/Runner/Failure Harness 回归、Evidence Pack 与全量 pytest，并明确确认全部通过。
+- 最终通过轮次未提供具体 passed 数量、完整 stdout 或耗时，因此不得补造数字。
+- P2-5 状态由 `IMPLEMENTED / LOCAL VALIDATION PENDING` 正式收口为 `DONE`。
+- deterministic evidence 覆盖 success+acceptance eligibility、cancel/infra/unverified exclusion、typed failure→recovery mining、deterministic/input-order-independent grouping、source evidence 去重、candidate identity/version/hash、CandidateStore 隔离/边界/损坏检测、P2-0 EvaluationHarness baseline vs candidate overlay、target/should-trigger/should-not-trigger/non-regression、PromotionGate 四状态、regression/overhead/stale hash、persisted PASS decision、显式 project promotion、manual Skill collision、managed Skill upgrade/rollback、evolution audit 与 package discovery。
+- 本轮没有执行 real-model candidate A/B；不得宣称 Skill Evolution 提升 success rate、pass@1、trigger accuracy、token/step efficiency、latency 或长期 self-improvement。
+- P2 Agent Intelligence 的 P2-0 ～ P2-5 至此全部完成；后续若做统一 architecture ablation，应继续按 Evidence Pack 区分 deterministic regression 与 real-model small sample。
+- 验证日志：`docs/changes/2026-09-19/P2-5-Trajectory-driven-Skill-Evolution本地回归-DONE.md`。

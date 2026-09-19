@@ -638,7 +638,7 @@ mcp_integration/
 
 # P2-5 Trajectory-driven Skill Evolution
 
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
+状态：**DONE**  
 依赖：P2-0 + P2-3；可消费 P2-2 recovery trajectory
 
 实现摘要（2026-09-19）：
@@ -654,7 +654,7 @@ mcp_integration/
 - Gate PASS 不自动部署；`PromotionManager.promote()` 必须显式调用，并要求 persisted PASS decision + matching EvaluationRecord。首版只支持 project Skill；不覆盖无 Forge provenance 的手工 Skill，managed Skill 使用 parent version/hash 做升级检查，并保留 approved snapshot 支持显式 rollback。
 - P2-5 不回写 source Trace，也不创建 Trace v3；candidate/eval/promotion lifecycle 写入独立 bounded `evolution_events.jsonl`，只存 id/hash/reference 等 metadata。
 - 新增独立 `evals/fixtures/skill_evolution/` 与 `tests/test_skill_evolution.py`；不修改 P2-0 frozen suite 或历史 `evals/results`。
-- ChatGPT 执行环境已完成新模块 `py_compile` 与不依赖仓库运行时的 core smoke；未运行仓库级 pytest，因此当前状态不能写 DONE。等待用户本地专项/回归/全量 pytest 后再收口。
+- 用户已在本地完成 P2-5 专项、P2-3/P2-2/P2-1/P2-0/Trace/Runner/Failure Harness 回归、Evidence Pack 校验与全量 pytest，并明确确认全部通过。最终通过轮次未提供具体 passed 数量、完整 stdout 或耗时，因此不补造数字。
 
 ## 定位
 
