@@ -657,6 +657,18 @@ def test_runner_agent_tool_executor_real_stdio_host_e2e(tmp_path: Path):
 
     assert result.status is RunStatus.SUCCESS
     rows = _events(result.trace_path)
+    capability_rows = [
+        row
+        for row in rows
+        if row["event_type"] == EventType.MCP_SERVER_CAPABILITIES.value
+    ]
+    assert len(capability_rows) == 1
+    capability = capability_rows[0]["payload"]
+    assert capability["server_id"] == "eval_docs"
+    assert capability["tools_supported"] is True
+    assert capability["resources_supported"] is True
+    assert capability["prompts_supported"] is True
+    assert "env" not in capability and "url" not in capability
     assert any(row["event_type"] == EventType.MCP_TOOL_DISCOVERED.value for row in rows)
     started = [
         row
