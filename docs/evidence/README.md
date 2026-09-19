@@ -25,6 +25,7 @@ python -m evals.verify_evidence_pack
 | 同步 ReAct coding Agent 主循环完成 `LLM → Action/ToolCall → Observation → Reflection/termination` | Implementation Fact | `agent/core.py`, `agent/task.py` | `pytest tests/test_agent_completion_guards.py -q` | 主循环、完成性门禁和终止状态已实现 | Agent loop 本身不是 async；实现事实不代表真实任务成功率 |
 | CLI / Chat / API / GitHub Issue 通过统一 `ExecutionRunner` 进入 Agent 生命周期 | Implementation Fact + Regression | `agent/runner.py`, `entry/*.py`, `tests/test_runner.py`, `tests/test_failure_harness.py` | `pytest tests/test_runner.py tests/test_failure_harness.py -q` | Runner 统一 direct/isolate、Acceptance 与 Trace 接线 | 不等于四入口真实线上流量验证 |
 | Tool lifecycle 为 `validate → pre-hook → permission → tool → post-hook`，并有统一错误分类 | Implementation Fact + Regression | `harness/executor.py`, `harness/hooks.py`, `harness/permission.py`, `tests/test_tool_lifecycle_p0_2.py` | `pytest tests/test_tool_lifecycle_p0_2.py -q` | 生命周期和失败语义有确定性回归 | 不能写成“工具调用永不失败” |
+| MCP external capability 接入现有 Tool lifecycle | Implementation Fact / Local Validation Pending | `mcp_integration/manager.py`, `mcp_integration/adapter.py`, `mcp_integration/registry.py`, `tests/test_mcp_integration.py` | `python -m pytest -q tests/test_mcp_integration.py` | 已实现 official SDK v2 client、stdio/Streamable HTTP transport adapter、namespace/schema/effect/permission/Trace/lifecycle 接线；本轮尚未记录用户本地 pytest 通过 | 不能写成 MCP regression 已通过、真实外部 MCP 成功率或对 coding success 的提升 |
 | cancellation 为 cooperative cancellation | Implementation Fact + Regression | `agent/core.py`, `harness/executor.py`, `entry/api.py`, `tests/test_tool_lifecycle_p0_2.py`, `tests/test_failure_harness.py` | 同上 | 在 Provider / lifecycle 边界检查 cancel，并返回明确终止语义 | 不会强杀任意正在执行的同步 Provider/Tool 调用 |
 | Failure Harness 覆盖 provider/hook/permission/tool/prepare/cancel/completion/acceptance/Trace 故障合同 | Deterministic Offline Regression | `tests/test_failure_harness.py`, `tests/test_failure_harness_isolate.py` | `pytest tests/test_failure_harness.py tests/test_failure_harness_isolate.py -q` | 走生产 `ExecutionRunner → Agent → ToolExecutor` 路径注入故障 | 这是 contract regression，不是 Agent success rate |
 | Coding Agent Evaluation Harness 提供 task → isolated trial → production Runner → deterministic graders → artifact/report 的统一 A/B 外壳 | Implementation Fact + Deterministic Offline Regression | `evals/coding_agent/`, `evals/fixtures/coding_agent/suite.json`, `tests/test_coding_agent_eval.py` | `pytest tests/test_coding_agent_eval.py -q` | 8-case suite、Trial/Grader/Report、no-overwrite、not-executed 与 fake-evidence boundary 已有离线回归；用户本地确认相关回归及全量 pytest 通过 | 真实模型 baseline 尚未执行；不能写 Forge Agent success rate、pass@1、token 或 latency 对比 |
@@ -158,6 +159,19 @@ reason = provider_credentials_not_available_in_ci
 边界：没有执行 real-model `planning_recovery vs planning_recovery_skills` A/B，因此不能宣称 Skills 提升 coding success rate、pass@1、trigger accuracy、token efficiency、latency 或真实任务效果。
 
 机器校验锚点：**P2-3 Agent Skills: deterministic regression passed; real-model A/B not executed**
+
+### P2-4 MCP Client / Tool Adapter — Implementation / Local Validation Pending
+
+证据：`mcp_integration/manager.py`、`mcp_integration/adapter.py`、`mcp_integration/registry.py`、`agent/runner.py`、`agent/orchestrate.py`、`tests/test_mcp_integration.py`、`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter.md`。
+
+已实现 Forge Host → official MCP Python SDK v2 client → remote Tool 的 capability integration；remote Tool 被适配成普通 Forge Tool，调用仍必须经过 ToolRegistry / ToolExecutor / Hook / Permission / cooperative cancel / Trace。stdio 与 Streamable HTTP 复用同一 manager lifecycle；Chat 长会话复用连接，direct/isolate/API/GitHub/Eval 均显式 cleanup。
+
+安全边界：remote ToolAnnotations 默认不可信；只有 server 显式配置 `trust_read_only_annotations=true` 且 tool 声明 read-only 时才映射为 `READ_ONLY`，否则保守映射为 mutation-capable 并进入 CONFIRM。Trace 不记录 MCP env/secret。
+
+当前状态仍是 **Local Validation Pending**：测试代码和固定 local stdio fixture 已加入，但尚未记录用户本地专项/全量 pytest 通过，也没有 real-model `planning_recovery_skills vs planning_recovery_skills_mcp` A/B。因此不能宣称 MCP regression passed、MCP 提升 coding success/pass@1/token/latency，或真实外部服务可靠性。
+
+机器校验锚点：**P2-4 MCP: implementation present; local validation pending; real-model A/B not executed**
+
 ## 面试可说 / 不可说
 
 | 能力 | 可以安全说 | 追问证据 | 过度宣称 |
@@ -167,6 +181,7 @@ reason = provider_credentials_not_available_in_ci
 | cooperative cancellation | “在 Provider、tool lifecycle 和 step 边界做 cooperative cancel，并保留 Trace 终止语义。” | `agent/core.py`, `harness/executor.py`, failure tests | “可以立即强杀任意同步工具或 Provider 请求” |
 | Structured Planning | “在单一 Agent loop 内实现 typed Plan/Step/Revision，支持 off/auto/always、计划生命周期 Trace，并在 context compaction 后持续注入 current plan。” | `agent/planning.py`, `agent/core.py`, `tests/test_structured_planning.py` | “Planning 已证明提升成功率/pass@1/降低 token” |
 | Agent Skills | “实现 filesystem Skill catalog 与 progressive disclosure：metadata 常驻、完整 Skill/reference 按需加载，SkillRuntime 跨 compaction 保留；Skill 不绕过 ToolExecutor 执行脚本。” | `skills/catalog.py`, `skills/runtime.py`, `tests/test_agent_skills.py` | “已证明 Skills 提升成功率/trigger accuracy”“Skill script 可直接绕过权限执行” |
+| MCP capability integration | “将 official MCP Python SDK v2 作为 external capability source 接入现有 ToolRegistry/ToolExecutor；remote Tool 继续受 Hook、Permission、Cancel、Planning effect gate 与 Trace 约束，并显式管理 server connection lifecycle。” | `mcp_integration/*`, `agent/runner.py`, `tests/test_mcp_integration.py` | “MCP regression 已通过”“接任意 MCP server 都安全”“MCP 已提升 coding 成功率/pass@1” |
 | Failure-aware Recovery | “在单一 Agent loop 内实现 typed FailureContext/RecoveryDecision、bounded recovery 与 plan revision gate；Provider retry、cancel、infra 保持独立语义。” | `agent/recovery.py`, `agent/core.py`, `tests/test_structured_recovery.py` | “已证明提升成功率”“生产级 fault tolerance”“恢复成功率 X%” |
 | Error Recovery / Failure Harness | “对 transient provider retry、工具失败 Observation、循环/完成性失败和基础设施异常做了确定性故障回归。” | `tests/test_failure_harness*.py` | “Fault tolerance 达到生产级”“故障恢复成功率 X%” |
 | Trace v2 | “用 append-only JSONL 记录 run/step/tool/acceptance/delivery correlation，并在落盘边界递归脱敏。” | `agent/event_log.py`, `agent/trace_v2.py`, trace tests | “Trace 可以确定性重放 Agent 执行” |
@@ -189,6 +204,7 @@ reason = provider_credentials_not_available_in_ci
 | Tool Calling | KEEP | “统一 Tool schema/validation、Hook、Permission、execution 与 Observation 生命周期。” | executor/lifecycle tests |
 | Structured Planning | KEEP | “实现 typed ExecutionPlan/PlanStep/PlanRevision，并将 current plan 作为 runtime context 注入单一 Agent loop，支持 off/auto/always 与 Trace lifecycle。” | deterministic regression 已通过；没有 real-model A/B，不能写效果提升 |
 | Agent Skills | KEEP | “实现 project/global filesystem Skill catalog 与 progressive disclosure，按需加载 Skill/reference，并将当前 Skill state 作为 runtime context 保留。” | deterministic regression 已通过；没有 real-model A/B，不能写 trigger/成功率百分比 |
+| MCP Client / Tool Adapter | KEEP AFTER LOCAL VALIDATION | “基于 official MCP Python SDK v2 将外部 MCP Tool 适配进既有 ToolRegistry/ToolExecutor，并统一复用 Permission、Hook、cooperative cancel、Planning effect gate 与 Trace。” | Implementation 已落地；当前本地回归待确认，确认前不要写“已验证通过”或效果提升 |
 | Failure-aware recovery | KEEP | “实现 typed FailureContext/RecoveryDecision 与 bounded RecoveryPolicy，并把 repeated failure 与 P2-1 plan revision gate 联动。” | deterministic regression 已通过；没有 real-model A/B，不能写效果百分比 |
 | Error recovery | REWORD | “实现 transient provider retry、typed failure Observation、loop/completion guard，并用 Failure Harness 做确定性故障回归。” | Failure Harness；不要说生产级容错率 |
 | Loop detection | KEEP | “对重复 Action/Observation 指纹与无进展循环做检测和终止/恢复控制。” | `agent/loop_detector.py`, loop tests | 只能写 contract，不写效果百分比 |
