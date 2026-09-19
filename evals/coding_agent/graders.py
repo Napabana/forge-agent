@@ -217,6 +217,9 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
     skill_selected_count = 0
     skill_loaded_count = 0
     skill_reference_loaded_count = 0
+    mcp_tool_discovered_count = 0
+    mcp_tool_call_count = 0
+    mcp_tool_failure_count = 0
     for event in events:
         event_type = event.get("event_type")
         payload = event.get("payload") or {}
@@ -226,6 +229,14 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
             test_attempt_count += int(tool_name in _TEST_TOOLS)
             file_read_count += int(tool_name in _FILE_READ_TOOLS)
             shell_call_count += int(tool_name == "shell")
+            if payload.get("capability_provider") == "mcp" or tool_name.startswith("mcp__"):
+                mcp_tool_call_count += 1
+        elif event_type == "tool_execution_failed":
+            tool_name = str(payload.get("tool_name") or "")
+            if payload.get("capability_provider") == "mcp" or tool_name.startswith("mcp__"):
+                mcp_tool_failure_count += 1
+        elif event_type == "mcp_tool_discovered":
+            mcp_tool_discovered_count += 1
         elif event_type == "completion_rejected":
             completion_rejection_count += 1
         elif event_type == "reflection":
@@ -276,4 +287,7 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
         skill_selected_count=skill_selected_count,
         skill_loaded_count=skill_loaded_count,
         skill_reference_loaded_count=skill_reference_loaded_count,
+        mcp_tool_discovered_count=mcp_tool_discovered_count,
+        mcp_tool_call_count=mcp_tool_call_count,
+        mcp_tool_failure_count=mcp_tool_failure_count,
     )
