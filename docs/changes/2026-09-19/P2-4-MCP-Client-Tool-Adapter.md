@@ -132,7 +132,7 @@ fixture：`evals/fixtures/coding_agent/mcp/server.py`。它只提供 determinist
 - fixed Eval variant mapping、独立 MCP-specific suite/reference self-check；
 - config / package discovery。
 
-这些只是“测试代码已加入”。当前环境没有执行用户本地 pytest，因此**不记录 passed**。
+测试代码已加入，且用户随后在本地完成修复并 push。当前可核验修复提交 `f842902e1753bdc69b0217d5aa89033bacd2ae82` 的日志记录：定向测试 3 passed、Chat/GitHub Issue 相关测试 25 passed、`git diff --check` 通过。用户未提供最终全量 pytest 的 passed 数量、完整 stdout 或耗时，因此不补造数字。
 
 ## 明确未做
 
