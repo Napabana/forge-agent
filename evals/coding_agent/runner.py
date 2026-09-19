@@ -237,6 +237,7 @@ class EvaluationHarness:
             verifier=verifier if _outcome_graders(task) else None,
         )
         started = time.perf_counter()
+        cleanup_error: Exception | None = None
         try:
             run_result = runner.run(RunRequest(task=agent_task, acceptance=acceptance, entrypoint="eval"))
             elapsed = time.perf_counter() - started
@@ -271,6 +272,24 @@ class EvaluationHarness:
             graders = grade_many(_outcome_graders(task), GraderContext(repo=repo))
             success = False
             error = run_result.summary
+        finally:
+            close = getattr(runner, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    cleanup_error = exc
+
+        if cleanup_error is not None:
+            run_result.status = RunStatus.FAILED
+            run_result.termination_reason = "evaluation_runner_cleanup_failure"
+            run_result.error = (
+                f"evaluation runner cleanup failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+            run_result.summary = run_result.error
+            success = False
+            error = run_result.error
 
         patch_path = trial_dir / "patch.diff"
         patch_path.write_text(_fixture_patch(task, repo), encoding="utf-8")
