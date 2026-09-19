@@ -16,6 +16,7 @@ from tools.base import BaseTool, ToolEffect, ToolErrorType, ToolResult
 
 _MAX_TOOL_NAME = 64
 _MAX_DESCRIPTION_CHARS = 2_000
+_DESCRIPTION_TRUNCATION_SUFFIX = "...[description truncated]"
 _MAX_SCHEMA_CHARS = 32_000
 _MAX_OUTPUT_CHARS = 16_000
 _INVALID_PARAMS = -32602
@@ -137,7 +138,8 @@ class MCPToolAdapter(BaseTool):
             f"from server {self._descriptor.server_id}."
         )
         if len(description) > _MAX_DESCRIPTION_CHARS:
-            return description[: _MAX_DESCRIPTION_CHARS - 24] + "...[description truncated]"
+            prefix_length = _MAX_DESCRIPTION_CHARS - len(_DESCRIPTION_TRUNCATION_SUFFIX)
+            return description[:prefix_length] + _DESCRIPTION_TRUNCATION_SUFFIX
         return description
 
     @property

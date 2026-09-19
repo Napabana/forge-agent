@@ -319,6 +319,9 @@ class TestChatCommand:
             def __init__(self, **kwargs):
                 captured.update(kwargs)
 
+            def close(self):
+                pass
+
             def print_stats(self):
                 pass
 

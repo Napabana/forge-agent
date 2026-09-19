@@ -441,3 +441,11 @@ pytest -q
 - 本轮没有执行 real-model `planning_recovery_skills vs planning_recovery_skills_mcp` A/B，不产生 success-rate/pass@1/token/latency/MCP effectiveness 数字。
 - 本轮没有实现 P2-5 Evolution、Multi-Agent、Forge MCP Server、完整 resources/prompts runtime、OAuth 平台化或 dangerous external account E2E。
 - 本轮更新日志：`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter.md`。
+
+### 最后交接（2026-09-19，Chat/GitHub Issue 清理契约测试修复）
+
+- 修复 Chat 与 GitHub Issue 相关测试替身缺少 `close()` 导致的 3 个 `AttributeError`。
+- 修改 `tests/test_chat.py` 与 `tests/test_github_issue_delivery.py`，仅为 `FakeSession`、`AssertRunner` 补充空实现 `close()`；未修改生产逻辑。
+- 定向测试 3 passed；Chat/GitHub Issue 相关测试共 25 passed；`git diff --check` 通过。
+- 本轮更新日志：`docs/changes/2026-09-19/MCP清理契约测试替身修复.md`。
+- 当前未处理用户原有未跟踪的 `evals/results/local-*` 目录；未处理 stash，未修改 `config/default.yaml`、fixture 或历史结果。

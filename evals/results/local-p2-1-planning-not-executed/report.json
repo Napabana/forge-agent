@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "suite_id": "p2-0-coding-agent-smoke",
+  "execution_status": "not_executed",
+  "real_model_executed": false,
+  "trial_count": 0,
+  "task_count": 8,
+  "tasks": [
+    "simple-feature",
+    "simple-bug-fix",
+    "test-regression",
+    "multi-file-change",
+    "repository-navigation",
+    "completion-test-requirement",
+    "recoverable-test-failure",
+    "final-state-verification"
+  ],
+  "planned_trial_count": 8,
+  "variants": [
+    "planning"
+  ],
+  "reason": "provider_credentials_not_available_in_execution_environment",
+  "claim_boundary": "The suite/reference validation and harness implementation may be inspected separately; this artifact contains no real-model success, token, step, or latency claim."
+}

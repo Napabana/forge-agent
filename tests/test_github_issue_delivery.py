@@ -161,6 +161,9 @@ def test_issue_registry_uses_target_repo(tmp_path, monkeypatch, create_pr):
             assert callable(kwargs["on_event"])
             raise RegistryReached
 
+        def close(self):
+            pass
+
     monkeypatch.setattr(cli, "_build_registry", assert_registry)
     monkeypatch.setattr(runner_module, "ExecutionRunner", AssertRunner)
     with pytest.raises(RegistryReached):
