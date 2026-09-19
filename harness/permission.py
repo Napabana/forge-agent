@@ -26,6 +26,7 @@ from tools.shell_tool import (
     _BLOCKED_PATTERNS,
     _CONFIRM_KEYWORDS,
 )
+from tools.base import ToolEffect, ToolRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +116,7 @@ class PermissionManager:
         deny_patterns: tuple[str, ...] | None = None,
         confirm_keywords: tuple[str, ...] | None = None,
         workspace: str | None = None,
+        registry: ToolRegistry | None = None,
     ) -> None:
         extra = tuple(p for p in self._EXTRA_DENY if p not in _BLOCKED_PATTERNS)
         self.deny_patterns = deny_patterns if deny_patterns is not None \
@@ -122,6 +124,7 @@ class PermissionManager:
         self.confirm_keywords = confirm_keywords if confirm_keywords is not None \
             else _CONFIRM_KEYWORDS
         self.workspace = workspace
+        self.registry = registry
 
     # ------------------------------------------------------------------
     # 校验
@@ -150,9 +153,13 @@ class PermissionManager:
                     return _deny(reason)
             return ALLOW
 
-        # MCP deploy 类
-        if block.name.startswith("mcp__") and "deploy" in block.name:
-            return _confirm(f"MCP destructive-looking tool: {block.name}")
+        # MCP capability：只有 adapter 明确分类为 READ_ONLY 才默认允许。
+        # remote annotations 只是 hint，因此未知/可变更 capability 一律要求确认。
+        if block.name.startswith("mcp__"):
+            tool = self.registry.get_tool(block.name) if self.registry is not None else None
+            if tool is not None and tool.effect is ToolEffect.READ_ONLY:
+                return ALLOW
+            return _confirm(f"MCP mutation-capable or unknown tool: {block.name}")
 
         return ALLOW
 
