@@ -6,6 +6,8 @@ Forge Agent 是一个面向软件工程任务的本地 Coding Agent。项目的�
 
 > 使用方法见 [`USAGE.md`](USAGE.md)。项目实现、测试和 benchmark 的证据边界见 [`docs/evidence/README.md`](docs/evidence/README.md)。
 
+P2 Agent Intelligence 已完成 Structured Planning、Failure-aware Recovery、Agent Skills、MCP capability integration、统一 Coding Agent Evaluation Harness，以及 post-run 的 trajectory-driven Skill Evolution。它们均复用现有执行/Trace/权限边界；真实效果是否提升必须通过单独 real-model evaluation 证明。
+
 ## 1. 整体架构
 
 Forge Agent 将系统拆成六个彼此独立但可组合的层：入口层、执行控制层、上下文层、工具安全层、隔离与状态层、审计与交付层。
@@ -151,7 +153,131 @@ Agent 的 `FINISH` 会经过完成性守卫。Task 会根据描述推断 `requir
 
 其中取消是 cooperative cancellation：已经进入同步 Provider、Tool 或 callback 的调用不会被任意强杀，而是在调用返回后的安全边界停止。
 
-## 4. 模型层：统一 Backend 与能力元数据
+## 4. Agent Intelligence：Planning、Recovery、Skills、MCP 与 Evolution
+
+P2 不另起第二套 Agent loop，而是在现有 `Agent.run() → ToolExecutor → Trace` 主链上增加可组合的 intelligence/runtime state，并把“运行后学习”放到独立 offline pipeline。Planning、Recovery、Skills、MCP 仍受同一 Tool lifecycle、Permission、Cancel 和 Trace 约束，Evolution 也不会在当前 run 内偷偷改写 Agent 行为。
+
+```text
+Runtime path
+
+Task
+  ↓
+PlanningRuntime ───────────────┐
+  ↓                            │
+Agent.run()                    │
+  ├─ SkillRuntime              │
+  ├─ RecoveryRuntime ◀─ failure│
+  └─ ToolExecutor              │
+       ├─ native tools         │
+       └─ MCPToolAdapter       │
+  ↓
+Trace v2 / RunResult / Acceptance
+
+Post-run path
+
+Trace v2 + TrialResult
+  ↓
+ExperienceMiner
+  ↓
+Candidate Skill（与正式 catalog 隔离）
+  ↓
+P2-0 EvaluationHarness
+  ↓
+PromotionGate
+  ↓
+显式 promote()
+  ↓
+<repo>/.agents/skills/
+  ↓
+现有 SkillCatalog / SkillRuntime
+```
+
+### 4.1 Structured Planning
+
+核心文件：`agent/planning.py`、`agent/core.py`。
+
+`planning_mode` 支持：
+
+- `off`：保持基础 ReAct，不创建结构化计划；
+- `auto`：对要求测试、多文件提示或明显多阶段描述的任务启用 Planning，简单任务可跳过；
+- `always`：每个任务都要求结构化计划。
+
+计划是 typed runtime state，而不是一段自由文本。它包含 step、target、verification 和 version；当 Planning 已启用时，repository-mutating Tool 在必要计划尚未建立或需要 revision 时会被 runtime gate 阻止。计划状态每轮重新注入 model-facing context，因此不依赖历史消息一直保留原文。
+
+### 4.2 Failure-aware Recovery
+
+核心文件：`agent/recovery.py`、`agent/core.py`。
+
+`recovery_mode=structured` 会把已经发生的失败先归一成 `FailureContext`，再由 bounded `RecoveryPolicy` 产生 `RecoveryDecision`。当前策略区分 test/tool/permission/loop/no-progress/completion/infrastructure 等 failure category，并可选择 inspect、rerun test、change approach、replan 或 give up。
+
+Recovery 不是“所有失败都 retry”。Infrastructure failure 保留既有 fatal contract；重复失败受 `recovery_max_attempts` 限制；当当前 plan 已被证据推翻时，Recovery 可以要求 P2-1 创建 `PlanRevision` 后再继续 mutation。
+
+### 4.3 Agent Skills
+
+核心文件：`skills/catalog.py`、`skills/runtime.py`。
+
+Skill 是 filesystem workflow/context capability：
+
+```text
+project: <repo>/.agents/skills/<skill-name>/SKILL.md
+global : ~/.forge-agent/skills/<skill-name>/SKILL.md
+```
+
+project 同名 Skill 覆盖 global。System context 默认只放 Skill metadata；模型通过 `skill_load` 才加载完整 instructions，通过 `skill_reference_load` 再按需读取 `references/`。这形成 progressive disclosure，避免把所有 workflow 全量塞进 prompt。
+
+`scripts/` 只作为 manifest 暴露，Skill subsystem 自己不执行脚本。任何可执行动作仍必须回到正常 Tool/Shell → ToolExecutor → Permission/Hook/Cancel/Trace 链路。
+
+### 4.4 MCP capability integration
+
+核心文件：`mcp_integration/manager.py`、`mcp_integration/adapter.py`、`mcp_integration/registry.py`。
+
+Forge 作为 MCP Host，使用 official MCP Python SDK v2 连接 stdio 或 Streamable HTTP server。远端 Tool 会先被适配成普通 Forge Tool，再注册进现有 `ToolRegistry`：
+
+```text
+LLM
+ ↓
+ToolRegistry
+ ↓
+ToolExecutor
+ ↓
+MCPToolAdapter
+ ↓
+MCPClientManager
+ ↓
+official MCP SDK
+ ↓
+MCP Server
+```
+
+因此 MCP 不绕过 Hook、Permission、cooperative cancel、Planning effect gate 或 Trace。远端 Tool 使用 `mcp__<server-id>__<tool-name>` 命名；ToolAnnotations 默认不可信，只有 server 配置显式 `trust_read_only_annotations=true` 时，read-only hint 才能降低 permission classification。
+
+### 4.5 Coding Agent Evaluation Harness
+
+核心文件：`evals/coding_agent/`。
+
+P2-0 把 task fixture、grader、trial、metrics、Trace artifact 与 report 固定为统一 harness。当前 architecture variant 已映射为：
+
+```text
+baseline_react
+planning
+planning_recovery
+planning_recovery_skills
+planning_recovery_skills_mcp
+```
+
+Harness 同时记录 outcome 与 process：required grader/acceptance 决定任务成功，Trace 派生 steps、tokens、tool/test、plan/recovery、Skill、MCP 等 metrics。CLI 默认只做 fixture/reference validation 并写 `not_executed`；只有显式 `--real-model` 才会调用配置的真实模型。
+
+### 4.6 Trajectory-driven Skill Evolution
+
+核心文件：`experience/trajectory.py`、`experience/candidate.py`、`experience/evaluation.py`、`experience/promotion.py`、`experience/store.py`。
+
+P2-5 是 post-run offline subsystem，不进入当前任务的 `Agent.run()`。它只从成功且 independent acceptance 已通过的 trajectory 提取 positive workflow，并可消费 P2-2 的 typed failure/recovery event 形成 recovery pattern。
+
+Candidate Skill 保存在 repository-bounded `.forge-agent/experience/`，默认不进入正式 `SkillCatalog`。Candidate 必须先经过 P2-0 baseline vs candidate evaluation，再由 deterministic `PromotionGate` 给出 `PASS / REJECT / INSUFFICIENT_EVIDENCE / EVALUATION_FAILED`。即使 Gate PASS，也只有显式 `PromotionManager.promote()` 才会写入 project Skill；用户手工 Skill没有 Forge evolution provenance 时不会被静默覆盖。
+
+这套机制是 **trajectory-driven + eval-gated improvement**，不是在线 RL、模型参数训练、当前 run 自改 prompt，也不是“Agent 自动越跑越聪明”。
+
+## 5. 模型层：统一 Backend 与能力元数据
 
 核心文件：
 
@@ -174,11 +300,11 @@ Agent 的 `FINISH` 会经过完成性守卫。Task 会根据描述推断 `requir
 
 未知 OpenAI-compatible 代理不会仅凭模型名伪造 capability。若模型窗口未知，Forge 可以使用配置的 `context_budget_cap` 作为兼容 fallback，但它只代表 Forge policy，不代表模型真实 Context Window。
 
-## 5. Context：从“整个仓库塞进 Prompt”到可预算上下文
+## 6. Context：从“整个仓库塞进 Prompt”到可预算上下文
 
 `context/` 不只是一个 Repo Map 模块，而是一整套 model-facing context 管理层。
 
-### 5.1 Model-aware Token Budget
+### 6.1 Model-aware Token Budget
 
 核心文件：`context/token_budget.py`、`config/schema.py`、`llm/capabilities.py`。
 
@@ -197,7 +323,7 @@ available_input = effective_window
 
 本地请求前计数使用 `TokenCounter`：已知 tiktoken 模型尽量使用 model-aware tokenizer；未知模型使用偏保守的 UTF-8 本地估算。这个估算只用于请求前 budget / compaction 决策；Provider 响应中的 `TokenUsage` 才是请求后的 usage accounting 与 Trace 事实来源。
 
-### 5.2 Persistent Query-aware Repo Map
+### 6.2 Persistent Query-aware Repo Map
 
 核心文件：
 
@@ -210,7 +336,7 @@ available_input = effective_window
 
 当工具修改仓库后，Agent 会依据 repository fingerprint / 写入信号让下一轮 Repo Map 失效或增量同步，避免继续使用明显过期的仓库视图。
 
-### 5.3 History 与两阶段 Context Compaction
+### 6.3 History 与两阶段 Context Compaction
 
 核心文件：
 
@@ -246,7 +372,7 @@ canonical history
 
 重要边界：EventLog 是审计记录，canonical History 是会话事实，compacted view 只是给下一次模型请求使用的派生视图。
 
-## 6. Chat Session：恢复状态与审计日志分离
+## 7. Chat Session：恢复状态与审计日志分离
 
 核心文件：`entry/chat.py`、`agent/session.py`、`agent/session_store.py`。
 
@@ -262,7 +388,7 @@ logs/chat/<repo_key>/<session_id>/
 
 如果进程在一轮中途退出，`pending_round` 会在恢复时转成明确的 interrupted round，并要求用户检查仓库和 round log，而不是假定上次 Tool side effect 已经完整完成。
 
-## 7. Tool 安全层：所有副作用经过同一生命周期
+## 8. Tool 安全层：所有副作用经过同一生命周期
 
 核心文件：
 
@@ -298,17 +424,17 @@ cancel
 - timeout：保留独立 TIMEOUT 语义；
 - post-hook exception：只记 diagnostic，不覆盖已经真实发生的 ToolResult。
 
-### 7.1 路径与命令边界
+### 8.1 路径与命令边界
 
 `PermissionManager` 对 Shell 命令执行 deny / confirm / allow 决策，并可绑定 `workspace` 限制文件工具路径。产品 Runner 默认启用 PermissionManager；isolate 模式额外显式绑定 `workspace=<worktree>`。
 
 文件工具自身也接收 workspace，因此 direct 模式的文件读写不会仅依赖 LLM 自觉提供正确路径。
 
-## 8. Worktree 与 TaskEngine：隔离 Git 工作区，而不是“复制仓库”
+## 9. Worktree 与 TaskEngine：隔离 Git 工作区，而不是“复制仓库”
 
 核心文件：`task/engine.py`、`runtime/worktree.py`、`agent/orchestrate.py`。
 
-### 8.1 TaskEngine
+### 9.1 TaskEngine
 
 `TaskEngine` 使用 SQLite WAL 持久化任务状态与 DAG 依赖。认领任务使用原子 `UPDATE ... WHERE ...` 语义，而不是“读 JSON → 修改 → 写回”，从而避免并发 claim 的经典竞态。
 
@@ -322,7 +448,7 @@ create_task
  → complete / fail
 ```
 
-### 8.2 WorktreeSession
+### 9.2 WorktreeSession
 
 `WorktreeSession` 基于：
 
@@ -340,7 +466,7 @@ git worktree add -b wt/<task-name> <path> <base-commit>
 
 保留 worktree 只代表“成果仍在独立工作树中”，不代表已经 commit、merge、push 或创建 PR。
 
-## 9. Docker Runtime：与 Worktree 是两个正交边界
+## 10. Docker Runtime：与 Worktree 是两个正交边界
 
 核心文件：`tools/runtime.py`、`tools/sandbox.Dockerfile`。
 
@@ -374,7 +500,7 @@ Docker 默认能力包括：
 
 isolate+sandbox 在调用模型前还会执行 preflight，检查 `git`、`pytest`、worktree 可见性和可写性；preflight 失败被 Runner 归一为 `FAILED / infrastructure_error`。
 
-## 10. Trace v2：把运行过程变成可追溯事实
+## 11. Trace v2：把运行过程变成可追溯事实
 
 核心文件：`agent/event_log.py`、`agent/trace_v2.py`。
 
@@ -393,7 +519,7 @@ Model span 同时记录本地 `token_breakdown` 和独立 `provider_usage`。前
 
 EventLog 可以 replay 读取和统计，但它不是确定性执行重放系统。
 
-## 11. Independent Acceptance：Agent 成功之后仍要独立验收
+## 12. Independent Acceptance：Agent 成功之后仍要独立验收
 
 核心文件：`agent/runner.py::AcceptanceContract`。
 
@@ -409,7 +535,7 @@ Acceptance 支持：
 
 当前 verifier 失败不会自动回灌模型继续修复；这是明确的现有边界。
 
-## 12. GitHub Issue → PR：把模型修改与确定性交付分开
+## 13. GitHub Issue → PR：把模型修改与确定性交付分开
 
 核心文件：`entry/github_issue.py`。
 
@@ -446,7 +572,7 @@ Deterministic Delivery
 
 `--no-pr` 会跳过自动交付，因此不要求 verifier；它仍会创建独立 issue branch 并在本地运行 Agent。
 
-## 13. API：把 isolate 运行暴露为服务
+## 14. API：把 isolate 运行暴露为服务
 
 核心文件：`entry/api.py`、`entry/api_store.py`。
 
@@ -456,12 +582,14 @@ API cancellation 使用 `threading.Event` 传到 Agent / Tool lifecycle，是 co
 
 API Store 与 Agent TaskEngine 是两个不同状态域：前者服务 HTTP 请求生命周期，后者记录 isolate Agent task 生命周期。
 
-## 14. 关键目录
+## 15. 关键目录
 
 ```text
 forge-agent/
 ├── agent/
 │   ├── core.py              # 同步 ReAct、完成性守卫、Reflection、cancel
+│   ├── planning.py          # typed Plan / PlanRevision / PlanningRuntime
+│   ├── recovery.py          # FailureContext / RecoveryPolicy / RecoveryRuntime
 │   ├── runner.py            # 四入口统一执行组合根 + Acceptance
 │   ├── orchestrate.py       # isolate 的 async 资源组合根
 │   ├── event_log.py         # append-only EventLog
@@ -492,12 +620,17 @@ forge-agent/
 ├── task/engine.py           # SQLite WAL TaskEngine
 ├── runtime/worktree.py      # WorktreeSession / result policy
 ├── llm/                     # Backend adapters / routing / capabilities / usage
+├── skills/                  # P2-3 Skill catalog / progressive disclosure runtime
+├── mcp_integration/         # P2-4 MCP client manager / Tool adapter / registration
+├── experience/              # P2-5 offline trajectory → candidate → eval → promotion
 ├── entry/
 │   ├── cli.py               # run/chat/log
 │   ├── chat.py              # 多轮 ChatSession
 │   ├── api.py               # HTTP API
 │   └── github_issue.py      # Issue → Acceptance → PR
-├── evals/                   # benchmark / ablation / evidence verification
+├── evals/
+│   ├── coding_agent/        # P2-0 EvaluationHarness / grader / report
+│   └── fixtures/            # deterministic task / Skill / MCP / evolution fixtures
 ├── docs/
 │   ├── evidence/README.md   # Claim → Evidence → Result → Limitation
 │   └── changes/             # 每轮改动记录
@@ -505,13 +638,17 @@ forge-agent/
 └── USAGE.md
 ```
 
-## 15. 功能矩阵与当前边界
+## 16. 功能矩阵与当前边界
 
 | 能力 | run | chat | API | GitHub Issue |
 | --- | --- | --- | --- | --- |
 | 统一 ExecutionRunner | ✓ | ✓ | ✓ | ✓ |
 | Persistent Query-aware Repo Map | ✓ | ✓ | ✓ | ✓ |
 | Model-aware Token Budget | ✓ | ✓ | ✓ | ✓ |
+| Structured Planning | ✓ | ✓ | ✓ | ✓ |
+| Failure-aware Recovery | ✓ | ✓ | ✓ | ✓ |
+| Agent Skills | ✓ | ✓ | ✓ | ✓ |
+| MCP Tool integration | ✓ | ✓ | ✓ | ✓ |
 | Trace v2 | ✓ | ✓（每轮） | ✓ | ✓ + delivery |
 | 持久化 Session | — | ✓ | — | — |
 | Traceable Context Compaction | — | ✓ | — | — |
@@ -521,9 +658,11 @@ forge-agent/
 | Independent Acceptance | Runner 可用 | Runner 可用 | Runner 可用 | 自动 PR 强制 verifier |
 | 自动 commit / push / PR | — | — | — | ✓ |
 
-明确没有实现或不应夸大的能力包括：MCP 正式产品接入、多 Agent、parallel/multi-tool call、任意同步调用强制终止、自动 merge、无人监督发布、分布式 Session Service、完整 OpenTelemetry、Context recall C6。
+P2-0 Evaluation Harness 与 P2-5 Skill Evolution 是独立的 evaluation/post-run 能力，不是四入口上的额外执行模式。Evolution 的正式生效仍通过现有 project SkillCatalog。
 
-## 16. 安装
+明确没有实现或不应夸大的能力包括：多 Agent、parallel/multi-tool call、任意同步调用强制终止、自动 merge、无人监督发布、分布式 Session Service、完整 OpenTelemetry、Context recall C6、在线 RL/模型参数训练、自动 Skill promotion。
+
+## 17. 安装
 
 环境要求：Python 3.11+、Git；使用 Docker 路径时需要 Docker daemon。
 
@@ -552,7 +691,7 @@ pip install -e ".[api,dev]"
 pip install -e ".[full,dev]"
 ```
 
-## 17. 配置：推荐显式区分模型能力与 Forge policy
+## 18. 配置：推荐显式区分模型能力与 Forge policy
 
 `config/default.yaml` 仍兼容旧字段。新配置建议使用清晰语义：
 
@@ -577,10 +716,22 @@ agent:
   context_safety_margin_tokens: 1024
   log_dir: ./logs
 
+  # P2 runtime capabilities
+  planning_mode: auto            # off | auto | always
+  recovery_mode: structured      # off | structured
+  recovery_max_attempts: 4
+  skills_enabled: true
+  skills_global_dir: ~/.forge-agent/skills
+  skills_max_loaded: 3
+
 context:
   repo_map_budget: 8000
   history_window: 20
   semantic_packet_max_tokens: 16000
+
+mcp:
+  enabled: false
+  servers: []
 ```
 
 如果是未知 OpenAI-compatible 代理，不确定 Context Window 时应省略 `context_window` / `model_max_output_tokens`，保留 `context_budget_cap` 作为 Forge fallback。
@@ -592,7 +743,7 @@ context:
 
 API Key 应通过环境变量或 `FORGE_ENV_FILE` 指定的仓库外 env 文件加载，不应把真实 secret 提交到仓库。
 
-## 18. 快速开始
+## 19. 快速开始
 
 一次性任务：
 
@@ -642,7 +793,7 @@ python -m entry.github_issue \
 
 完整逐步验收见 [`USAGE.md`](USAGE.md)。
 
-## 19. 证据与项目声明边界
+## 20. 证据与项目声明边界
 
 本仓库把“实现事实”“离线确定性回归”“冻结 benchmark”“真实模型小样本”和“真实端到端案例”分开记录。所有可引用数字统一以 [`docs/evidence/README.md`](docs/evidence/README.md) 为入口。
 

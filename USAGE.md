@@ -164,7 +164,290 @@ agent:
 
 中转站流式兼容异常时，先在同一任务上加 `--no-stream` 做对照，不要把“关闭流式”误当成切换协议。
 
-## 3. 建议的验收目标仓库
+## 3. P2 Agent Intelligence：配置与实际使用
+
+Planning、Recovery、Skills、MCP 都通过配置进入现有四入口，不需要另一套 CLI。建议先从下面这个“开启 Planning + Recovery + Skills，但暂时关闭 MCP”的配置开始：
+
+```yaml
+agent:
+  planning_mode: auto
+  recovery_mode: structured
+  recovery_max_attempts: 4
+  skills_enabled: true
+  skills_global_dir: ~/.forge-agent/skills
+  skills_max_loaded: 3
+  skills_max_chars: 12000
+  skills_reference_max_chars: 8000
+
+mcp:
+  enabled: false
+  servers: []
+```
+
+同一份配置会被 CLI run、Chat、API 与 GitHub Issue 入口映射到 `AgentConfig` / `ExecutionRunner`。
+
+### 3.1 Planning：`off | auto | always`
+
+推荐日常先用 `planning_mode: auto`。`off` 保持基础 ReAct；`auto` 在任务要求测试、出现至少两个路径提示或明显多阶段语言时启用结构化 Planning；`always` 对所有任务要求 typed plan。
+
+```bash
+agent --config ~/forge-agent-local.yaml run \
+  --repo "$TARGET_REPO" \
+  --task "检查 calculator.py 和 test_calculator.py，修复实现并运行测试。"
+```
+
+Trace 重点看 `plan_created`、`plan_step_completed`、`plan_revised`、`planning_skipped`。当 Planning 已要求计划时，repository-mutating Tool 不能在缺少必要 plan/revision 的情况下直接执行。
+
+### 3.2 Recovery：不是“失败就重试”
+
+```yaml
+agent:
+  recovery_mode: structured
+  recovery_max_attempts: 4
+```
+
+P2-2 根据已经发生的 runtime evidence 构造 `FailureContext`，再选择 bounded recovery strategy。当前策略包括 inspect、rerun test、change approach、replan 和 give up。
+
+```text
+failure_classified
+   ↓
+recovery_selected
+   ↓
+inspect / change approach / replan
+   ↓
+plan_revised（需要时）
+   ↓
+继续现有 Agent loop
+```
+
+Infrastructure failure 不会因为开启 Recovery 就被包装成普通 retry；超过 `recovery_max_attempts` 后也会停止。
+
+### 3.3 Skills：创建一个 project Skill
+
+项目 Skill 目录：
+
+```text
+<TARGET_REPO>/.agents/skills/<skill-name>/SKILL.md
+```
+
+```bash
+mkdir -p "$TARGET_REPO/.agents/skills/verify-python-fix"
+cat > "$TARGET_REPO/.agents/skills/verify-python-fix/SKILL.md" <<'EOF'
+---
+name: verify-python-fix
+description: Use for small Python bug fixes that must be verified with a focused pytest run.
+---
+Inspect the failing behavior before editing.
+Make the smallest justified change.
+Run the narrowest relevant pytest after the edit.
+Do not finish until the requested verification passes.
+EOF
+```
+
+开启：
+
+```yaml
+agent:
+  skills_enabled: true
+  skills_global_dir: ~/.forge-agent/skills
+```
+
+project 同名 Skill 覆盖 global。Forge 首轮只放 metadata；需要时模型调用 `skill_load` 加载完整 instructions，`references/` 再通过 `skill_reference_load` 按需读取。`scripts/` 只暴露 manifest，不会由 Skill subsystem 自动执行。
+
+Trace 可检查 `skill_discovered`、`skill_selected`、`skill_loaded`、`skill_reference_loaded`、`skill_rejected`。不要期待每个任务都加载 Skill；should-not-trigger 本身也是正确行为。
+
+### 3.4 MCP：把远端 capability 接成普通 Forge Tool
+
+stdio：
+
+```yaml
+mcp:
+  enabled: true
+  servers:
+    - id: docs
+      transport: stdio
+      command: python
+      args:
+        - /absolute/path/to/mcp_server.py
+      timeout_seconds: 30
+      trust_read_only_annotations: false
+```
+
+Streamable HTTP：
+
+```yaml
+mcp:
+  enabled: true
+  servers:
+    - id: internal_docs
+      transport: streamable_http
+      url: https://example.internal/mcp
+      timeout_seconds: 30
+      trust_read_only_annotations: false
+```
+
+远端 Tool 注册成 `mcp__<server-id>__<remote-tool-name>`，仍经过 ToolRegistry → ToolExecutor → Hook/Permission → MCPToolAdapter → MCP Server。
+
+`trust_read_only_annotations` 默认保持 `false`。只有明确信任该 server 的 ToolAnnotations 时才设为 `true`；否则按 mutation-capable 的保守边界处理。真实 secret 不要直接提交到 config。
+
+### 3.5 P2-0 Evaluation Harness：先验证，再跑真实模型
+
+入口：
+
+```bash
+python -m evals.coding_agent
+```
+
+不加 `--real-model` 时：
+
+```bash
+python -m evals.coding_agent \
+  --variant baseline_react \
+  --output-dir evals/results/local-baseline-check
+```
+
+只验证 suite/reference 并写 `not_executed` report，不调用真实 Provider。
+
+当前 architecture variant：
+
+```text
+baseline_react
+planning
+planning_recovery
+planning_recovery_skills
+planning_recovery_skills_mcp
+```
+
+真实模型第一轮建议 1 repetition：
+
+```bash
+for variant in \
+  baseline_react \
+  planning \
+  planning_recovery \
+  planning_recovery_skills
+do
+  python -m evals.coding_agent \
+    --config ~/forge-agent-local.yaml \
+    --variant "$variant" \
+    --repetitions 1 \
+    --real-model \
+    --output-dir "evals/results/local-$variant-r1"
+done
+```
+
+第一轮先确认 task、grader、Planning/Recovery/Skill process event 真的被触发，再决定是否增加 repetitions。`planning_recovery_skills_mcp` 使用仓库固定 local MCP eval fixture；它不代表任意外部 MCP server 的生产效果。
+
+单 task：
+
+```bash
+python -m evals.coding_agent \
+  --config ~/forge-agent-local.yaml \
+  --variant planning_recovery \
+  --task <task-id> \
+  --real-model \
+  --output-dir evals/results/local-one-task
+```
+
+### 3.6 P2-5 Skill Evolution：offline Python API，不是 CLI
+
+当前没有 `agent evolve` 或自动 promotion 命令。正确主链：
+
+```text
+Trace v2 / TrialResult
+  ↓ load_trajectory
+ExperienceMiner
+  ↓
+DeterministicCandidateGenerator
+  ↓
+CandidateStore
+  ↓
+evaluate_candidate → P2-0 EvaluationHarness
+  ↓
+PromotionGate
+  ↓
+save_decision
+  ↓
+显式 PromotionManager.promote()
+```
+
+核心 API 形态：
+
+```python
+from evals.coding_agent.schema import EvaluationSuite
+from experience.candidate import DeterministicCandidateGenerator
+from experience.evaluation import evaluate_candidate
+from experience.promotion import PromotionGate, PromotionManager
+from experience.schema import CandidateStatus, PromotionStatus
+from experience.store import CandidateStore
+from experience.trajectory import ExperienceMiner, load_trajectory
+
+repo = "/path/to/target-repo"
+trajectories = [
+    load_trajectory("/path/to/trace-a.jsonl").normalized,
+    load_trajectory("/path/to/trace-b.jsonl").normalized,
+]
+pattern = ExperienceMiner().mine(trajectories)[0]
+candidate = DeterministicCandidateGenerator().generate(pattern)
+
+store = CandidateStore(repo)
+store.save_candidate(candidate)
+store.set_status(candidate.candidate_id, candidate.candidate_version, CandidateStatus.EVALUATING)
+
+suite = EvaluationSuite.load("evals/fixtures/skill_evolution/suite.json")
+
+# runner_factory_builder 必须返回 P2-0 使用的 ExecutionRunner factory；
+# tests/test_skill_evolution.py 给出了 deterministic 示例。
+record = evaluate_candidate(
+    candidate=candidate,
+    suite=suite,
+    output_dir="/tmp/forge-evolution-eval",
+    runner_factory_builder=runner_factory_builder,
+)
+store.save_evaluation(record)
+
+decision = PromotionGate().evaluate(candidate, record)
+store.save_decision(decision)
+
+if decision.status is PromotionStatus.PASS:
+    PromotionManager(repo, store).promote(candidate, decision)
+```
+
+Candidate 默认在 `<TARGET_REPO>/.forge-agent/experience/`，不会自动进入 `<TARGET_REPO>/.agents/skills/`。只有持久化 evaluation + PASS decision 后显式 `promote()` 才部署。
+
+Forge-managed Skill rollback：
+
+```python
+PromotionManager(repo, store).rollback("skill-name", 1)
+```
+
+deterministic 验证：
+
+```bash
+python -m pytest -q tests/test_skill_evolution.py
+```
+
+这证明 mechanism/regression contract，不是“Agent 已经自主进化”。
+
+### 3.7 P2 最小手工检查
+
+```text
+1. 配置
+   planning_mode / recovery_mode / skills_enabled / mcp.enabled
+
+2. RunResult
+   status / termination_reason / acceptance_status
+
+3. Trace
+   plan_* / failure_* / recovery_* / skill_* / mcp_*
+
+4. Repository / artifacts
+   git diff / tests / .agents/skills / .forge-agent/experience
+```
+
+某一能力没有对应 event 时，先判断任务是否真的需要它，不要为了让计数非零去改 fixture 或放宽 grader。
+
+## 4. 建议的验收目标仓库
 
 为了能明确观察修改、测试与 Worktree，准备一个小型 Git 仓库：
 
@@ -205,9 +488,9 @@ git status --short
 git log -1 --oneline
 ```
 
-## 4. 流程一：`agent run` direct
+## 5. 流程一：`agent run` direct
 
-### 4.1 运行
+### 5.1 运行
 
 在 Forge Agent 仓库中：
 
@@ -226,7 +509,7 @@ agent --config ~/forge-agent-local.yaml run \
   --confirm
 ```
 
-### 4.2 这条命令实际走什么路径
+### 5.2 这条命令实际走什么路径
 
 ```text
 entry/cli.py
@@ -250,7 +533,7 @@ RunResult
 
 Direct run 不创建 Worktree。Agent 的文件写入就是目标仓库的真实 working tree 修改。
 
-### 4.3 验收
+### 5.3 验收
 
 ```bash
 cd "$TARGET_REPO"
@@ -279,9 +562,9 @@ agent log list
 agent log show logs/<latest>.jsonl
 ```
 
-## 5. `run` 的完成性、失败与权限行为
+## 6. `run` 的完成性、失败与权限行为
 
-### 5.1 完成性守卫
+### 6.1 完成性守卫
 
 如果任务描述推断出“需要修改”和/或“需要测试”，模型直接 FINISH 不一定被接受。Core 会检查真实写入、仓库变化、测试行为与 fatal runtime state。
 
@@ -293,7 +576,7 @@ python -m pytest -q
 agent log show ...
 ```
 
-### 5.2 `--confirm` 的真实语义
+### 6.2 `--confirm` 的真实语义
 
 产品路径始终经过 PermissionManager。对需要 CONFIRM 的命令：
 
@@ -303,11 +586,11 @@ agent log show ...
 
 因此旧版“没加 `--confirm` 就直接执行危险命令”的理解是不正确的。
 
-### 5.3 Ctrl+C / cancel
+### 6.3 Ctrl+C / cancel
 
 当前是 cooperative cancellation。已经开始的同步 Provider / Tool 调用不保证被立即强杀，而是在返回后的安全边界停止。
 
-## 6. 流程二：`agent chat`
+## 7. 流程二：`agent chat`
 
 Chat 的重点不是“把 run 放进 REPL”，而是：
 
@@ -317,7 +600,7 @@ Chat 的重点不是“把 run 放进 REPL”，而是：
 - repository revision 变化时刷新 Repo Map；
 - 高 Context pressure 时启用 `TraceableCompaction`。
 
-### 6.1 启动
+### 7.1 启动
 
 ```bash
 agent --config ~/forge-agent-local.yaml chat --repo "$TARGET_REPO"
@@ -325,7 +608,7 @@ agent --config ~/forge-agent-local.yaml chat --repo "$TARGET_REPO"
 
 启动后会显示 Session ID 与状态文件路径。
 
-### 6.2 建议完整跑三轮
+### 7.2 建议完整跑三轮
 
 第一轮：
 
@@ -352,7 +635,7 @@ agent --config ~/forge-agent-local.yaml chat --repo "$TARGET_REPO"
 - 仓库修改后下一轮 Repo Map 是否会重新同步；
 - 每轮是否生成独立 Trace。
 
-### 6.3 Chat 内置命令
+### 7.3 Chat 内置命令
 
 ```text
 /stats
@@ -375,7 +658,7 @@ agent --config ~/forge-agent-local.yaml chat --repo "$TARGET_REPO"
 - `/clear`：清掉有效 LLM history，同时重置 compaction lineage；
 - `/exit`：退出。
 
-### 6.4 从新进程恢复
+### 7.4 从新进程恢复
 
 退出后执行：
 
@@ -395,7 +678,7 @@ agent --config ~/forge-agent-local.yaml chat \
   --resume <SESSION_ID>
 ```
 
-### 6.5 检查 Session 文件
+### 7.5 检查 Session 文件
 
 默认路径：
 
@@ -406,7 +689,7 @@ logs/chat/<repo_key>/<session_id>/rounds/*.jsonl
 
 `state.json` 是恢复状态真相源；`rounds/*.jsonl` 是审计日志。不要把 EventLog 当成 Session replay state。
 
-### 6.6 `--no-session`
+### 7.6 `--no-session`
 
 如果只想临时对话：
 
@@ -418,7 +701,7 @@ agent --config ~/forge-agent-local.yaml chat \
 
 此时 Session 显示为 ephemeral，不能 `--continue` / `--resume`。
 
-### 6.7 Context Compaction 怎么验证
+### 7.7 Context Compaction 怎么验证
 
 正常的小仓库/短会话不一定触发 compaction。它只在完整下一请求的 pressure 达到阈值后工作。
 
@@ -430,11 +713,11 @@ agent --config ~/forge-agent-local.yaml chat \
 
 对应 Trace 会记录 `context_compaction_started`、checkpoint、before/after tokens、pressure 等信息。Semantic side-call 失败时会记录失败并走结构化安全回退，而不是直接丢失 canonical history。
 
-## 7. 流程三：Git Worktree isolate
+## 8. 流程三：Git Worktree isolate
 
 Worktree 是最值得单独验收的一条路径，因为它和普通 run 的文件落点完全不同。
 
-### 7.1 先恢复目标仓库 clean
+### 8.1 先恢复目标仓库 clean
 
 ```bash
 cd "$TARGET_REPO"
@@ -449,7 +732,7 @@ git status --short
 git rev-parse HEAD
 ```
 
-### 7.2 `keep-if-changed`
+### 8.2 `keep-if-changed`
 
 ```bash
 cd /path/to/forge-agent
@@ -468,7 +751,7 @@ Worktree: /.../.worktrees/task-...
 Changes : ...
 ```
 
-### 7.3 检查“主工作树没有被改”
+### 8.3 检查“主工作树没有被改”
 
 ```bash
 cd "$TARGET_REPO"
@@ -488,7 +771,7 @@ python -m pytest -q test_calculator.py
 
 这说明修改保留在独立 checkout/index/branch 中。
 
-### 7.4 `discard`
+### 8.4 `discard`
 
 再运行一轮：
 
@@ -510,7 +793,7 @@ git worktree list
 git branch --list 'wt/*'
 ```
 
-### 7.5 isolate 的内部链路
+### 8.5 isolate 的内部链路
 
 ```text
 ExecutionRunner(isolate=True)
@@ -536,11 +819,11 @@ WorktreeArtifact → RunResult
 
 TaskEngine 默认 DB 位于 `log_dir/tasks.db`；API 使用自己的 Engine 路径。
 
-## 8. 流程四：Docker sandbox
+## 9. 流程四：Docker sandbox
 
 Docker 和 Worktree 的职责必须分开理解。
 
-### 8.1 Docker 前置检查
+### 9.1 Docker 前置检查
 
 ```bash
 docker version
@@ -555,7 +838,7 @@ forge-agent-sandbox:py311
 
 如果本地没有，Runtime 会使用 `tools/sandbox.Dockerfile` 构建。镜像内包含 Python 3.11、Git、pytest 等基础工具。
 
-### 8.2 direct sandbox
+### 9.2 direct sandbox
 
 ```bash
 agent --config ~/forge-agent-local.yaml run \
@@ -575,7 +858,7 @@ agent --config ~/forge-agent-local.yaml run \
 
 所以 `--sandbox` 不是 Git 修改隔离功能。
 
-### 8.3 isolate + sandbox
+### 9.3 isolate + sandbox
 
 推荐把两者组合起来验收：
 
@@ -613,7 +896,7 @@ Agent
 
 主工作树不是 Agent 的可写工作区；Agent 的 Git/命令副作用落到临时 Worktree。
 
-### 8.4 preflight
+### 9.4 preflight
 
 isolate+sandbox 在调用 LLM 之前检查：
 
@@ -626,7 +909,7 @@ test -w .
 
 如果失败，应看到 infrastructure failure，而不是继续花模型 token。
 
-### 8.5 默认断网的影响
+### 9.5 默认断网的影响
 
 在 Docker 中让 Agent 执行：
 
@@ -637,11 +920,11 @@ curl <外部地址>
 
 通常会因为 `--network none` 失败。这个行为是预期的。复杂项目应预构建适合自己的 sandbox image，而不是在任务运行期间依赖联网安装。
 
-## 9. 流程五：GitHub Issue 本地修复
+## 10. 流程五：GitHub Issue 本地修复
 
 正式自动 PR 前，先跑 `--no-pr`，这样可以先验证 Issue → Agent 的任务转换和本地修改。
 
-### 9.1 GitHub Token
+### 10.1 GitHub Token
 
 ```bash
 export GITHUB_TOKEN=...
@@ -651,7 +934,7 @@ Token 至少需要读取 Issue；自动 PR 还需要 push branch / create PR 对
 
 Forge 的 git clone/push 通过临时认证 header 传 Token，不会主动把 Token 写进 remote URL。
 
-### 9.2 `--no-pr`
+### 10.2 `--no-pr`
 
 准备一个测试仓库和 Issue，例如 `owner/test-repo#1`：
 
@@ -691,11 +974,11 @@ git diff
 
 注意：`--no-pr` 仍会创建 issue 工作分支，只是不执行自动 delivery。
 
-## 10. 流程六：GitHub Issue 自动 PR
+## 11. 流程六：GitHub Issue 自动 PR
 
 这是当前最完整的交付链路。
 
-### 10.1 前置条件
+### 11.1 前置条件
 
 自动 PR 模式要求：
 
@@ -714,7 +997,7 @@ python -m pytest -q
 
 如果 repo 已经被前一次 `--no-pr` 改过，最好换一个全新的 local path，避免 clean baseline 与分支状态混淆。
 
-### 10.2 自动 PR 命令
+### 11.2 自动 PR 命令
 
 ```bash
 rm -rf /tmp/forge-issue-delivery
@@ -728,7 +1011,7 @@ python -m entry.github_issue \
   --verify-command "python -m pytest -q"
 ```
 
-### 10.3 这条链路为什么与普通 Agent commit 不一样
+### 11.3 这条链路为什么与普通 Agent commit 不一样
 
 自动 PR 模式构造 ToolRegistry 后会主动移除：
 
@@ -755,7 +1038,7 @@ deliver_pull_request
   └─ create Pull Request
 ```
 
-### 10.4 失败状态
+### 11.4 失败状态
 
 自动交付可能停在：
 
@@ -771,7 +1054,7 @@ delivered
 
 如果 push 或 PR 创建失败，代码会尽量保留已经形成的本地 commit / pushed branch，避免把 Agent 成果静默删除。
 
-### 10.5 验收 PR
+### 11.5 验收 PR
 
 在 GitHub 上确认：
 
@@ -781,21 +1064,21 @@ delivered
 - Trace 中存在 delivery event；
 - 没有 auto-merge，仍由人审查和合并。
 
-## 11. EventLog / Trace v2 检查
+## 12. EventLog / Trace v2 检查
 
-### 11.1 列出日志
+### 12.1 列出日志
 
 ```bash
 agent log list
 ```
 
-### 11.2 单个 Run
+### 12.2 单个 Run
 
 ```bash
 agent log show logs/<file>.jsonl
 ```
 
-### 11.3 原始 JSONL
+### 12.3 原始 JSONL
 
 ```bash
 python - <<'PY'
@@ -820,7 +1103,7 @@ PY
 
 Trace 可以作为审计事实读取，但不是“重新执行一遍 Tool”的 deterministic replay。
 
-## 12. Token Usage 怎么看
+## 13. Token Usage 怎么看
 
 Chat `/stats` 与 Trace 会区分：
 
@@ -834,7 +1117,7 @@ Chat `/stats` 与 Trace 会区分：
 
 本地 `TokenCounter` 是请求前估算，主要用于 Context pressure；Provider usage 是请求后 accounting。不要用本地 estimate 冒充服务商账单数字。
 
-## 13. Repo Map 怎么观察
+## 14. Repo Map 怎么观察
 
 默认 `AgentConfig.repo_map_mode="incremental"`。
 
@@ -848,7 +1131,7 @@ Chat `/stats` 与 Trace 会区分：
 
 正式 benchmark 数字见 `docs/evidence/README.md`，不要从一次手工运行推导性能结论。
 
-## 14. Session 并发与恢复边界
+## 15. Session 并发与恢复边界
 
 同一个 Session 的 `state.json` 有 revision。两个进程同时写同一 Session 时，旧 revision 会触发 `ChatSessionConflict`，而不是后写覆盖先写。
 
@@ -861,7 +1144,7 @@ Chat `/stats` 与 Trace 会区分：
 
 因此 Session recovery 不是事务回滚系统。
 
-## 15. API（可选）
+## 16. API（可选）
 
 虽然本轮重点验收 `run / chat / GitHub Issue`，API 入口也复用同一个 Runner。
 
@@ -900,9 +1183,9 @@ GET  /dashboard
 
 API 默认 isolate，不提供交互式 confirm；需要确认的命令在无人交互路径上会被拒绝。
 
-## 16. 常见问题
+## 17. 常见问题
 
-### 16.1 `context_window is unknown and context_budget_cap is not configured`
+### 17.1 `context_window is unknown and context_budget_cap is not configured`
 
 给未知代理配置 Forge cap：
 
@@ -913,11 +1196,11 @@ agent:
 
 不要随便编一个模型窗口数字。
 
-### 16.2 切换 `--model` 后 capability 变成 unknown
+### 17.2 切换 `--model` 后 capability 变成 unknown
 
 这是刻意行为。CLI 覆盖成另一个模型后，旧模型的 `context_window` / `model_max_output_tokens` 不应继续沿用。Forge 会保留 policy cap fallback。
 
-### 16.3 中转站 streaming 出错
+### 17.3 中转站 streaming 出错
 
 先对照：
 
@@ -927,7 +1210,7 @@ agent ... --no-stream
 
 非流式也失败再检查 model name、protocol、base URL 和渠道权限。
 
-### 16.4 Docker 启动失败
+### 17.4 Docker 启动失败
 
 ```bash
 docker info
@@ -936,11 +1219,11 @@ docker image inspect forge-agent-sandbox:py311
 
 首次默认镜像构建还需要 Docker 能完成 `tools/sandbox.Dockerfile` 的 build。
 
-### 16.5 sandbox 中依赖下载失败
+### 17.5 sandbox 中依赖下载失败
 
 默认 `--network none`，这是预期行为。不要依赖任务期间联网安装，使用预构建镜像或先在宿主环境验证依赖。
 
-### 16.6 Worktree 保留下来了是不是已经提交了
+### 17.6 Worktree 保留下来了是不是已经提交了
 
 不是。`keep-if-changed` 只表示 worktree/branch 被保留。检查：
 
@@ -950,7 +1233,7 @@ git status --short
 git log --oneline --decorate -3
 ```
 
-### 16.7 GitHub Issue 自动 PR 提示必须 `--verify-command`
+### 17.7 GitHub Issue 自动 PR 提示必须 `--verify-command`
 
 这是当前设计要求。自动交付必须有独立 acceptance：
 
@@ -958,41 +1241,47 @@ git log --oneline --decorate -3
 --verify-command "python -m pytest -q"
 ```
 
-### 16.8 GitHub Issue 提示 repo must be clean
+### 17.8 GitHub Issue 提示 repo must be clean
 
 自动 PR 不允许把运行前已有修改一起 commit。使用新的 clone/local path，或先自己处理已有 working-tree 修改。
 
-### 16.9 Agent 说完成但返回非 SUCCESS
+### 17.9 Agent 说完成但返回非 SUCCESS
 
 检查 `RunResult`、`termination_reason` 和 Trace。可能是完成性 guard、loop detector、resource exhaustion、provider/infrastructure failure 或 acceptance 层失败。
 
-## 17. 推荐的完整验收顺序
+## 18. 推荐的完整验收顺序
 
 严格按下面顺序跑，出现问题时更容易定位是哪一层：
 
 ```text
-A. 安装 + 配置
+A. 安装 + 模型/Context 配置
    ↓
-B. direct run
+B. P2 配置：Planning + Recovery + Skills（MCP 先关闭）
    ↓
-C. chat 3 轮 + exit + --continue
+C. direct run，检查 plan / recovery / skill Trace
    ↓
-D. isolate keep-if-changed
+D. chat 3 轮 + exit + --continue
    ↓
-E. isolate discard
+E. isolate keep-if-changed / discard
    ↓
-F. direct sandbox
+F. direct sandbox / isolate + sandbox
    ↓
-G. isolate + sandbox
+G. 配置并单独验收 MCP capability
    ↓
 H. GitHub Issue --no-pr
    ↓
 I. GitHub Issue + --verify-command + PR
    ↓
-J. Trace / Session / Worktree / PR 最终核对
+J. P2-0 Harness 先跑 not_executed validation
+   ↓
+K. 需要真实效果证据时再跑 --real-model architecture smoke
+   ↓
+L. P2-5 offline evolution regression / candidate eval
+   ↓
+M. Trace / Session / Worktree / Evidence 最终核对
 ```
 
-## 18. 手工验收清单
+## 19. 手工验收清单
 
 ### `agent run`
 
@@ -1045,11 +1334,32 @@ J. Trace / Session / Worktree / PR 最终核对
 - [ ] PR 内容只包含预期修改；
 - [ ] Trace 有 acceptance + delivery。
 
-## 19. 回归与证据
+### P2 Agent Intelligence
 
-手工验收结束后，建议再跑：
+- [ ] `planning_mode=auto/always` 时，复杂任务产生 plan event，简单 auto task 可明确 skip；
+- [ ] repository mutation 遵守 Planning gate；
+- [ ] structured Recovery 对失败分类并受 bounded attempts 限制；
+- [ ] Skill metadata 可发现，完整 instructions/reference 只按需加载；
+- [ ] Skill scripts 不绕过 ToolExecutor 自动执行；
+- [ ] MCP Tool 使用 `mcp__<server>__<tool>` namespace 并继续经过 Permission/Hook/Trace；
+- [ ] Eval CLI 不加 `--real-model` 时不会产生真实 Provider 调用；
+- [ ] Evolution candidate 与正式 `.agents/skills/` 隔离；
+- [ ] Promotion 只有 persisted PASS decision 后显式执行；
+- [ ] 没有把 deterministic regression 写成真实模型效果提升。
+
+## 20. 回归与证据
+
+手工验收结束后，建议先跑 P2 专项，再跑 Evidence Pack 与全量回归：
 
 ```bash
+python -m pytest -q \
+  tests/test_coding_agent_eval.py \
+  tests/test_structured_planning.py \
+  tests/test_structured_recovery.py \
+  tests/test_agent_skills.py \
+  tests/test_mcp_integration.py \
+  tests/test_skill_evolution.py
+
 python -m evals.verify_evidence_pack
 python -m pytest -q
 ```
