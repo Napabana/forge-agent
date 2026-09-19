@@ -5,7 +5,7 @@ harness/permission.py
 
 把 s20_comprehensive/code.py 的 permission_hook（code.py:880-905）迁移成
 实例化的 PermissionManager。语义保留：DENY 黑名单硬拦截 / DESTRUCTIVE 需确认 /
-文件路径越界拒绝 / MCP deploy 需确认。
+文件路径越界拒绝 / MCP capability 按 ToolEffect 做保守确认。
 
 与 s20 的差异：
 - 决策结构化（PermissionDecision：ALLOW / DENY / CONFIRM），替代 s20 的
@@ -135,7 +135,7 @@ class PermissionManager:
         校验一次工具调用。
         shell 工具：黑名单 DENY；危险关键词 CONFIRM；否则 ALLOW。
         文件写工具：路径越界 DENY。
-        MCP deploy 类工具：CONFIRM。
+        MCP 工具：只有可信 server 明确只读的 adapter 才 ALLOW，其余 CONFIRM。
         其它：ALLOW。
         """
         # shell 命令
