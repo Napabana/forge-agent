@@ -15,6 +15,8 @@ from mcp_integration.manager import (
 from tools.base import BaseTool, ToolEffect, ToolErrorType, ToolResult
 
 _MAX_TOOL_NAME = 64
+_MAX_DESCRIPTION_CHARS = 2_000
+_MAX_SCHEMA_CHARS = 32_000
 _MAX_OUTPUT_CHARS = 16_000
 _INVALID_PARAMS = -32602
 
@@ -49,9 +51,13 @@ def validate_remote_schema(schema: Any) -> dict[str, Any]:
     ):
         raise ValueError("MCP tool inputSchema.required must be a string list")
     try:
-        json.dumps(schema, ensure_ascii=False, sort_keys=True)
+        serialized = json.dumps(schema, ensure_ascii=False, sort_keys=True)
     except (TypeError, ValueError) as exc:
         raise ValueError("MCP tool inputSchema must be JSON serializable") from exc
+    if len(serialized) > _MAX_SCHEMA_CHARS:
+        raise ValueError(
+            f"MCP tool inputSchema exceeds {_MAX_SCHEMA_CHARS} characters"
+        )
     return dict(schema)
 
 
@@ -94,6 +100,8 @@ class MCPToolAdapter(BaseTool):
         manager: MCPClientManager,
         descriptor: MCPToolDescriptor,
     ) -> None:
+        if not descriptor.remote_name.strip():
+            raise ValueError("MCP remote tool name cannot be empty")
         self._manager = manager
         self._descriptor = descriptor
         self._name = namespaced_tool_name(
@@ -124,10 +132,13 @@ class MCPToolAdapter(BaseTool):
 
     @property
     def description(self) -> str:
-        return self._descriptor.description or (
+        description = self._descriptor.description or (
             f"MCP tool {self._descriptor.remote_name} "
             f"from server {self._descriptor.server_id}."
         )
+        if len(description) > _MAX_DESCRIPTION_CHARS:
+            return description[: _MAX_DESCRIPTION_CHARS - 24] + "...[description truncated]"
+        return description
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
