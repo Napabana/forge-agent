@@ -2,7 +2,7 @@
 
 日期：2026-09-19  
 实现基线：P2-2 DONE 后当前 `dev`  
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**
+状态：**DONE**
 
 ## 目标
 
@@ -279,3 +279,22 @@ python -m pytest -q
 ```
 
 当前 ChatGPT 环境未执行以上命令，因此状态保持 `IMPLEMENTED / LOCAL VALIDATION PENDING`。
+
+## 本地回归补充（最终，2026-09-19）
+
+用户按交接顺序完成 P2-3 新增专项、Agent/context/entry 关键兼容、package discovery、`planning_recovery_skills` not-executed Eval 接线、Evidence Pack 校验和全量 `python -m pytest -q`，并明确确认全部通过。
+
+最终通过轮次没有提供完整 stdout、passed 数量或耗时，因此本文只记录“全部通过”，不推断或补造统计。
+
+据此：
+
+```text
+P2-3 Agent Skills
+IMPLEMENTED / LOCAL VALIDATION PENDING
+                ↓
+               DONE
+```
+
+本地 regression 能够证明：metadata-only discovery、显式 progressive disclosure、reference 二次按需加载、project-over-global、malformed Skill isolation、loaded Skill 跨 history override/compaction 保留、script 不自动执行、正式产品入口配置、package discovery、Trace lifecycle 与 P2-0 Skill variant/process grader 接线均可 deterministic 验证。
+
+本阶段仍未执行正式 real-model `planning_recovery vs planning_recovery_skills` A/B，因此不能声明 Skills 提高 coding success rate、trigger accuracy、pass@1、降低 steps/tokens/latency，或证明某个 Skill 对真实任务有效。

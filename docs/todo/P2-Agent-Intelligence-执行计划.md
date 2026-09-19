@@ -394,7 +394,7 @@ P2-0 增加至少以下 case：
 
 # P2-3 Agent Skills
 
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**  
+状态：**DONE**  
 依赖：P2-0；与 P2-1/P2-2 可组合
 
 实现摘要（2026-09-19）：
@@ -408,7 +408,7 @@ P2-0 增加至少以下 case：
 - 正式 config 新增 `skills_enabled`、global dir、loaded/context 上限；默认关闭，CLI / Chat / API / GitHub Issue 统一接线。
 - P2-0 Eval 新增 `planning_recovery_skills` architecture variant，固定使用 `evals/fixtures/coding_agent/skills/` 的 bug-fix / test-and-verify / repository-navigation 三个 Skill，不依赖用户本地目录。
 - Eval 新增 non-blocking `skill_selection` process grader 与 Skill lifecycle metrics；should-trigger / should-not-trigger 不改变 task success/acceptance。
-- 新增 `tests/test_agent_skills.py`，并扩展 config / coding-agent eval regression；当前 ChatGPT 环境未执行仓库 pytest，因此状态保持 LOCAL VALIDATION PENDING，不声明 Skill effectiveness。
+- 新增 `tests/test_agent_skills.py`，并扩展 config / coding-agent eval regression；用户随后在本地完成 P2-3 专项、关键兼容、package discovery、not-executed Eval 接线、Evidence Pack 与全量 pytest，并明确确认全部通过。最终通过轮次未提供具体 passed 数量或耗时，因此不补造数字；real-model Skill effectiveness 仍未执行。
 
 
 ## 参考设计

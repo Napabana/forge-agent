@@ -147,6 +147,17 @@ reason = provider_credentials_not_available_in_ci
 边界：没有执行 real-model `planning vs planning_recovery` A/B，因此不能宣称 Recovery 提升 success rate、pass@1、token efficiency、latency 或故障恢复成功率。
 
 机器校验锚点：**P2-2 Structured Recovery: deterministic regression passed; real-model A/B not executed**
+### P2-3 Agent Skills — Deterministic Regression
+
+证据：`skills/catalog.py`、`skills/runtime.py`、`agent/core.py`、`tests/test_agent_skills.py`、`tests/test_coding_agent_eval.py`、`docs/changes/2026-09-19/P2-3-Agent-Skills本地回归-DONE.md`。
+
+已实现 filesystem Skill discovery、project/global override、metadata-only catalog、`skill_load` / `skill_reference_load` progressive disclosure、compaction-surviving SkillRuntime、script non-execution boundary、Trace v2 Skill lifecycle，以及 P2-0 `planning_recovery_skills` architecture/process evaluation 接线。
+
+用户本地专项、关键兼容、package discovery、not-executed Eval 接线、Evidence Pack 与全量 pytest 均已明确确认通过；最终通过轮次没有提供具体 passed 数量或耗时，因此不补造数字。
+
+边界：没有执行 real-model `planning_recovery vs planning_recovery_skills` A/B，因此不能宣称 Skills 提升 coding success rate、pass@1、trigger accuracy、token efficiency、latency 或真实任务效果。
+
+机器校验锚点：**P2-3 Agent Skills: deterministic regression passed; real-model A/B not executed**
 ## 面试可说 / 不可说
 
 | 能力 | 可以安全说 | 追问证据 | 过度宣称 |
@@ -155,6 +166,7 @@ reason = provider_credentials_not_available_in_ci
 | Tool lifecycle | “统一 validate/pre-hook/permission/tool/post-hook 顺序，并把 policy/tool/infra 失败分层。” | `harness/executor.py`, `tests/test_tool_lifecycle_p0_2.py` | “工具调用无失败”“所有异常都自动恢复” |
 | cooperative cancellation | “在 Provider、tool lifecycle 和 step 边界做 cooperative cancel，并保留 Trace 终止语义。” | `agent/core.py`, `harness/executor.py`, failure tests | “可以立即强杀任意同步工具或 Provider 请求” |
 | Structured Planning | “在单一 Agent loop 内实现 typed Plan/Step/Revision，支持 off/auto/always、计划生命周期 Trace，并在 context compaction 后持续注入 current plan。” | `agent/planning.py`, `agent/core.py`, `tests/test_structured_planning.py` | “Planning 已证明提升成功率/pass@1/降低 token” |
+| Agent Skills | “实现 filesystem Skill catalog 与 progressive disclosure：metadata 常驻、完整 Skill/reference 按需加载，SkillRuntime 跨 compaction 保留；Skill 不绕过 ToolExecutor 执行脚本。” | `skills/catalog.py`, `skills/runtime.py`, `tests/test_agent_skills.py` | “已证明 Skills 提升成功率/trigger accuracy”“Skill script 可直接绕过权限执行” |
 | Failure-aware Recovery | “在单一 Agent loop 内实现 typed FailureContext/RecoveryDecision、bounded recovery 与 plan revision gate；Provider retry、cancel、infra 保持独立语义。” | `agent/recovery.py`, `agent/core.py`, `tests/test_structured_recovery.py` | “已证明提升成功率”“生产级 fault tolerance”“恢复成功率 X%” |
 | Error Recovery / Failure Harness | “对 transient provider retry、工具失败 Observation、循环/完成性失败和基础设施异常做了确定性故障回归。” | `tests/test_failure_harness*.py` | “Fault tolerance 达到生产级”“故障恢复成功率 X%” |
 | Trace v2 | “用 append-only JSONL 记录 run/step/tool/acceptance/delivery correlation，并在落盘边界递归脱敏。” | `agent/event_log.py`, `agent/trace_v2.py`, trace tests | “Trace 可以确定性重放 Agent 执行” |
@@ -176,6 +188,7 @@ reason = provider_credentials_not_available_in_ci
 | 多 Provider abstraction | REWORD | “抽象统一 `LLMBackend`，路由 Anthropic、OpenAI 与 OpenAI-compatible provider/protocol。” | `llm/base.py`, `llm/router.py`；不要说所有 provider 都做过同等 E2E |
 | Tool Calling | KEEP | “统一 Tool schema/validation、Hook、Permission、execution 与 Observation 生命周期。” | executor/lifecycle tests |
 | Structured Planning | KEEP | “实现 typed ExecutionPlan/PlanStep/PlanRevision，并将 current plan 作为 runtime context 注入单一 Agent loop，支持 off/auto/always 与 Trace lifecycle。” | deterministic regression 已通过；没有 real-model A/B，不能写效果提升 |
+| Agent Skills | KEEP | “实现 project/global filesystem Skill catalog 与 progressive disclosure，按需加载 Skill/reference，并将当前 Skill state 作为 runtime context 保留。” | deterministic regression 已通过；没有 real-model A/B，不能写 trigger/成功率百分比 |
 | Failure-aware recovery | KEEP | “实现 typed FailureContext/RecoveryDecision 与 bounded RecoveryPolicy，并把 repeated failure 与 P2-1 plan revision gate 联动。” | deterministic regression 已通过；没有 real-model A/B，不能写效果百分比 |
 | Error recovery | REWORD | “实现 transient provider retry、typed failure Observation、loop/completion guard，并用 Failure Harness 做确定性故障回归。” | Failure Harness；不要说生产级容错率 |
 | Loop detection | KEEP | “对重复 Action/Observation 指纹与无进展循环做检测和终止/恢复控制。” | `agent/loop_detector.py`, loop tests | 只能写 contract，不写效果百分比 |

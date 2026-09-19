@@ -411,3 +411,13 @@ pytest -q
 - `pyproject.toml` 已加入 `skills*` package discovery，避免源码测试通过但安装包漏掉新 package。
 - 新增 `tests/test_agent_skills.py`，并扩展 `tests/test_coding_agent_eval.py`、`tests/test_day6.py`。当前 ChatGPT 环境未运行 pytest，不得写 DONE，也不得宣称 Skill 提升成功率/token/latency。
 - 更新日志：`docs/changes/2026-09-19/P2-3-Agent-Skills.md`。
+
+### 验证补充（2026-09-19，P2-3 Agent Skills 本地回归）
+
+- 用户完成 P2-3 新增专项、关键兼容、package discovery、not-executed Eval 接线、Evidence Pack 与全量 pytest，并明确确认全部通过。
+- 用户未提供最终通过轮次的具体 passed 数量、完整 stdout 或耗时，因此不补造数字。
+- P2-3 状态由 `IMPLEMENTED / LOCAL VALIDATION PENDING` 正式收口为 `DONE`。
+- deterministic evidence 覆盖 metadata-only discovery、progressive disclosure、reference on-demand、project-over-global、malformed Skill isolation、compaction-surviving SkillRuntime、script non-execution、Trace Skill events、产品入口配置、package discovery 与 P2-0 `planning_recovery_skills` process evaluation。
+- 本轮没有执行 real-model `planning_recovery vs planning_recovery_skills` A/B，不产生 success-rate、pass@1、trigger accuracy、token、latency 或 Skill effectiveness 数字。
+- 下一阶段进入 P2-4 MCP Client / Tool Adapter；MCP 只作为 capability source，真实 invocation 必须适配成 Forge Tool 并继续经过 ToolExecutor/Permission/Hook/Cancel/Trace。
+- 验证日志：`docs/changes/2026-09-19/P2-3-Agent-Skills本地回归-DONE.md`。
