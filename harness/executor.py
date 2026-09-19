@@ -23,6 +23,7 @@ post-hook，并把真实 ToolResult 返回给 Agent；Agent 在下一安全边�
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Callable
 
@@ -177,8 +178,21 @@ class ToolExecutor:
         """CONFIRM 交给注入 callback；无 callback 是正常 deny，callback 抛错由上层判 infra。"""
         if self._confirm_callback is None:
             return False
-        prompt = block.input.get("cmd") or block.input.get("command") or block.name
-        return bool(self._confirm_callback(prompt))
+        prompt = block.input.get("cmd") or block.input.get("command")
+        if not prompt and block.name.startswith("mcp__"):
+            try:
+                params = json.dumps(
+                    block.input,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            except (TypeError, ValueError):
+                params = repr(block.input)
+            if len(params) > 1000:
+                params = params[:980] + "...[truncated]"
+            prompt = f"{block.name} {params}"
+        return bool(self._confirm_callback(prompt or block.name))
 
     def _is_cancel_requested(self, cancel_event: object | None = None) -> bool:
         event = cancel_event if cancel_event is not None else self._cancel_event
