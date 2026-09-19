@@ -514,14 +514,14 @@ skill enabled
 - 新增 `mcp_integration/`：`MCPClientManager` 在专用 event-loop thread 中长期持有官方 async `Client` context；同步 `MCPToolAdapter.execute()` 通过线程安全 future 调用，不改变 Agent/ToolExecutor 同步 public contract，也不按 ToolCall 重连。
 - stdio 为必选主线；Streamable HTTP 因官方 v2 `Client(URL)` 可复用同一生命周期桥接，仅增加薄 transport 分支，本轮一并支持；旧 SSE 不作为主线。
 - remote tools 统一命名为 `mcp__<server_id>__<remote_tool>`，deterministic sanitize/长度限制；任何 collision 由现有 ToolRegistry 显式拒绝，不允许覆盖 native Tool。
-- remote `inputSchema` 必须是 JSON-serializable object schema；合法 schema 原样保留给现有 ToolRegistry/Provider，malformed schema 在注册阶段确定性拒绝。
+- remote `inputSchema` 必须是 JSON-serializable object schema；malformed schema 在注册阶段确定性拒绝；schema/description/tool-count 设硬上限，防止不可信 server 用无界 capability metadata 挤占 Host/context。
 - Tool output 对 text/structured content 做确定性 bounded rendering；`is_error`、timeout、invalid args、remote transport/server/protocol failure、Forge manager lifecycle error 分别映射到现有 ToolResult/ToolErrorType 语义。
 - 新增 `REMOTE_CAPABILITY` 错误类型；P2-2 会把它视为 recoverable TOOL_FAILURE，而不是 Forge infrastructure corruption。
 - remote annotations 只作为 hint。server 默认 `trust_read_only_annotations=false`；只有显式信任该 server 且 tool 声明 `read_only_hint=true` 才映射 `READ_ONLY`，其余一律 `MAY_MUTATE_REPOSITORY` 并由 PermissionManager `CONFIRM`。
 - MCP invocation 仍严格走 `LLM → ToolRegistry → ToolExecutor → Hook → Permission → MCPToolAdapter → MCPClientManager → official SDK`；Planning mutation gate、cooperative cancel 与 Trace v2 均复用现有路径。
 - Runner direct/Chat 长会话由 ExecutionRunner 持有 manager；isolate/worktree 每次 run 独立 manager；CLI/API/GitHub/Eval 都显式 close，不依赖 `__del__`。
-- Trace v2 复用既有 tool events，并增加 `mcp_tool_discovered`；metadata 只含 local tool/server/remote tool/transport/safety hint，不记录 env/secret。
-- P2-0 新增真实 architecture variant `planning_recovery_skills_mcp`，固定使用仓库内离线 stdio MCP fixture，不读取用户随机 MCP 配置；TrialMetrics 增加 MCP discovered/call/failure counts。
+- Trace v2 复用既有 tool events，并增加 `mcp_server_capabilities / mcp_tool_discovered`；记录 server capability negotiation 与 local/remote tool correlation，不记录 URL/env/secret。
+- P2-0 新增真实 architecture variant `planning_recovery_skills_mcp`，固定使用仓库内离线 stdio MCP fixture，不读取用户随机 MCP 配置；TrialMetrics 增加 MCP discovered/call/failure counts；另新增独立 `mcp_suite.json`，不改写原 8-case frozen suite，并要求 process trace 真正调用固定 MCP guidance tool。
 - 新增 `tests/test_mcp_integration.py`、官方 SDK in-process protocol test、真实 local stdio Host E2E、server crash/timeout/multi-server/lifecycle/permission/hook/cancel/planning/recovery/package tests。
 - 当前 GitHub/ChatGPT 环境未执行用户本地 pytest，因此不能写 DONE，也不能写 MCP real stdio E2E passed；等待用户本地回归后再补 Evidence Pack 的 regression claim。
 
