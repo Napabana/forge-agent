@@ -34,7 +34,7 @@ class ToolExecutor(_RawToolExecutor):
     ) -> None:
         super().__init__(
             registry,
-            permission=permission or PermissionManager(),
+            permission=permission or PermissionManager(registry=registry),
             hooks=hooks,
             confirm_callback=confirm_callback,
             decision_callback=decision_callback,
