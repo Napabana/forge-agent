@@ -337,6 +337,13 @@ async def orchestrate_run(
             )
             from mcp_integration.registry import attach_mcp_tools
             mcp_manager = attach_mcp_tools(registry, mcp_config)
+            if mcp_manager is not None:
+                for snapshot in mcp_manager.snapshots:
+                    log.log_trace(
+                        EventType.MCP_SERVER_CAPABILITIES,
+                        0,
+                        **dataclasses.asdict(snapshot),
+                    )
             permission = PermissionManager(workspace=str(wt.path), registry=registry)
 
             # 每次权限决策都写入 EventLog，便于审计与回放。
