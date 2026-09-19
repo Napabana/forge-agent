@@ -39,6 +39,7 @@ def _config(*, ids: tuple[str, ...] = ("eval_docs",)) -> MCPConfig:
                 command=sys.executable,
                 args=(str(_SERVER),),
                 timeout_seconds=5.0,
+                trust_read_only_annotations=True,
             )
             for server_id in ids
         ),
@@ -52,6 +53,7 @@ def _descriptor(
     annotations: dict | None = None,
     schema: dict | None = None,
     timeout_seconds: float = 1.0,
+    trust_read_only_annotations: bool = True,
 ) -> MCPToolDescriptor:
     return MCPToolDescriptor(
         server_id=server_id,
@@ -66,6 +68,7 @@ def _descriptor(
         },
         annotations=annotations or {},
         timeout_seconds=timeout_seconds,
+        trust_read_only_annotations=trust_read_only_annotations,
     )
 
 
@@ -128,11 +131,16 @@ def test_malformed_remote_schema_is_rejected_deterministically(schema):
 def test_remote_annotations_map_conservatively_to_tool_effect():
     read_only = _adapter(annotations={"read_only_hint": True})
     unknown = _adapter(annotations={})
+    untrusted_read_only = _adapter(
+        annotations={"read_only_hint": True},
+        trust_read_only_annotations=False,
+    )
     destructive_even_if_not_declared = _adapter(
         annotations={"destructive_hint": True}
     )
     assert read_only.effect is ToolEffect.READ_ONLY
     assert unknown.effect is ToolEffect.MAY_MUTATE_REPOSITORY
+    assert untrusted_read_only.effect is ToolEffect.MAY_MUTATE_REPOSITORY
     assert destructive_even_if_not_declared.effect is ToolEffect.MAY_MUTATE_REPOSITORY
 
 
