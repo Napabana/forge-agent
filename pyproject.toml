@@ -17,6 +17,7 @@ dependencies = [
     "tree-sitter-python>=0.22.0",
     "PyGithub>=2.3.0",
     "gitpython>=3.1.0",
+    "mcp>=2.2.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -44,7 +45,7 @@ agent = "entry.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*", "runtime*", "ipc*", "harness*", "evals*", "skills*"]
+include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*", "runtime*", "ipc*", "harness*", "evals*", "skills*", "mcp_integration*"]
 
 [tool.setuptools.package-data]
 tools = ["sandbox.Dockerfile"]
@@ -56,5 +57,5 @@ addopts = "-v --tb=short"
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["agent", "llm", "tools", "context", "entry", "skills"]
+source = ["agent", "llm", "tools", "context", "entry", "skills", "mcp_integration"]
 omit = ["tests/*"]
