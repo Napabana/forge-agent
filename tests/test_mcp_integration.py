@@ -185,6 +185,14 @@ def test_remote_is_error_is_a_recoverable_tool_observation():
     assert tool_result.error_type is ToolErrorType.TOOL_EXECUTION
     assert "remote application error" in tool_result.error
 
+    invalid_result = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="Input validation error: bad value")],
+        structured_content=None,
+        is_error=True,
+    )
+    invalid = _adapter(_FakeManager(invalid_result)).execute({"value": "x"})
+    assert invalid.error_type is ToolErrorType.INVALID_ARGUMENTS
+
 
 def test_timeout_remote_failure_and_manager_bug_have_distinct_error_types():
     timeout = _adapter(_FakeManager(error=MCPCallTimeout("slow"))).execute({"value": "x"})
