@@ -72,6 +72,8 @@ def _span_type(event_type: EventType) -> str:
         return "recovery"
     if event_type.name.startswith("SKILL_"):
         return "skill"
+    if event_type.name.startswith("MCP_"):
+        return "mcp"
     if event_type is EventType.COMPLETION_REJECTED:
         return "completion"
     if event_type is EventType.ACCEPTANCE:
