@@ -55,11 +55,11 @@ Agent 没有任何 `Agent → MCP Client` 直连路径。
 4. **isolate**：每个 isolate/worktree run 都创建独立 MCP lifecycle，不跨 worktree 复用 connection。
 5. **Chat**：同一 ChatSession 复用其 ExecutionRunner/manager；ChatSession.close 再 deterministic cleanup。
 6. **name namespace**：`mcp__<server_id>__<remote_tool>`，deterministic sanitize + bounded name；adapter 保留原始 server/tool；collision 显式失败。
-7. **schema**：仅接收 JSON-serializable object schema，malformed/non-object 直接拒绝；合法 schema 原样保留。
+7. **schema / metadata bounds**：仅接收 JSON-serializable object schema，malformed/non-object 直接拒绝；单 schema 限 32k 字符、单 description 限 2k 字符、单 server 最多 128 tools，避免不可信 capability metadata 无界占用 Host/context。
 8. **annotations/effect**：server 默认不信任 remote read-only hint。仅 `trust_read_only_annotations=true` 且 `read_only_hint=true` → READ_ONLY；其余 MAY_MUTATE_REPOSITORY。
 9. **permission**：READ_ONLY MCP 可 ALLOW；其余 MCP 默认 CONFIRM。决策只在 ToolExecutor/PermissionManager 发生。
-10. **errors**：application `is_error` → recoverable tool failure；recognizable input validation → INVALID_ARGUMENTS；timeout → TIMEOUT；disconnect/protocol/server failure → REMOTE_CAPABILITY；manager lifecycle invariant → INFRASTRUCTURE。
-11. **Trace**：继续写现有 tool_execution_* / permission / observation；增加 mcp_tool_discovered 和非 secret MCP correlation metadata，不建 Trace v3。
+10. **errors**：application `is_error` → recoverable tool failure；recognizable input validation → INVALID_ARGUMENTS；timeout → TIMEOUT；stdio startup/discovery、disconnect/protocol/server failure → REMOTE_CAPABILITY；manager lifecycle invariant → INFRASTRUCTURE。
+11. **Trace**：继续写现有 tool_execution_* / permission / observation；增加 `mcp_server_capabilities` 与 `mcp_tool_discovered`。前者记录 protocol/server name+version/tools-resources-prompts/tool_count，后者和 Tool span 记录 server/tool/transport/safety hint；都不记录 URL/env/secret，不建 Trace v3。
 12. **secret**：Trace metadata 不包含 server env/url/header/key；stdio 只把 config 显式 env 交给 SDK，SDK 自身仅补最小默认环境，不转发完整 `os.environ`。
 13. **server crash**：已开始的 remote call 失败转为 REMOTE_CAPABILITY Observation，可被 P2-2 Recovery 消费，不把 Forge framework 标为崩坏；不做无界 reconnect/retry。
 14. **HTTP**：官方 v2 Client 对 URL 使用同一 lifecycle abstraction，因此首版一并支持薄 Streamable HTTP 分支；OAuth/headers 平台化仍延期。
@@ -96,6 +96,8 @@ planning_recovery_skills_mcp
 
 fixture：`evals/fixtures/coding_agent/mcp/server.py`。它只提供 deterministic docs/echo/timeout/error/permission-classification capability，不重新包装 file/shell/test。
 
+另新增独立 `evals/fixtures/coding_agent/mcp_suite.json`，不修改 P2-0 已冻结的 8-case suite。该 MCP-specific case 的任务内容本身不直接给出目标 policy 值，process grader 明确要求 Trace 中调用 `mcp__eval_docs__lookup_project_guidance`，outcome 仍由 repository-local deterministic grader 判断。
+
 新增 metrics：
 
 - `mcp_tool_discovered_count`
@@ -109,7 +111,7 @@ fixture：`evals/fixtures/coding_agent/mcp/server.py`。它只提供 determinist
 `tests/test_mcp_integration.py` 覆盖：
 
 - namespace/collision；
-- malformed schema；
+- malformed / oversized schema、empty name、description/tool-count bounds；
 - read-only trust boundary / ToolEffect；
 - text + structured bounded rendering；
 - isError / invalid args / timeout / remote failure；
@@ -117,12 +119,17 @@ fixture：`evals/fixtures/coding_agent/mcp/server.py`。它只提供 determinist
 - hooks；
 - cancel before tool / cancel during synchronous bridge；
 - official SDK in-process discover/list/call；
-- official stdio discover/capability/list/invoke/error/timeout/close；
+- official stdio discover/tools-resources-prompts capability/list/invoke/error/timeout/close；
+- stdio startup failure → REMOTE_CAPABILITY；
+- Streamable HTTP official Client URL transport construction；
 - stdio server process crash；
 - multiple server isolation；
+- direct Runner 跨 run 复用同一 manager，close 后连接终止；
+- isolate/worktree 每次 run 独立 MCP lifecycle；
 - ExecutionRunner → Agent → ToolExecutor → MCP adapter → stdio server E2E；
 - Planning mutation gate；
 - structured Recovery 可见 REMOTE_CAPABILITY；
+- fixed Eval variant mapping、独立 MCP-specific suite/reference self-check；
 - config / package discovery。
 
 这些只是“测试代码已加入”。当前环境没有执行用户本地 pytest，因此**不记录 passed**。
