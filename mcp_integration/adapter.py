@@ -179,10 +179,15 @@ class MCPToolAdapter(BaseTool):
 
         output = _render_call_result(result)
         if bool(getattr(result, "is_error", False)):
+            error_type = (
+                ToolErrorType.INVALID_ARGUMENTS
+                if output.lower().startswith("input validation error")
+                else ToolErrorType.TOOL_EXECUTION
+            )
             return ToolResult(
                 False,
                 output,
                 output[:2000],
-                ToolErrorType.TOOL_EXECUTION,
+                error_type,
             )
         return ToolResult(True, output)
