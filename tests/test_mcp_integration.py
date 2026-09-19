@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import threading
@@ -7,6 +8,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from mcp import Client
+from mcp.server import MCPServer
+from mcp.types import ToolAnnotations
 
 from agent.core import AgentConfig
 from agent.runner import ExecutionRunner, RunRequest
@@ -27,6 +31,7 @@ from tools.base import ToolEffect, ToolErrorType, ToolRegistry
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SERVER = _ROOT / "evals" / "fixtures" / "coding_agent" / "mcp" / "server.py"
+_CRASH_SERVER = _ROOT / "tests" / "fixtures" / "mcp_crash_server.py"
 
 
 def _config(*, ids: tuple[str, ...] = ("eval_docs",)) -> MCPConfig:
@@ -338,6 +343,32 @@ def test_config_defaults_disabled_and_validates_ids_env_and_transport(monkeypatc
         )
 
 
+def test_official_sdk_in_process_discover_list_and_call():
+    async def scenario() -> None:
+        server = MCPServer("in-process-fixture")
+
+        @server.tool(
+            annotations=ToolAnnotations(
+                read_only_hint=True,
+                destructive_hint=False,
+                idempotent_hint=True,
+                open_world_hint=False,
+            )
+        )
+        def hello(name: str) -> dict[str, str]:
+            return {"hello": name}
+
+        async with Client(server) as client:
+            listing = await client.list_tools()
+            assert [tool.name for tool in listing.tools] == ["hello"]
+            assert listing.tools[0].input_schema["type"] == "object"
+            result = await client.call_tool("hello", {"name": "forge"})
+            assert not result.is_error
+            assert result.structured_content == {"hello": "forge"}
+
+    asyncio.run(scenario())
+
+
 def test_official_stdio_discover_invoke_structured_error_timeout_and_cleanup():
     manager = MCPClientManager(_config())
     manager.start()
@@ -383,6 +414,38 @@ def test_official_stdio_discover_invoke_structured_error_timeout_and_cleanup():
         timed_out = timeout_adapter.execute({"delay_seconds": 0.3})
         assert not timed_out.success
         assert timed_out.error_type is ToolErrorType.TIMEOUT
+    finally:
+        manager.close()
+    assert not manager.is_started
+
+
+def test_stdio_server_process_crash_maps_to_remote_capability_and_closes():
+    config = MCPConfig(
+        enabled=True,
+        servers=(
+            MCPServerConfig(
+                id="crash",
+                transport="stdio",
+                command=sys.executable,
+                args=(str(_CRASH_SERVER),),
+                timeout_seconds=2.0,
+            ),
+        ),
+    )
+    manager = MCPClientManager(config)
+    manager.start()
+    try:
+        descriptor = next(
+            descriptor
+            for descriptor in manager.tools
+            if descriptor.remote_name == "crash_process"
+        )
+        result = MCPToolAdapter(manager, descriptor).execute({})
+        assert not result.success
+        assert result.error_type in {
+            ToolErrorType.REMOTE_CAPABILITY,
+            ToolErrorType.TIMEOUT,
+        }
     finally:
         manager.close()
     assert not manager.is_started
@@ -452,12 +515,49 @@ def test_runner_agent_tool_executor_real_stdio_host_e2e(tmp_path: Path):
     assert "env" not in started[0]["payload"]
 
 
-def test_planning_mutation_classification_applies_to_mcp_adapter():
+def test_planning_mutation_classification_applies_to_mcp_adapter(tmp_path: Path):
     read_only = _adapter(annotations={"read_only_hint": True})
-    mutation = _adapter(annotations={})
+    mutation_manager = _FakeManager()
+    mutation = _adapter(mutation_manager, annotations={})
     registry = ToolRegistry().register(read_only).register(mutation)
     assert registry.is_mutating(read_only.name) is False
     assert registry.is_mutating(mutation.name) is True
+
+    backend = MockBackend(
+        [
+            Action(
+                ActionType.TOOL_CALL,
+                "mutation too early",
+                ToolCall(mutation.name, {"value": "x"}),
+            ),
+            Action(ActionType.GIVE_UP, "stop after gate", message="stop"),
+        ]
+    )
+    runner = ExecutionRunner(
+        backend=backend,
+        registry=registry,
+        config=AgentConfig(
+            max_steps=3,
+            repo_map_mode="none",
+            planning_mode="always",
+        ),
+        log_dir=str(tmp_path / "planning-logs"),
+    )
+    try:
+        result = runner.run(
+            RunRequest(
+                Task(
+                    "Change external state after planning.",
+                    str(tmp_path),
+                    task_id="mcp-plan-gate",
+                )
+            )
+        )
+    finally:
+        runner.close()
+    assert result.status is RunStatus.GAVE_UP
+    assert mutation_manager.calls == []
+    assert any(row["event_type"] == "plan_rejected" for row in _events(result.trace_path))
 
 
 def test_remote_capability_failure_is_visible_to_structured_recovery(tmp_path: Path):
