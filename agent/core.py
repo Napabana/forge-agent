@@ -250,6 +250,17 @@ class Agent:
 
         log.log_task_start(task)
         logger.info("Agent starting task %s", task.task_id)
+        # MCP capability discovery is recorded in Trace v2, but invocation remains
+        # an ordinary ToolCall that must pass ToolExecutor.
+        for tool_name in self._registry.tool_names:
+            metadata = self._registry.get_metadata(tool_name)
+            if metadata.get("capability_provider") == "mcp":
+                log.log_trace(
+                    EventType.MCP_TOOL_DISCOVERED,
+                    0,
+                    tool_name=tool_name,
+                    **metadata,
+                )
         planning_decision = decide_planning(task, self._cfg.planning_mode)
         self._planning_runtime = PlanningRuntime(planning_decision)
         self._planning_context_cache = ""
@@ -699,11 +710,13 @@ class Agent:
                     ))
                     history.add(LLMMessage(role="user", content=detail))
                     continue
+                tool_metadata = self._registry.get_metadata(tc.name)
                 tool_started = time.perf_counter()
                 tool_span = log.log_trace(
                     EventType.TOOL_EXECUTION_STARTED,
                     step,
                     tool_name=tc.name,
+                    **tool_metadata,
                 )
 
                 def log_permission_decision(name, params, decision) -> None:
@@ -734,6 +747,7 @@ class Agent:
                         error=str(exc),
                         lifecycle_phase=exc.phase,
                         cancel_requested=True,
+                        **tool_metadata,
                     )
                     reason = "Canceled by external request"
                     log.log_task_failed(steps=step, reason=reason)
@@ -758,6 +772,7 @@ class Agent:
                         error=str(exc),
                         lifecycle_phase=exc.phase,
                         framework_error_type=type(exc.original_error).__name__,
+                        **tool_metadata,
                     )
                     reason = f"Tool lifecycle infrastructure failure: {exc}"
                     log.log_task_failed(steps=step, reason=reason)
@@ -784,6 +799,7 @@ class Agent:
                         error_type=ToolErrorType.INFRASTRUCTURE.value,
                         error=str(exc),
                         framework_error_type=type(exc).__name__,
+                        **tool_metadata,
                     )
                     reason = f"Tool executor infrastructure failure: {type(exc).__name__}: {exc}"
                     log.log_task_failed(steps=step, reason=reason)
@@ -814,6 +830,7 @@ class Agent:
                     error_type=result.error_type.value if result.error_type else None,
                     error=result.error,
                     diagnostics=list(result.diagnostics),
+                    **tool_metadata,
                 )
                 observation = result.to_observation(tc.name)
 
