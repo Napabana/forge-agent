@@ -469,19 +469,24 @@ def run_on_issue(
         require_tests=require_tests,
         verifier=verifier,
     )
-    result = ExecutionRunner(
+    runner = ExecutionRunner(
         backend=backend,
         registry=registry,
         config=agent_config,
         log_dir=config.agent.log_dir,
-    ).run(
-        RunRequest(
-            task=task,
-            acceptance=acceptance,
-            entrypoint="github_issue",
-        ),
-        on_event=renderer,
+        mcp_config=config.mcp,
     )
+    try:
+        result = runner.run(
+            RunRequest(
+                task=task,
+                acceptance=acceptance,
+                entrypoint="github_issue",
+            ),
+            on_event=renderer,
+        )
+    finally:
+        runner.close()
 
     elapsed = time.time() - t0
     click.echo(f"  Status : {result.status.value}")
