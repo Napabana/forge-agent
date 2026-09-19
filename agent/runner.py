@@ -13,7 +13,7 @@ from typing import Callable
 from agent.core import Agent, AgentConfig, PrepareNextTurn
 from agent.event_log import EventLog
 from agent.orchestrate import orchestrate_run
-from agent.task import RunResult, RunStatus, Task
+from agent.task import EventType, RunResult, RunStatus, Task
 from agent.trace_v2 import bind_trace_context
 from context.history import ConversationHistory
 from context.repo_map import RepoMap
@@ -245,6 +245,7 @@ class ExecutionRunner:
             on_log_created(task.task_id, str(log.path))
         if on_event is not None:
             log.on_append(on_event)
+        self._record_mcp_capabilities(log)
         try:
             preparation_result = self._prepare_shared_history_boundary(
                 task=task,
@@ -284,6 +285,16 @@ class ExecutionRunner:
                 log.on_append(None)
             if own_log:
                 log.close()
+
+    def _record_mcp_capabilities(self, log: EventLog) -> None:
+        if self._mcp_manager is None:
+            return
+        for snapshot in self._mcp_manager.snapshots:
+            log.log_trace(
+                EventType.MCP_SERVER_CAPABILITIES,
+                0,
+                **dataclasses.asdict(snapshot),
+            )
 
     def _ensure_direct_mcp(self) -> None:
         if self._mcp_manager is None and self.mcp_config is not None and self.mcp_config.enabled:
