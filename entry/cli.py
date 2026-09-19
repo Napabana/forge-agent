@@ -319,6 +319,7 @@ def run(
         log_dir=config.agent.log_dir,
         registry_builder=_build_registry,
         confirm_callback=confirm_cb,
+        mcp_config=config.mcp,
     )
 
     # M4 第二波：--isolate 走 async 组合根（worktree + TaskEngine + permission workspace）
@@ -333,15 +334,18 @@ def run(
         click.echo(dim("  Isolate: worktree + TaskEngine\n"))
 
         t0 = time.time()
-        result = runner.run(
-            RunRequest(
-                task=task_obj,
-                isolate=True,
-                sandbox=sandbox,
-                result_policy=result_policy,
-            ),
-            on_event=renderer,
-        )
+        try:
+            result = runner.run(
+                RunRequest(
+                    task=task_obj,
+                    isolate=True,
+                    sandbox=sandbox,
+                    result_policy=result_policy,
+                ),
+                on_event=renderer,
+            )
+        finally:
+            runner.close()
         elapsed = time.time() - t0
         _print_run_result(result, elapsed)
         ctx.exit(0 if result.is_success() else 1)
@@ -359,6 +363,7 @@ def run(
                 RunRequest(task=task_obj), log=log, on_event=renderer,
             )
     finally:
+        runner.close()
         if runtime is not None:
             runtime.cleanup()
 
@@ -671,6 +676,7 @@ def chat(
                     import traceback
                     traceback.print_exc()
     finally:
+        session.close()
         if runtime is not None:
             runtime.cleanup()
 
