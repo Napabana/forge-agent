@@ -530,7 +530,7 @@ skill enabled
 - Trace v2 复用既有 tool events，并增加 `mcp_server_capabilities / mcp_tool_discovered`；记录 server capability negotiation 与 local/remote tool correlation，不记录 URL/env/secret。
 - P2-0 新增真实 architecture variant `planning_recovery_skills_mcp`，固定使用仓库内离线 stdio MCP fixture，不读取用户随机 MCP 配置；TrialMetrics 增加 MCP discovered/call/failure counts；另新增独立 `mcp_suite.json`，不改写原 8-case frozen suite，并要求 process trace 真正调用固定 MCP guidance tool。
 - 新增 `tests/test_mcp_integration.py`、官方 SDK in-process protocol test、真实 local stdio Host E2E、server crash/timeout/multi-server/lifecycle/permission/hook/cancel/planning/recovery/package tests。
-- 当前 GitHub/ChatGPT 环境未执行用户本地 pytest，因此不能写 DONE，也不能写 MCP real stdio E2E passed；等待用户本地回归后再补 Evidence Pack 的 regression claim。
+- 用户已完成本地修复并 push，P2-4 已按交接约定收口为 DONE；保留已记录的定向测试事实，不补造未提供的全量 pytest 数量或耗时。
 
 ## 参考设计
 
