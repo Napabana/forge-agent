@@ -124,7 +124,7 @@ class MCPClientManager:
         )
         if not self._ready.wait(timeout=startup_timeout + 5.0):
             self.close()
-            raise MCPManagerLifecycleError("MCP client manager startup timed out")
+            raise MCPRemoteFailure("MCP server startup/discovery timed out")
         if self._start_error is not None:
             error = self._start_error
             self.close()
