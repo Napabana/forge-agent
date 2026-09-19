@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import tempfile
 from pathlib import Path
 
 from agent.core import AgentConfig
 from agent.runner import ExecutionRunner
-from config.schema import load_config
+from config.schema import MCPConfig, MCPServerConfig, load_config
 from entry.cli import _build_registry
 from evals.coding_agent.runner import EvaluationHarness, validate_suite_references, write_not_executed
 from evals.coding_agent.schema import EvaluationSuite
@@ -17,6 +18,7 @@ from llm.router import create_backend_from_config
 _ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_SUITE = _ROOT / "evals" / "fixtures" / "coding_agent" / "suite.json"
 _DEFAULT_SKILLS = _ROOT / "evals" / "fixtures" / "coding_agent" / "skills"
+_DEFAULT_MCP_SERVER = _ROOT / "evals" / "fixtures" / "coding_agent" / "mcp" / "server.py"
 
 
 def _planning_mode_for_variant(variant: str) -> str:
@@ -25,6 +27,7 @@ def _planning_mode_for_variant(variant: str) -> str:
         "planning": "always",
         "planning_recovery": "always",
         "planning_recovery_skills": "always",
+        "planning_recovery_skills_mcp": "always",
     }
     try:
         return mapping[variant]
@@ -41,6 +44,7 @@ def _recovery_mode_for_variant(variant: str) -> str:
         "planning": "off",
         "planning_recovery": "structured",
         "planning_recovery_skills": "structured",
+        "planning_recovery_skills_mcp": "structured",
     }
     try:
         return mapping[variant]
@@ -57,6 +61,7 @@ def _skills_enabled_for_variant(variant: str) -> bool:
         "planning": False,
         "planning_recovery": False,
         "planning_recovery_skills": True,
+        "planning_recovery_skills_mcp": True,
     }
     try:
         return mapping[variant]
@@ -67,6 +72,35 @@ def _skills_enabled_for_variant(variant: str) -> bool:
         ) from exc
 
 
+def _mcp_config_for_variant(variant: str) -> MCPConfig:
+    supported = {
+        "baseline_react",
+        "planning",
+        "planning_recovery",
+        "planning_recovery_skills",
+        "planning_recovery_skills_mcp",
+    }
+    if variant not in supported:
+        raise ValueError(
+            f"unsupported coding-agent architecture variant {variant!r}; "
+            f"expected one of: {', '.join(sorted(supported))}"
+        )
+    if variant != "planning_recovery_skills_mcp":
+        return MCPConfig()
+    return MCPConfig(
+        enabled=True,
+        servers=(
+            MCPServerConfig(
+                id="eval_docs",
+                transport="stdio",
+                command=sys.executable,
+                args=(str(_DEFAULT_MCP_SERVER),),
+                timeout_seconds=5.0,
+            ),
+        ),
+    )
+
+
 def _real_runner_factory(
     cfg,
     backend,
@@ -75,6 +109,7 @@ def _real_runner_factory(
     recovery_mode: str,
     skills_enabled: bool,
     skills_global_dir: str | None,
+    mcp_config: MCPConfig,
 ):
     def factory(task, repo, trace_dir, trial_id):
         registry = _build_registry(cfg, default_cwd=str(repo), workspace=str(repo))
@@ -94,7 +129,13 @@ def _real_runner_factory(
             repo_map_mode="incremental",
             repo_map_cache_dir=str(trace_dir.parent / "repo-map-cache"),
         )
-        return ExecutionRunner(backend=backend, registry=registry, config=config, log_dir=str(trace_dir))
+        return ExecutionRunner(
+            backend=backend,
+            registry=registry,
+            config=config,
+            log_dir=str(trace_dir),
+            mcp_config=mcp_config,
+        )
     return factory
 
 
@@ -114,6 +155,7 @@ def main() -> int:
     planning_mode = _planning_mode_for_variant(args.variant)
     recovery_mode = _recovery_mode_for_variant(args.variant)
     skills_enabled = _skills_enabled_for_variant(args.variant)
+    mcp_config = _mcp_config_for_variant(args.variant)
     with tempfile.TemporaryDirectory(prefix="forge-agent-eval-reference-") as temp_dir:
         reference = validate_suite_references(suite, temp_dir)
 
@@ -174,6 +216,7 @@ def main() -> int:
             recovery_mode,
             skills_enabled,
             str(_DEFAULT_SKILLS) if skills_enabled else cfg.agent.skills_global_dir,
+            mcp_config,
         ),
         variant=args.variant,
         repetitions=args.repetitions,
@@ -190,6 +233,8 @@ def main() -> int:
             "skills_global_dir": (
                 str(_DEFAULT_SKILLS) if skills_enabled else cfg.agent.skills_global_dir
             ),
+            "mcp_enabled": mcp_config.enabled,
+            "mcp_server_ids": [server.id for server in mcp_config.servers if server.enabled],
         },
     )
     results = harness.run(args.task)
