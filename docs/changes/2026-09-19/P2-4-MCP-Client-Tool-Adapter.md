@@ -158,20 +158,22 @@ resources/prompts 目前只通过 server capabilities snapshot 做 telemetry，�
 
 - MCP Host implementation 已接入现有 Tool lifecycle；
 - official SDK local fixture / deterministic tests 已存在；
-- P2-0 MCP architecture variant 已存在。
+- P2-0 MCP architecture variant 已存在；
+- 用户已完成本地修复并 push，P2-4 已正式收口为 DONE；
+- 当前可核验修复日志包含定向 3 passed、Chat/GitHub Issue 相关 25 passed 与 `git diff --check` 通过。
 
-当前不能说：
+当前仍不能说：
 
-- deterministic regression passed；
-- real MCP stdio E2E passed；
-- MCP 提升 coding success/pass@1/token/latency。
+- real-model MCP A/B 已执行；
+- MCP 已提升 coding success/pass@1/token/latency；
+- 任意第三方 MCP server 都具有生产级安全/可靠性。
 
-上述通过性结论必须等用户本地真实执行后再补。
+## 本地验证收口
 
-## 本地验证
-
-详见本轮最终回复 A-H 命令。用户本地验证通过前，本文件状态保持：
+用户在 2026-09-19 明确确认本地修复已完成并 push，并要求进入 P2-5。未提供最终全量 pytest 的 passed 数量、完整 stdout 或耗时，因此日志不补造这些数字。P2-4 状态正式更新为：
 
 ```text
-IMPLEMENTED / LOCAL VALIDATION PENDING
+DONE
 ```
+
+详见 `docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter本地回归-DONE.md`。
