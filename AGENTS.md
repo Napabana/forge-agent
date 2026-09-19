@@ -449,3 +449,13 @@ pytest -q
 - 定向测试 3 passed；Chat/GitHub Issue 相关测试共 25 passed；`git diff --check` 通过。
 - 本轮更新日志：`docs/changes/2026-09-19/MCP清理契约测试替身修复.md`。
 - 当前未处理用户原有未跟踪的 `evals/results/local-*` 目录；未处理 stash，未修改 `config/default.yaml`、fixture 或历史结果。
+
+### 验证补充（2026-09-19，P2-4 MCP Client / Tool Adapter 本地收口）
+
+- 用户已在本地完成 P2-4 修复并 push，并明确要求进入 P2-5；P2-4 状态正式由 `IMPLEMENTED / LOCAL VALIDATION PENDING` 收口为 `DONE`。
+- 当前可核验修复提交：`dev@f842902e1753bdc69b0217d5aa89033bacd2ae82`。其中修正 MCP description 截断边界，并补齐 Chat / GitHub Issue 测试替身的 `close()` 清理契约。
+- 该提交日志记录：定向测试 3 passed；Chat/GitHub Issue 相关测试 25 passed；`git diff --check` 通过。
+- 用户未提供最终全量 pytest 的 passed 数量、完整 stdout 或耗时，因此不得补造数字。
+- 本轮没有执行 real-model `planning_recovery_skills vs planning_recovery_skills_mcp` A/B；不得宣称 MCP 提升 success rate、pass@1、token efficiency、latency 或任意外部 MCP server 的生产可靠性。
+- 验证日志：`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter本地回归-DONE.md`。
+- P2 Agent Intelligence 现在只剩 P2-5 Trajectory-driven Skill Evolution。
