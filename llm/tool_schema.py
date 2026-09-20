@@ -43,15 +43,10 @@ def resolve_tool_schema_capabilities(
 
     provider = provider.strip().lower()
     protocol = protocol.strip().lower().replace("-", "_")
-    if provider == "openai" and not base_url and protocol in {
-        "chat",
-        "chat_completion",
-        "chat_completions",
-        "responses",
-        "response",
-    }:
-        return ToolSchemaCapabilities(True, "official-openai")
-    return ToolSchemaCapabilities(False, "compatible-or-unknown")
+    source = f"auto-unverified:{provider}:{protocol}"
+    if base_url:
+        source += ":custom-endpoint"
+    return ToolSchemaCapabilities(False, source)
 
 
 def _nullable(schema: dict) -> dict:
@@ -63,6 +58,32 @@ def _nullable(schema: dict) -> dict:
         result["type"] = [*type_value, "null"]
     if isinstance(result.get("enum"), list) and None not in result["enum"]:
         result["enum"] = [*result["enum"], None]
+    return result
+
+
+def normalize_optional_nulls(params: dict, schema: dict) -> dict:
+    """Drop strict-provider null placeholders for fields optional in Forge's runtime schema."""
+    required = set(schema.get("required") or [])
+    properties = schema.get("properties") or {}
+    result = {}
+    for name, value in params.items():
+        child = properties.get(name) if isinstance(properties, dict) else None
+        if value is None and name not in required:
+            continue
+        if isinstance(value, dict) and isinstance(child, dict):
+            result[name] = normalize_optional_nulls(value, child)
+            continue
+        if isinstance(value, list) and isinstance(child, dict):
+            item_schema = child.get("items")
+            if isinstance(item_schema, dict):
+                result[name] = [
+                    normalize_optional_nulls(item, item_schema)
+                    if isinstance(item, dict)
+                    else item
+                    for item in value
+                ]
+                continue
+        result[name] = value
     return result
 
 
@@ -102,6 +123,7 @@ def strictify_tool_parameters(parameters: dict) -> dict:
 
 __all__ = [
     "ToolSchemaCapabilities",
+    "normalize_optional_nulls",
     "resolve_tool_schema_capabilities",
     "strictify_tool_parameters",
 ]

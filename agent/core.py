@@ -67,6 +67,7 @@ from agent.task import (
 from harness.executor import ToolExecutionCanceled, ToolExecutorInfrastructureError
 from llm.base import LLMBackend, LLMMessage, LLMToolSchema
 from llm.errors import LLMCallbackError, LLMErrorInfo, classify_llm_error
+from llm.tool_schema import normalize_optional_nulls
 from llm.usage import SessionUsage
 from skills.catalog import SkillCatalog
 from skills.runtime import SKILL_LOAD, SkillRuntime
@@ -471,6 +472,16 @@ class Agent:
                 )
 
             action = response.action
+            if action.tool_call is not None and isinstance(action.tool_call.params, dict):
+                schema = next(
+                    (candidate for candidate in tools if candidate.name == action.tool_call.name),
+                    None,
+                )
+                if schema is not None:
+                    action.tool_call.params = normalize_optional_nulls(
+                        action.tool_call.params,
+                        schema.parameters,
+                    )
             action_event_ref = log.log_action(
                 step=step,
                 action=action,

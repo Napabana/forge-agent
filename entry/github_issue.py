@@ -413,6 +413,7 @@ def run_on_issue(
             "api_key": config.llm.api_key or None,
             "base_url": config.llm.base_url or None,
             "max_tokens": config.llm.max_tokens,
+            "strict_tool_schema": config.llm.strict_tool_schema,
         })
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)

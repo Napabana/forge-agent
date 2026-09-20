@@ -47,7 +47,6 @@ def _attach_capabilities(
     semantic_packet_max_tokens: int | None = None,
     context_budget_cap: int | None = None,
     context_safety_margin_tokens: int | None = None,
-    strict_tool_schema: str | bool | None = "auto",
 ) -> LLMBackend:
     """把 capability / request policy 放到 Backend，而不是让 Agent 猜 model name。"""
     if model_max_output_tokens is not None and request_max_output_tokens > model_max_output_tokens:
@@ -90,6 +89,7 @@ def create_backend(
     semantic_packet_max_tokens: int | None = None,
     context_budget_cap: int | None = None,
     context_safety_margin_tokens: int | None = None,
+    strict_tool_schema: str | bool | None = "auto",
 ) -> LLMBackend:
     """Create a backend with explicit model capability and Forge request policy.
 

@@ -253,6 +253,7 @@ def run_agent_task(
             "api_key": cfg.llm.api_key or None,
             "base_url": cfg.llm.base_url or None,
             "max_tokens": cfg.llm.max_tokens,
+            "strict_tool_schema": cfg.llm.strict_tool_schema,
         })
         agent_cfg = AgentConfig(
             max_steps=cfg.agent.max_steps,
