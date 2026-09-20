@@ -13,7 +13,7 @@ from agent.loop_detector import snapshot_repository
 
 _SKIP_DIRS = frozenset({
     ".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache",
-    ".pytest_cache", "dist", "build",
+    ".pytest_cache", "dist", "build", "logs",
 })
 
 

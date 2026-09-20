@@ -512,3 +512,13 @@ pytest -q
 - 修复：新增 `Agent._apply_no_progress_guard()`，普通 Tool、Skill control、Planning control 共用同一 threshold/recovery/reflection 逻辑；重复 `skill_load` 或 Planning no-op 现在不能靠 control-path `continue` 无限逃避 progress guard。
 - 测试改为在第二次重复 `skill_load` 当步就要求 NO_PROGRESS，移除会与 LoopDetector 竞争的第三次相同 read，并断言 NO_PROGRESS 与 duplicate Skill load 处于同一 step。
 - 此补丁仍需用户本地重跑专项与全量 pytest；ChatGPT 环境未执行 pytest，不得宣称通过。
+
+
+### 修复补充（2026-09-20，全量回归：filesystem trace pollution / MCP crash fixture）
+
+- 用户本地全量回归结果：`4 failed, 973 passed, 14 skipped, 34 warnings`。
+- `tests/test_day2.py::TestReflectionNoEdit::test_reflection_triggered_after_no_edit_steps` 与 `tests/test_runner.py` 两个 acceptance/completion 失败同源：非 Git fallback `repository_content_fingerprint()` 把 repo 内 `logs/` EventLog 当成 repository content。Trace 每次 append 都伪造 semantic progress，并让 require_changes completion guard 误判仓库已变化。
+- 修复 `context/repository_state.py`：非 Git filesystem fingerprint 忽略顶层 `logs/`，与既有 LoopDetector 的 runtime-state ignore contract 对齐；Git 仓库路径仍由 `git ls-files` 决定，tracked `logs/` 不会被该 fallback 规则静默忽略。
+- 新增 `tests/test_repository_state.py`：直接锁定 runtime log append 不改变 non-Git content fingerprint，同时真实文件修改仍必须改变 fingerprint。
+- `tests/test_mcp_integration.py::test_stdio_server_process_crash_maps_to_remote_capability_and_closes` 在全量 suite 中于 `manager.start()` 握手阶段 2s 超时，未进入其真正要测的“已发现 tool 后 process crash → REMOTE_CAPABILITY”路径。生产 MCP manager 未修改；仅把 crash fixture timeout 对齐正常 stdio fixture 的 5s startup budget。
+- 当前补丁仍需用户本地复跑失败 4 项、相关专项和全量 pytest；ChatGPT 环境未运行 pytest，不得宣称 DONE。

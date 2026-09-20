@@ -522,7 +522,10 @@ def test_stdio_server_process_crash_maps_to_remote_capability_and_closes():
                 transport="stdio",
                 command=sys.executable,
                 args=(str(_CRASH_SERVER),),
-                timeout_seconds=2.0,
+                # Match the normal stdio fixture startup budget. The tool call
+                # itself exits immediately; a tighter startup timeout makes this
+                # disconnect test flaky under the full pytest suite.
+                timeout_seconds=5.0,
             ),
         ),
     )
