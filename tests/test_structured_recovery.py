@@ -12,6 +12,7 @@ from agent.recovery import (
     FailureSource,
     RecoveryPolicy,
     RecoveryStrategy,
+    SemanticProgressTracker,
 )
 from agent.task import Action, ActionType, EventType, RunStatus, Task, ToolCall
 from evals.coding_agent.__main__ import (
@@ -478,3 +479,165 @@ def test_pending_replan_does_not_override_completion_guard(tmp_path: Path):
     assert recoveries[-1]["payload"]["requires_plan_revision"] is True
     blocked = _events(rows, EventType.RECOVERY_BLOCKED.value)
     assert all(row["payload"]["blocked_action"] != "finish" for row in blocked)
+
+
+
+def test_unrelated_failure_categories_do_not_share_small_category_budget():
+    policy = RecoveryPolicy("structured", max_attempts=2)
+    categories = (
+        (FailureCategory.TOOL_FAILURE, FailureSource.TOOL),
+        (FailureCategory.NO_PROGRESS, FailureSource.PROGRESS_GUARD),
+        (FailureCategory.TEST_FAILURE, FailureSource.TEST),
+    )
+    decisions = [
+        policy.decide(
+            FailureContext(
+                category=category,
+                source=source,
+                step=index,
+                evidence=f"evidence-{index}",
+            )
+        )
+        for index, (category, source) in enumerate(categories, start=1)
+    ]
+
+    assert all(decision is not None and not decision.terminal for decision in decisions)
+    assert [decision.category_occurrence for decision in decisions] == [1, 1, 1]
+    assert [decision.global_attempt for decision in decisions] == [1, 2, 3]
+    assert decisions[-1].global_max_attempts == 6
+
+
+def test_same_failure_category_still_exhausts_its_own_budget():
+    policy = RecoveryPolicy("structured", max_attempts=2)
+    context = FailureContext(
+        category=FailureCategory.TEST_FAILURE,
+        source=FailureSource.TEST,
+        step=1,
+        evidence="same failing test",
+    )
+
+    assert policy.decide(context).budget_exhausted is False
+    assert policy.decide(context).budget_exhausted is False
+    exhausted = policy.decide(context)
+
+    assert exhausted.budget_exhausted is True
+    assert exhausted.category_occurrence == 2
+    assert exhausted.global_attempt == 2
+
+
+def test_global_recovery_hard_ceiling_still_bounds_distinct_categories():
+    policy = RecoveryPolicy("structured", max_attempts=2, global_max_attempts=3)
+    contexts = [
+        FailureContext(FailureCategory.TOOL_FAILURE, FailureSource.TOOL, 1, "tool"),
+        FailureContext(FailureCategory.NO_PROGRESS, FailureSource.PROGRESS_GUARD, 2, "progress"),
+        FailureContext(FailureCategory.TEST_FAILURE, FailureSource.TEST, 3, "test"),
+        FailureContext(FailureCategory.PERMISSION_DENIED, FailureSource.TOOL, 4, "permission"),
+    ]
+
+    first_three = [policy.decide(context) for context in contexts[:3]]
+    exhausted = policy.decide(contexts[3])
+
+    assert all(decision is not None and not decision.terminal for decision in first_three)
+    assert exhausted.terminal is True
+    assert exhausted.budget_exhausted is True
+    assert exhausted.global_attempt == 3
+    assert exhausted.global_max_attempts == 3
+    assert exhausted.to_payload()["category_max_attempts"] == 2
+
+
+def test_semantic_progress_tracker_deduplicates_bounded_evidence():
+    tracker = SemanticProgressTracker(capacity=2)
+
+    assert tracker.mark_once("skill", "bug-fix") is True
+    assert tracker.mark_once("skill", "bug-fix") is False
+    assert tracker.mark_once("plan", "plan_created:1") is True
+    assert tracker.mark_once("plan", "plan_created:1") is False
+    assert tracker.mark_once("test", "failed:a") is True
+    assert tracker.mark_once("test", "failed:a") is False
+    assert tracker.mark_once("test", "passed:a") is True
+    assert tracker.mark_once("test", "failed:b") is True
+
+
+def test_plan_created_resets_no_progress_counter(tmp_path: Path):
+    repo = _init_repo(tmp_path / "plan-progress")
+    registry = ToolRegistry().register(FileReadTool(workspace=repo))
+    task = Task("Inspect then plan.", str(repo), task_id="plan-progress", max_steps=6)
+    result, _, _, rows = _run(
+        tmp_path,
+        [
+            _call("file_read", {"path": "value.txt"}),
+            _plan_action(),
+            _call("file_read", {"path": "value.txt"}),
+            _finish(),
+        ],
+        registry,
+        task=task,
+        config=AgentConfig(
+            max_steps=6,
+            repo_map_mode="none",
+            planning_mode="always",
+            recovery_mode="structured",
+            reflection_no_edit_steps=2,
+        ),
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    no_progress = [
+        row for row in _events(rows, EventType.FAILURE_CLASSIFIED.value)
+        if row["payload"]["category"] == "no_progress"
+    ]
+    assert no_progress == []
+
+
+def test_repeated_plain_file_reads_still_trigger_no_progress(tmp_path: Path):
+    repo = _init_repo(tmp_path / "read-stagnation")
+    registry = ToolRegistry().register(FileReadTool(workspace=repo))
+    task = Task("Inspect the repository.", str(repo), task_id="read-stagnation", max_steps=5)
+    result, _, _, rows = _run(
+        tmp_path,
+        [
+            _call("file_read", {"path": "value.txt"}),
+            _call("file_read", {"path": "value.txt"}),
+            _finish(),
+        ],
+        registry,
+        task=task,
+        config=AgentConfig(
+            max_steps=5,
+            repo_map_mode="none",
+            recovery_mode="structured",
+            reflection_no_edit_steps=2,
+        ),
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    no_progress = [
+        row for row in _events(rows, EventType.FAILURE_CLASSIFIED.value)
+        if row["payload"]["category"] == "no_progress"
+    ]
+    assert len(no_progress) == 1
+
+
+def test_new_test_evidence_progresses_once_but_duplicate_result_does_not(tmp_path: Path):
+    repo = _init_repo(tmp_path / "test-evidence")
+    registry = ToolRegistry().register(SequenceTestTool([True, True]))
+    task = Task("Inspect verification evidence.", str(repo), task_id="test-evidence", max_steps=5)
+    result, _, _, rows = _run(
+        tmp_path,
+        [_call("test"), _call("test"), _finish()],
+        registry,
+        task=task,
+        config=AgentConfig(
+            max_steps=5,
+            repo_map_mode="none",
+            recovery_mode="structured",
+            reflection_no_edit_steps=1,
+        ),
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    no_progress = [
+        row for row in _events(rows, EventType.FAILURE_CLASSIFIED.value)
+        if row["payload"]["category"] == "no_progress"
+    ]
+    assert len(no_progress) == 1

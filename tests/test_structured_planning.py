@@ -553,7 +553,7 @@ def test_planning_context_exposes_minimal_plan_create_contract(tmp_path: Path):
     context = runtime.render_context()
 
     assert "plan_create requires a non-empty goal" in context
-    assert "each step requires a non-empty id and description" in context
+    assert "Runtime assigns stable step ids" in context
 
 
 def test_invalid_plan_create_feedback_repeats_required_shape(tmp_path: Path):
@@ -565,7 +565,8 @@ def test_invalid_plan_create_feedback_repeats_required_shape(tmp_path: Path):
 
     assert result.accepted is False
     assert "Expected plan_create params" in result.message
-    assert "non-empty id and description" in result.message
+    assert "non-empty description" in result.message
+    assert "Runtime assigns step ids" in result.message
 
 
 def test_system_prompt_does_not_delegate_commit_policy_to_model():
@@ -576,7 +577,7 @@ def test_system_prompt_does_not_delegate_commit_policy_to_model():
     assert "Do not create a Git commit unless" not in prompt
     assert "git_status/git_diff/git_add/git_commit" not in prompt
 
-def test_plan_step_update_feedback_lists_non_terminal_steps(tmp_path: Path):
+def test_plan_step_update_is_idempotent_for_same_terminal_state(tmp_path: Path):
     repo = _init_repo(tmp_path / "repo-update-contract")
     task = Task("Inspect the repository.", str(repo), task_id="planning-update-contract")
     runtime = PlanningRuntime(decide_planning(task, "always"))
@@ -585,20 +586,157 @@ def test_plan_step_update_feedback_lists_non_terminal_steps(tmp_path: Path):
         {
             "goal": "inspect then verify",
             "steps": [
-                {"id": "inspect", "description": "inspect"},
-                {"id": "verify", "description": "verify"},
+                {"description": "inspect"},
+                {"description": "verify"},
+            ],
+        },
+    ).accepted
+    first = runtime.apply_control(
+        "plan_step_update",
+        {"step_id": "inspect", "status": "completed"},
+    )
+    duplicate = runtime.apply_control(
+        "plan_step_update",
+        {"step_id": "inspect", "status": "completed"},
+    )
+    rollback = runtime.apply_control(
+        "plan_step_update",
+        {"step_id": "inspect", "status": "in_progress"},
+    )
+
+    assert first.accepted is True
+    assert first.payload["state_changed"] is True
+    assert duplicate.accepted is True
+    assert duplicate.payload["idempotent"] is True
+    assert duplicate.payload["state_changed"] is False
+    assert rollback.accepted is False
+    assert "rollback is not allowed" in rollback.message
+
+
+
+def test_runtime_owned_step_ids_are_stable_deduplicated_and_bounded(tmp_path: Path):
+    repo = _init_repo(tmp_path / "runtime-owned-ids")
+    task = Task("Plan the fix.", str(repo), task_id="runtime-owned-ids")
+    payload = {
+        "goal": "Fix and verify",
+        "steps": [
+            {"description": "Inspect failing tests"},
+            {"description": "Inspect failing tests"},
+            {"description": "修复测试"},
+            {"description": "Very long semantic step " * 12},
+        ],
+    }
+
+    first = PlanningRuntime(decide_planning(task, "always"))
+    second = PlanningRuntime(decide_planning(task, "always"))
+    assert first.apply_control("plan_create", payload).accepted
+    assert second.apply_control("plan_create", payload).accepted
+
+    first_ids = [step.step_id for step in first.current_plan.steps]
+    second_ids = [step.step_id for step in second.current_plan.steps]
+    assert first_ids == second_ids
+    assert first_ids[:3] == ["inspect-failing-tests", "inspect-failing-tests-2", "step-3"]
+    assert len(first_ids[3]) <= 64
+    assert all(len(step_id) <= 64 for step_id in first_ids)
+
+
+def test_planning_control_surface_and_step_id_enum_follow_runtime_state(tmp_path: Path):
+    repo = _init_repo(tmp_path / "dynamic-planning-schema")
+    task = Task("Plan the fix.", str(repo), task_id="dynamic-planning-schema")
+    runtime = PlanningRuntime(decide_planning(task, "always"))
+
+    before = runtime.schemas()
+    assert [schema.name for schema in before] == ["plan_create"]
+    step_contract = before[0].parameters["properties"]["steps"]["items"]
+    assert step_contract["required"] == ["description"]
+    assert "id" not in step_contract["properties"]
+    assert "status" not in step_contract["properties"]
+
+    assert runtime.apply_control(
+        "plan_create",
+        {
+            "goal": "Fix and verify",
+            "steps": [
+                {"description": "Apply minimal fix"},
+                {"description": "Verify full suite"},
+            ],
+        },
+    ).accepted
+
+    after = runtime.schemas()
+    assert [schema.name for schema in after] == ["plan_step_update", "plan_revise"]
+    update = next(schema for schema in after if schema.name == "plan_step_update")
+    assert update.parameters["properties"]["step_id"]["enum"] == [
+        "apply-minimal-fix",
+        "verify-full-suite",
+    ]
+
+
+def test_plan_revision_preserves_runtime_identity_and_terminal_progress(tmp_path: Path):
+    repo = _init_repo(tmp_path / "revision-lineage")
+    task = Task("Plan the fix.", str(repo), task_id="revision-lineage")
+    runtime = PlanningRuntime(decide_planning(task, "always"))
+    assert runtime.apply_control(
+        "plan_create",
+        {
+            "goal": "Fix and verify",
+            "steps": [
+                {"description": "Apply minimal fix", "targets": ["value.txt"]},
+                {"description": "Verify full suite"},
             ],
         },
     ).accepted
     assert runtime.apply_control(
         "plan_step_update",
-        {"step_id": "inspect", "status": "completed"},
+        {"step_id": "apply-minimal-fix", "status": "completed"},
     ).accepted
 
-    rejected = runtime.apply_control(
-        "plan_step_update",
-        {"step_id": "inspect", "status": "completed"},
+    revised = runtime.apply_control(
+        "plan_revise",
+        {
+            "reason": "New evidence requires a focused verifier.",
+            "steps": [
+                {
+                    "description": "Apply minimal fix",
+                    "targets": ["value.txt"],
+                    "verification": "Inspect final diff",
+                },
+                {"description": "Run repository verifier"},
+            ],
+        },
     )
 
-    assert rejected.accepted is False
-    assert "Current non-terminal step ids: verify" in rejected.message
+    assert revised.accepted is True
+    plan = runtime.current_plan
+    assert plan.version == 2
+    assert plan.previous_version == 1
+    assert plan.goal == "Fix and verify"
+    assert plan.steps[0].step_id == "apply-minimal-fix"
+    assert plan.steps[0].status is PlanStepStatus.COMPLETED
+    assert plan.steps[1].step_id == "run-repository-verifier"
+    assert plan.steps[1].status is PlanStepStatus.PENDING
+
+
+def test_idempotent_completion_does_not_double_count_eval_metric(tmp_path: Path):
+    result, _, _, _, trace = _run_agent(
+        tmp_path,
+        [
+            _plan_action(),
+            Action(
+                ActionType.TOOL_CALL,
+                "complete once",
+                ToolCall("plan_step_update", {"step_id": "edit", "status": "completed"}),
+            ),
+            Action(
+                ActionType.TOOL_CALL,
+                "confirm completion",
+                ToolCall("plan_step_update", {"step_id": "edit", "status": "completed"}),
+            ),
+            Action(ActionType.FINISH, "done", message="done"),
+        ],
+        planning_mode="always",
+    )
+    assert result.status is RunStatus.SUCCESS
+    result.trace_path = str(trace)
+    metrics = extract_metrics(result, wall_time_seconds=0.1)
+    assert metrics.plan_step_completed_count == 1

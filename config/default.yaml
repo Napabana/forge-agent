@@ -69,6 +69,8 @@ llm:
   model: deepseek-v4.1-flash
   api_key: ${KRILL_API_KEY}
   base_url: https://api.krill-code.net/coding/v1 
+  # strict structured calling is opt-in until this compatible gateway is verified.
+  strict_tool_schema: auto
   #https://api-slb.krill-ai.net/coding/v1
   context_window: 1000000
   model_max_output_tokens: 384000

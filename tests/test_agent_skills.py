@@ -58,15 +58,20 @@ def _run(
     global_root: Path | None = None,
     max_loaded: int = 3,
     prepare_next_turn=None,
+    registry: ToolRegistry | None = None,
+    recovery_mode: str = "off",
+    reflection_no_edit_steps: int = 6,
 ):
     task = Task("Fix the repository carefully.", str(repo), task_id="skills-test")
     backend = MockBackend(script)
     agent = Agent(
         backend,
-        ToolRegistry(),
+        registry or ToolRegistry(),
         AgentConfig(
             max_steps=max(6, len(script) + 2),
             repo_map_mode="none",
+            recovery_mode=recovery_mode,
+            reflection_no_edit_steps=reflection_no_edit_steps,
             skills_enabled=True,
             skills_global_dir=str(global_root) if global_root is not None else None,
             skills_max_loaded=max_loaded,
@@ -439,3 +444,49 @@ def test_generic_repository_tools_cannot_bypass_skill_disclosure(tmp_path: Path)
     repo_map = RepoMap(repo).build(budget=4000)
     assert marker not in repo_map
     assert ".agents" not in repo_map
+
+
+
+def test_skill_load_is_semantic_progress_but_duplicate_load_is_not(tmp_path: Path):
+    repo = tmp_path / "semantic-skill-progress"
+    repo.mkdir()
+    (repo / "value.txt").write_text("old\n", encoding="utf-8")
+    _write_skill(
+        repo / ".agents" / "skills",
+        "bug-fix",
+        description="Use for debugging.",
+        body="Inspect evidence before editing.",
+    )
+    registry = ToolRegistry().register(FileReadTool(workspace=repo))
+
+    result, _, _, rows = _run(
+        tmp_path,
+        [
+            Action(ActionType.TOOL_CALL, "read", ToolCall("file_read", {"path": "value.txt"})),
+            _load("bug-fix"),
+            Action(ActionType.TOOL_CALL, "read", ToolCall("file_read", {"path": "value.txt"})),
+            _load("bug-fix"),
+            Action(ActionType.TOOL_CALL, "read", ToolCall("file_read", {"path": "value.txt"})),
+            _finish(),
+        ],
+        repo=repo,
+        registry=registry,
+        recovery_mode="structured",
+        reflection_no_edit_steps=2,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    loaded_indices = [
+        index for index, row in enumerate(rows)
+        if row["event_type"] == EventType.SKILL_LOADED.value
+    ]
+    no_progress_indices = [
+        index for index, row in enumerate(rows)
+        if row["event_type"] == EventType.FAILURE_CLASSIFIED.value
+        and row["payload"]["category"] == "no_progress"
+    ]
+    assert len(loaded_indices) == 2
+    assert rows[loaded_indices[0]]["payload"]["already_loaded"] is False
+    assert rows[loaded_indices[1]]["payload"]["already_loaded"] is True
+    assert len(no_progress_indices) == 1
+    assert no_progress_indices[0] > loaded_indices[1]
