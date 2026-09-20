@@ -489,4 +489,4 @@ def test_skill_load_is_semantic_progress_but_duplicate_load_is_not(tmp_path: Pat
     assert rows[loaded_indices[1]]["payload"]["already_loaded"] is True
     assert len(no_progress_indices) == 1
     assert no_progress_indices[0] > loaded_indices[1]
-    assert rows[no_progress_indices[0]]["step_id"] == rows[loaded_indices[1]]["step_id"]
+    assert rows[no_progress_indices[0]]["payload"]["step_id"] == rows[loaded_indices[1]]["payload"]["step_id"]
