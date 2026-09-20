@@ -348,7 +348,8 @@ class RecoveryRuntime:
         pending = self.pending_replan_from_version
         return (
             "[RECOVERY REPLAN REQUIRED] Structured recovery requires plan_revise "
-            f"to advance beyond plan v{pending} before repository mutation or FINISH."
+            f"to advance beyond plan v{pending} before further repository mutation. "
+            "FINISH remains available and will still be checked by Completion Guard."
         )
 
     def render_context(self) -> str:
@@ -358,8 +359,9 @@ class RecoveryRuntime:
         return (
             "[Structured Recovery State]\n"
             f"Recovery requires a plan revision newer than v{self.pending_replan_from_version}.\n"
-            "Read-only diagnosis is allowed, but repository mutation and FINISH remain blocked "
-            "until plan_revise produces a newer plan version."
+            "Read-only diagnosis and FINISH are allowed, but further repository mutation "
+            "remains blocked until plan_revise produces a newer plan version. "
+            "FINISH still must satisfy Completion Guard."
         )
 
 

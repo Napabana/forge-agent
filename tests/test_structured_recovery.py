@@ -382,3 +382,99 @@ def test_eval_variant_maps_to_real_planning_and_recovery_configs():
     assert _recovery_mode_for_variant("planning") == "off"
     assert _planning_mode_for_variant("planning_recovery") == "always"
     assert _recovery_mode_for_variant("planning_recovery") == "structured"
+
+
+def test_verified_current_change_does_not_trigger_no_progress_replan(tmp_path: Path):
+    repo = _init_repo(tmp_path / "verified-progress")
+    registry = (
+        ToolRegistry()
+        .register(FileWriteTool(workspace=repo))
+        .register(SequenceTestTool([True]))
+        .register(FileReadTool(workspace=repo))
+    )
+    task = Task(
+        "Change value.txt and verify it.",
+        str(repo),
+        task_id="verified-progress",
+        require_changes=True,
+        require_tests=True,
+        max_steps=8,
+    )
+    script = [
+        _plan_action(),
+        _call("file_write", {"path": "value.txt", "content": "done\n"}),
+        _call("test"),
+        _call("file_read", {"path": "value.txt"}),
+        _call("file_read", {"path": "value.txt"}),
+        _finish(),
+    ]
+
+    result, _, _, rows = _run(
+        tmp_path,
+        script,
+        registry,
+        task=task,
+        config=AgentConfig(
+            max_steps=8,
+            repo_map_mode="none",
+            planning_mode="always",
+            recovery_mode="structured",
+            reflection_no_edit_steps=2,
+        ),
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    no_progress = [
+        row for row in _events(rows, EventType.FAILURE_CLASSIFIED.value)
+        if row["payload"]["category"] == "no_progress"
+    ]
+    assert no_progress == []
+
+
+def test_pending_replan_does_not_override_completion_guard(tmp_path: Path):
+    repo = _init_repo(tmp_path / "finish-with-pending-replan")
+    test_tool = SequenceTestTool([False, False, True])
+    registry = (
+        ToolRegistry()
+        .register(FileWriteTool(workspace=repo))
+        .register(test_tool)
+    )
+    task = Task(
+        "Change value.txt and verify the final state.",
+        str(repo),
+        task_id="finish-with-pending-replan",
+        require_changes=True,
+        require_tests=True,
+        max_steps=8,
+    )
+    script = [
+        _plan_action(),
+        _call("file_write", {"path": "value.txt", "content": "done\n"}),
+        _call("test"),
+        _call("test"),
+        _call("test"),
+        _finish(),
+    ]
+
+    result, agent, _, rows = _run(
+        tmp_path,
+        script,
+        registry,
+        task=task,
+        config=AgentConfig(
+            max_steps=8,
+            repo_map_mode="none",
+            planning_mode="always",
+            recovery_mode="structured",
+            recovery_max_attempts=4,
+            reflection_no_edit_steps=100,
+        ),
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    assert agent.current_plan is not None and agent.current_plan.version == 1
+    recoveries = _events(rows, EventType.RECOVERY_SELECTED.value)
+    assert [row["payload"]["strategy"] for row in recoveries] == ["inspect", "replan"]
+    assert recoveries[-1]["payload"]["requires_plan_revision"] is True
+    blocked = _events(rows, EventType.RECOVERY_BLOCKED.value)
+    assert all(row["payload"]["blocked_action"] != "finish" for row in blocked)

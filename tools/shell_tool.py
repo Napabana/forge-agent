@@ -171,6 +171,17 @@ class ShellTool(BaseTool):
         if not cmd:
             return ToolResult(success=False, output="", error="cmd is required")
 
+        if _references_internal_agent_path(cmd):
+            return ToolResult(
+                success=False,
+                output="",
+                error=(
+                    "Internal .agents paths are runtime-owned; "
+                    "use Agent Skills controls instead of shell access."
+                ),
+                error_type=ToolErrorType.PERMISSION_DENIED,
+            )
+
         if not self._allow_git_mutation and _contains_mutating_git_command(cmd):
             return ToolResult(
                 success=False,
@@ -252,6 +263,12 @@ def _is_readonly(cmd: str) -> bool:
         if stripped == prefix or stripped.startswith(prefix + " "):
             return True
     return False
+
+
+def _references_internal_agent_path(cmd: str) -> bool:
+    """Prevent generic shell access from bypassing Agent Skills disclosure."""
+    normalized = cmd.replace("\\", "/").lower()
+    return re.search(r"(^|[\s'\"=:/])\.agents(?:/|$)", normalized) is not None
 
 
 def _contains_mutating_git_command(cmd: str) -> bool:

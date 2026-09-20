@@ -47,7 +47,7 @@ _CLASS_NODES = frozenset({
     "interface_declaration",
 })
 _SKIP_DIRS = frozenset({
-    ".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache",
+    ".git", ".agents", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache",
     ".pytest_cache", "dist", "build",
 })
 _SYMBOL_RE = re.compile(

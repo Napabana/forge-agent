@@ -16,6 +16,10 @@ from agent.task import Action, ActionType, EventType, RunStatus, Task, ToolCall
 from skills.catalog import SkillCatalog
 from llm.base import MockBackend
 from tools.base import ToolRegistry
+from tools.file_tool import FileReadTool, FileViewTool, FileWriteTool
+from tools.search_tool import FindFilesTool, SearchTextTool
+from tools.shell_tool import ShellTool
+from context.repo_map import RepoMap
 
 
 def _write_skill(
@@ -388,3 +392,50 @@ def test_skill_load_rejection_feedback_names_available_catalog(tmp_path: Path):
     assert result.accepted is False
     assert "Expected skill_load params" in result.message
     assert "verify-python-fix" in result.message
+
+
+def test_generic_repository_tools_cannot_bypass_skill_disclosure(tmp_path: Path):
+    repo = tmp_path / "repo-protected-skill"
+    repo.mkdir()
+    marker = "PROTECTED-SKILL-INSTRUCTIONS"
+    skill_file = _write_skill(
+        repo / ".agents" / "skills",
+        "protected-skill",
+        description="Use for protected workflow.",
+        body=marker,
+    )
+    relative = skill_file.relative_to(repo) / "SKILL.md"
+
+    for tool in (
+        FileReadTool(workspace=repo),
+        FileViewTool(workspace=repo),
+        FileWriteTool(workspace=repo),
+    ):
+        params = {"path": str(relative)}
+        if tool.name == "file_write":
+            params["content"] = "overwrite"
+        result = tool.execute(params)
+        assert result.success is False
+        assert "skill_load" in (result.error or "")
+
+    shell = ShellTool(default_cwd=str(repo))
+    shell_result = shell.execute({"cmd": f"cat {relative.as_posix()}"})
+    assert shell_result.success is False
+    assert shell_result.error_type is not None
+    assert shell_result.error_type.value == "permission_denied"
+
+    search = SearchTextTool().execute(
+        {"pattern": marker, "path": str(repo)}
+    )
+    assert search.success is True
+    assert marker not in search.output
+
+    found = FindFilesTool().execute(
+        {"pattern": "SKILL.md", "path": str(repo)}
+    )
+    assert found.success is True
+    assert ".agents" not in found.output
+
+    repo_map = RepoMap(repo).build(budget=4000)
+    assert marker not in repo_map
+    assert ".agents" not in repo_map

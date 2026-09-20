@@ -26,7 +26,7 @@ MAX_LINE_LENGTH = 200   # 单行超长时截断显示
 
 # 搜索时跳过的目录
 _SKIP_DIRS: frozenset[str] = frozenset({
-    ".git", "__pycache__", ".venv", "venv", "node_modules",
+    ".git", ".agents", "__pycache__", ".venv", "venv", "node_modules",
     ".mypy_cache", ".pytest_cache", "dist", "build", "*.egg-info",
 })
 
@@ -301,6 +301,8 @@ def _iter_files(root: Path, glob_pattern: str):
     递归遍历目录，跳过 _SKIP_DIRS，按 glob_pattern 过滤文件名。
     """
     if root.is_file():
+        if any(part in _SKIP_DIRS for part in root.parts):
+            return
         yield root
         return
 

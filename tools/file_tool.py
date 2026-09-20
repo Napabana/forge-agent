@@ -27,6 +27,12 @@ MAX_READ_LINES = 500
 # file_view 每窗口显示的行数
 VIEW_WINDOW_LINES = 100
 
+_INTERNAL_AGENT_DIR = ".agents"
+_INTERNAL_SKILLS_HINT = (
+    "Agent Skills content is runtime-owned. Use skill_load / "
+    "skill_reference_load instead of generic file tools."
+)
+
 
 class FileReadTool(BaseTool):
     """
@@ -272,6 +278,12 @@ def _resolve_workspace_path(
     path = Path(raw_path)
     try:
         if workspace is None:
+            if _INTERNAL_AGENT_DIR in path.parts:
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=_INTERNAL_SKILLS_HINT,
+                )
             return path
 
         target = (path if path.is_absolute() else workspace / path).resolve()
@@ -280,6 +292,16 @@ def _resolve_workspace_path(
                 success=False,
                 output="",
                 error=f"Path escapes workspace: {raw_path}",
+            )
+        try:
+            relative = target.relative_to(workspace)
+        except ValueError:
+            relative = target
+        if _INTERNAL_AGENT_DIR in relative.parts:
+            return ToolResult(
+                success=False,
+                output="",
+                error=_INTERNAL_SKILLS_HINT,
             )
         return target
     except (OSError, ValueError) as exc:

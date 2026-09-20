@@ -535,25 +535,6 @@ class Agent:
                 history.add(LLMMessage(role="user", content="[PLANNING REQUIRED] " + detail))
                 continue
 
-            if (
-                action.action_type == ActionType.FINISH
-                and self._recovery_replan_required()
-            ):
-                detail = self._recovery_runtime.replan_gate_message()  # type: ignore[union-attr]
-                log.log_trace(
-                    EventType.RECOVERY_BLOCKED,
-                    step,
-                    blocked_action="finish",
-                    reason="plan_revision_required",
-                )
-                history.add(LLMMessage(
-                    role="assistant",
-                    content=self._format_action_for_history(action),
-                    event_ref=action_event_ref,
-                ))
-                history.add(LLMMessage(role="user", content=detail))
-                continue
-
             if action.action_type == ActionType.FINISH:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
@@ -1068,7 +1049,18 @@ class Agent:
                     steps_without_edit >= self._cfg.reflection_no_edit_steps
                     and failure_category is not FailureCategory.INFRASTRUCTURE
                 ):
-                    if self._structured_recovery_enabled():
+                    current_content_state = self._get_repo_content_state(task.repo_path)
+                    current_change_is_verified = (
+                        last_successful_test_content_state is not None
+                        and current_content_state != initial_repo_content_state
+                        and current_content_state == last_successful_test_content_state
+                    )
+                    if current_change_is_verified:
+                        # Verification/read-only inspection after a tested repository change
+                        # is real progress. Do not force a replan merely because no new edit
+                        # happened during the verification phase.
+                        steps_without_edit = 0
+                    elif self._structured_recovery_enabled():
                         recovery = self._handle_recovery(
                             self._failure_context(
                                 category=FailureCategory.NO_PROGRESS,
@@ -1087,6 +1079,7 @@ class Agent:
                             return self._recovery_terminated_result(
                                 task, step, total_tokens, usage, log, recovery
                             )
+                        steps_without_edit = 0
                     else:
                         reflect_prompt = reflection_no_edit(steps_without_edit)
                         log.log_reflection(
@@ -1096,7 +1089,7 @@ class Agent:
                         )
                         history.add(LLMMessage(role="user", content=reflect_prompt))
                         logger.debug("Reflection triggered: no_edit at step %d", step)
-                    steps_without_edit = 0
+                        steps_without_edit = 0
 
             elif action.action_type == ActionType.REFLECTION:
                 history.add(LLMMessage(role="assistant", content=action.thought))
