@@ -325,6 +325,72 @@ def test_finish_allowed_when_required_write_was_committed(tmp_path):
     assert target.read_text(encoding="utf-8") == "after\n"
 
 
+def test_git_commit_after_successful_test_does_not_require_retest(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "value.txt"
+    target.write_text("before\n", encoding="utf-8")
+    for command in (
+        ("git", "init", "-q"),
+        ("git", "config", "user.email", "forge-agent-test@example.invalid"),
+        ("git", "config", "user.name", "Forge Agent Test"),
+        ("git", "add", "value.txt"),
+        ("git", "commit", "-qm", "baseline"),
+    ):
+        subprocess.run(command, cwd=repo, check=True, capture_output=True, text=True)
+
+    class CommitExistingChangeTool(BaseTool):
+        @property
+        def name(self) -> str:
+            return "git_commit"
+
+        @property
+        def description(self) -> str:
+            return "stage and commit the already-tested working tree content"
+
+        @property
+        def parameters_schema(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        def execute(self, params: dict) -> ToolResult:
+            subprocess.run(("git", "add", "value.txt"), cwd=repo, check=True)
+            subprocess.run(
+                ("git", "commit", "-qm", "agent change"),
+                cwd=repo,
+                check=True,
+            )
+            return ToolResult(success=True, output="committed tested content")
+
+    task = Task(
+        description="change and verify value.txt",
+        repo_path=str(repo),
+        max_steps=4,
+        require_changes=True,
+        require_tests=True,
+    )
+    backend = MockBackend([
+        _tool_action("file_write"),
+        _tool_action("test"),
+        _tool_action("git_commit"),
+        _finish_action(),
+    ])
+    registry = (
+        ToolRegistry()
+        .register(RepositoryWriteTool("file_write", target, "after\n"))
+        .register(NoopTool("test", "2 passed"))
+        .register(CommitExistingChangeTool())
+    )
+    log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
+    try:
+        result = Agent(backend, registry, AgentConfig()).run(task, log)
+        events = list(log.replay())
+    finally:
+        log.close()
+
+    assert result.status == RunStatus.SUCCESS
+    assert target.read_text(encoding="utf-8") == "after\n"
+    assert not any(event.event_type == EventType.COMPLETION_REJECTED for event in events)
+
 def test_resource_budget_warning_is_ephemeral_and_hides_exact_steps(tmp_path):
     reflections = [
         Action(action_type=ActionType.REFLECTION, thought=f"reflect {index}")

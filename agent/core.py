@@ -40,7 +40,7 @@ from agent.recovery import (
 from context.history import ConversationHistory
 from context.incremental_repo_map import PersistentRepoMap
 from context.repo_map import RepoMap
-from context.repository_state import repository_fingerprint
+from context.repository_state import repository_content_fingerprint, repository_fingerprint
 from context.token_budget import (
     TokenBudget,
     estimate_message_tokens,
@@ -320,12 +320,12 @@ class Agent:
         )
         test_attempted = False
         last_test_passed: bool | None = None
-        last_successful_test_step: int | None = None
-        # Completion Guard 与 loop detector 共用真实 repository fingerprint，
-        # 不再把“调用过某个写工具”当成仓库确实发生变化的证据。
+        last_successful_test_content_state: str | None = None
+        # Progress/loop detection keeps the Git-aware repository fingerprint, while
+        # completion verification separately tracks checkout-visible file content.
         initial_repo_state = self._get_repo_state(task.repo_path)
+        initial_repo_content_state = self._get_repo_content_state(task.repo_path)
         last_repo_state = initial_repo_state
-        last_repo_change_step: int | None = None
         fatal_error_key: str | None = None
         fatal_error_count = 0
 
@@ -556,6 +556,7 @@ class Agent:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
                 final_repo_state = self._get_repo_state(task.repo_path)
+                final_repo_content_state = self._get_repo_content_state(task.repo_path)
                 rejection_code: str | None = None
                 verification_error: str | None = None
                 if fatal_error_key is not None:
@@ -566,7 +567,7 @@ class Agent:
                         steps_taken=step, total_tokens=total_tokens, usage=usage.snapshot(),
                         patch=patch, error=reason, termination_reason="infrastructure_error",
                     )
-                elif task.require_changes and final_repo_state == initial_repo_state:
+                elif task.require_changes and final_repo_content_state == initial_repo_content_state:
                     rejection_code = "REPOSITORY_UNCHANGED"
                     verification_error = (
                         "Task requires repository changes, but the repository state did not change."
@@ -583,15 +584,13 @@ class Agent:
                     )
                 elif (
                     test_attempted
-                    and last_repo_change_step is not None
-                    and (
-                        last_successful_test_step is None
-                        or last_successful_test_step < last_repo_change_step
-                    )
+                    and last_test_passed is True
+                    and last_successful_test_content_state != final_repo_content_state
                 ):
                     rejection_code = "FINAL_STATE_UNVERIFIED"
                     verification_error = (
-                        "Files changed after the latest successful test; the final state is unverified."
+                        "Repository content changed after the latest successful test; "
+                        "the final state is unverified."
                     )
 
                 if verification_error is not None:
@@ -621,7 +620,9 @@ class Agent:
                                 completion_code=(
                                     rejection_code or "COMPLETION_REQUIREMENT_UNMET"
                                 ),
-                                repository_changed=final_repo_state != initial_repo_state,
+                                repository_changed=(
+                                    final_repo_content_state != initial_repo_content_state
+                                ),
                                 test_state=(
                                     "success" if last_test_passed is True
                                     else "failed" if last_test_passed is False
@@ -838,7 +839,6 @@ class Agent:
                 repository_changed = current_repo_state != last_repo_state
                 if repository_changed:
                     steps_without_edit = 0
-                    last_repo_change_step = step
                     last_repo_state = current_repo_state
                     if self._repo_map_mode() == "incremental":
                         if hasattr(self, "_repo_map_cache"):
@@ -867,7 +867,9 @@ class Agent:
                     test_attempted = True
                     last_test_passed = observation.is_success()
                     if last_test_passed:
-                        last_successful_test_step = step
+                        last_successful_test_content_state = self._get_repo_content_state(
+                            task.repo_path
+                        )
 
                 observation_event_ref = log.log_observation(
                     step=step,
@@ -1613,6 +1615,9 @@ class Agent:
 
     def _get_repo_state(self, repo_path: str) -> str:
         return repository_fingerprint(repo_path)
+
+    def _get_repo_content_state(self, repo_path: str) -> str:
+        return repository_content_fingerprint(repo_path)
 
 
 def _default_executor(

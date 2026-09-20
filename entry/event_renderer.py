@@ -75,6 +75,55 @@ class RunEventRenderer:
                     ))
             return
 
+        if event_type is EventType.PLAN_CREATED:
+            plan = payload.get("plan", {})
+            click.echo(click.style(
+                f"Plan v{plan.get('version', '?')}: {plan.get('goal', '')}",
+                fg="magenta",
+            ))
+            return
+        if event_type is EventType.PLAN_REVISED:
+            click.echo(click.style(
+                "Plan revised "
+                f"v{payload.get('previous_version', '?')}→v{payload.get('new_version', '?')}: "
+                f"{payload.get('reason', '')}",
+                fg="magenta",
+            ))
+            return
+        if event_type is EventType.PLAN_REJECTED:
+            click.echo(click.style(
+                f"Plan rejected: {payload.get('error', '')}", fg="yellow",
+            ))
+            return
+        if event_type is EventType.SKILL_LOADED:
+            click.echo(click.style(
+                f"Skill loaded: {payload.get('skill', '')}", fg="magenta",
+            ))
+            return
+        if event_type is EventType.COMPLETION_REJECTED:
+            click.echo(click.style(
+                f"Finish rejected [{payload.get('code', 'unknown')}]: "
+                f"{payload.get('detail', '')}",
+                fg="yellow",
+            ))
+            return
+        if event_type is EventType.RECOVERY_SELECTED:
+            click.echo(click.style(
+                f"Recovery [{payload.get('category', 'unknown')}] "
+                f"{payload.get('strategy', 'unknown')} "
+                f"({payload.get('attempt', '?')}/{payload.get('max_attempts', '?')}): "
+                f"{payload.get('reason', '')}",
+                fg="yellow",
+            ))
+            return
+        if event_type is EventType.RECOVERY_EXHAUSTED:
+            click.echo(click.style(
+                f"Recovery exhausted [{payload.get('category', 'unknown')}]: "
+                f"{payload.get('reason', '')}",
+                fg="red",
+            ))
+            return
+
         if event_type is EventType.ACCEPTANCE:
             status = payload.get("acceptance_status") or payload.get("status", "unknown")
             click.echo(click.style(f"Acceptance: {status}", fg=_status_color(status)))

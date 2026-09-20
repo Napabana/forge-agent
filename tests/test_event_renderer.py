@@ -59,3 +59,40 @@ def test_reasoning_visibility_is_independent_from_lifecycle(capsys):
     output = capsys.readouterr().out
     assert "action=finish" in output
     assert "visible reasoning" in output
+
+
+def test_shared_renderer_surfaces_control_flow_events(capsys):
+    renderer = RunEventRenderer()
+
+    renderer(_event(EventType.PLAN_CREATED, {
+        "plan": {"version": 1, "goal": "Fix regression"},
+    }))
+    renderer(_event(EventType.COMPLETION_REJECTED, {
+        "code": "FINAL_STATE_UNVERIFIED",
+        "detail": "Repository content changed after the latest successful test.",
+    }))
+    renderer(_event(EventType.RECOVERY_SELECTED, {
+        "category": "completion_rejected",
+        "strategy": "rerun_test",
+        "attempt": 2,
+        "max_attempts": 4,
+        "reason": "Fresh verification is required.",
+    }))
+    renderer(_event(EventType.PLAN_REVISED, {
+        "previous_version": 1,
+        "new_version": 2,
+        "reason": "Adjust verification.",
+    }))
+    renderer(_event(EventType.SKILL_LOADED, {"skill": "verify-python-fix"}))
+    renderer(_event(EventType.RECOVERY_EXHAUSTED, {
+        "category": "permission_denied",
+        "reason": "Budget exhausted.",
+    }))
+
+    output = capsys.readouterr().out
+    assert "Plan v1: Fix regression" in output
+    assert "Finish rejected [FINAL_STATE_UNVERIFIED]" in output
+    assert "Recovery [completion_rejected] rerun_test (2/4)" in output
+    assert "Plan revised v1→v2: Adjust verification." in output
+    assert "Skill loaded: verify-python-fix" in output
+    assert "Recovery exhausted [permission_denied]: Budget exhausted." in output

@@ -158,6 +158,48 @@ def repository_fingerprint(repo_path: str | Path) -> str:
     return f"{head}:{snapshot_repository(root)}"
 
 
+def repository_content_fingerprint(repo_path: str | Path) -> str:
+    """Return a checkout-content fingerprint that ignores Git metadata-only changes.
+
+    This is intentionally distinct from repository_fingerprint. Completion
+    verification needs to know whether the files a test observed have changed;
+    staging or committing those same bytes must not invalidate a successful test.
+    """
+    root = Path(repo_path).resolve()
+    listed = _git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    if listed is None:
+        return _filesystem_fingerprint(root)
+
+    digest = hashlib.sha256()
+    for relative in sorted(path for path in listed.split("\0") if path):
+        normalized = relative.replace("\\", "/")
+        target = root / relative
+        digest.update(normalized.encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        if target.is_symlink():
+            digest.update(b"symlink\0")
+            try:
+                digest.update(str(target.readlink()).encode("utf-8", errors="replace"))
+            except OSError:
+                digest.update(b"<unreadable>")
+        elif target.is_file():
+            digest.update(b"file\0")
+            try:
+                digest.update(b"x" if target.stat().st_mode & 0o111 else b"-")
+                with target.open("rb") as stream:
+                    while True:
+                        chunk = stream.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+            except OSError:
+                digest.update(b"<unreadable>")
+        else:
+            digest.update(b"<missing>")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def _parse_status_porcelain_z(raw: str) -> tuple[set[str], set[tuple[str, str]]]:
     items = raw.split("\0")
     paths: set[str] = set()
