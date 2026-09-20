@@ -87,7 +87,7 @@ class GraderSpec:
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.grader_id, "kind": self.kind, "params": self.params, "required": self.required}
 
-
+#一个评估的具体任务
 @dataclass(frozen=True)
 class EvalTask:
     task_id: str
@@ -137,7 +137,7 @@ class EvalTask:
             graders=tuple(GraderSpec.from_dict(item) for item in raw.get("graders", ())),
         )
 
-
+#评估任务集
 @dataclass(frozen=True)
 class EvaluationSuite:
     suite_id: str
@@ -178,7 +178,7 @@ class EvaluationSuite:
             raise ValueError("evaluation suite JSON must be an object")
         return cls.from_dict(raw)
 
-
+#一次评估 绑定suite和task
 @dataclass(frozen=True)
 class TrialConfig:
     suite_id: str
@@ -210,7 +210,7 @@ class GraderResult:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-
+#记录agent如何完成任务 才有数据和baseline对比
 @dataclass(frozen=True)
 class TrialMetrics:
     steps: int = 0
@@ -242,7 +242,7 @@ class TrialMetrics:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-
+#后面真正做 A/B comparison 的基本数据单位
 @dataclass(frozen=True)
 class TrialResult:
     suite_id: str

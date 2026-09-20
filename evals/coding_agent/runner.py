@@ -176,6 +176,7 @@ class EvaluationHarness:
     def run(self, task_ids: Iterable[str] = ()) -> list[TrialResult]:
         selected = set(task_ids)
         tasks = [task for task in self.suite.tasks if not selected or task.task_id in selected]
+        #防止输入不存在task
         missing = sorted(selected - {task.task_id for task in self.suite.tasks})
         if missing:
             raise ValueError(f"unknown task id(s): {missing}")
@@ -214,7 +215,7 @@ class EvaluationHarness:
         cached_outcome: tuple[GraderResult, ...] | None = None
 
         def verifier(workspace: Path) -> bool:
-            nonlocal cached_outcome
+            nonlocal cached_outcome# 缓存结果
             cached_outcome = grade_many(_outcome_graders(task), GraderContext(repo=workspace))
             return required_graders_passed(cached_outcome)
 
