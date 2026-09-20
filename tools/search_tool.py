@@ -124,7 +124,7 @@ class SearchTextTool(BaseTool):
         if not matches:
             return ToolResult(
                 success=True,
-                output=f"No matches found for '{raw_pattern}'",
+                output="No matches found.",
             )
 
         suffix = f"\n[Showing {len(matches)} matches]"
@@ -194,7 +194,7 @@ class FindFilesTool(BaseTool):
         if not results:
             return ToolResult(
                 success=True,
-                output=f"No files found matching '{pattern}' in {search_path}",
+                output="No files found.",
             )
 
         suffix = ""

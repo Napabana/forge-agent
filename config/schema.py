@@ -191,7 +191,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
                 break
         else:
             return _parse({})
-    config_path = Path(path)
+    # config_path = Path(path)
+    config_path = Path(path).expanduser()
     if not config_path.exists():
         return _parse({})
     raw = _expand_env(config_path.read_text(encoding="utf-8"))
