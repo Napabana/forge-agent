@@ -26,7 +26,7 @@ MAX_LINE_LENGTH = 200   # 单行超长时截断显示
 
 # 搜索时跳过的目录
 _SKIP_DIRS: frozenset[str] = frozenset({
-    ".git", ".agents", "__pycache__", ".venv", "venv", "node_modules",
+    ".git", "__pycache__", ".venv", "venv", "node_modules",
     ".mypy_cache", ".pytest_cache", "dist", "build", "*.egg-info",
 })
 
@@ -301,14 +301,24 @@ def _iter_files(root: Path, glob_pattern: str):
     递归遍历目录，跳过 _SKIP_DIRS，按 glob_pattern 过滤文件名。
     """
     if root.is_file():
-        if any(part in _SKIP_DIRS for part in root.parts):
+        if any(part in _SKIP_DIRS for part in root.parts) or _is_internal_skill_path(root):
             return
         yield root
         return
 
     for filepath in sorted(root.rglob(glob_pattern)):
         # 跳过黑名单目录
-        if any(part in _SKIP_DIRS for part in filepath.parts):
+        if (
+            any(part in _SKIP_DIRS for part in filepath.parts)
+            or _is_internal_skill_path(filepath)
+        ):
             continue
         if filepath.is_file():
             yield filepath
+
+def _is_internal_skill_path(path: Path) -> bool:
+    parts = tuple(part.lower() for part in path.parts)
+    return any(
+        parts[index] == ".agents" and parts[index + 1] == "skills"
+        for index in range(len(parts) - 1)
+    )

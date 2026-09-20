@@ -268,7 +268,10 @@ def _is_readonly(cmd: str) -> bool:
 def _references_internal_agent_path(cmd: str) -> bool:
     """Prevent generic shell access from bypassing Agent Skills disclosure."""
     normalized = cmd.replace("\\", "/").lower()
-    return re.search(r"(^|[\s'\"=:/])\.agents(?:/|$)", normalized) is not None
+    return re.search(
+        r"(^|[\s'\"=:/])\.agents/skills(?:/|$)",
+        normalized,
+    ) is not None
 
 
 def _contains_mutating_git_command(cmd: str) -> bool:

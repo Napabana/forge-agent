@@ -27,7 +27,7 @@ from tools.base import (
     ToolRegistry,
     ToolResult,
 )
-from tools.file_tool import FileWriteTool
+from tools.file_tool import FileReadTool, FileWriteTool
 
 
 def _init_repo(root: Path) -> Path:

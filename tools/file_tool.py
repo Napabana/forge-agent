@@ -27,7 +27,6 @@ MAX_READ_LINES = 500
 # file_view 每窗口显示的行数
 VIEW_WINDOW_LINES = 100
 
-_INTERNAL_AGENT_DIR = ".agents"
 _INTERNAL_SKILLS_HINT = (
     "Agent Skills content is runtime-owned. Use skill_load / "
     "skill_reference_load instead of generic file tools."
@@ -278,7 +277,7 @@ def _resolve_workspace_path(
     path = Path(raw_path)
     try:
         if workspace is None:
-            if _INTERNAL_AGENT_DIR in path.parts:
+            if _is_internal_skill_path(path):
                 return ToolResult(
                     success=False,
                     output="",
@@ -297,7 +296,7 @@ def _resolve_workspace_path(
             relative = target.relative_to(workspace)
         except ValueError:
             relative = target
-        if _INTERNAL_AGENT_DIR in relative.parts:
+        if _is_internal_skill_path(relative):
             return ToolResult(
                 success=False,
                 output="",
@@ -310,3 +309,11 @@ def _resolve_workspace_path(
             output="",
             error=f"Invalid path {raw_path!r}: {exc}",
         )
+
+
+def _is_internal_skill_path(path: Path) -> bool:
+    parts = tuple(part.lower() for part in path.parts)
+    return any(
+        parts[index] == ".agents" and parts[index + 1] == "skills"
+        for index in range(len(parts) - 1)
+    )

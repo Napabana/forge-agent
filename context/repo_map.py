@@ -47,7 +47,7 @@ _CLASS_NODES = frozenset({
     "interface_declaration",
 })
 _SKIP_DIRS = frozenset({
-    ".git", ".agents", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache",
+    ".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache",
     ".pytest_cache", "dist", "build",
 })
 _SYMBOL_RE = re.compile(
@@ -266,7 +266,10 @@ class RepoMap:
 
         for path in candidates:
             relative_path = path.relative_to(self._root)
-            if any(part in _SKIP_DIRS for part in relative_path.parts):
+            if (
+                any(part in _SKIP_DIRS for part in relative_path.parts)
+                or _is_internal_skill_path(relative_path)
+            ):
                 continue
             try:
                 if not path.is_file():
@@ -581,3 +584,10 @@ def _extract_symbols_regex(content: str, filepath: Path) -> list[Symbol]:
             indent=indent,
         ))
     return symbols
+
+def _is_internal_skill_path(path: Path) -> bool:
+    parts = tuple(part.lower() for part in path.parts)
+    return any(
+        parts[index] == ".agents" and parts[index + 1] == "skills"
+        for index in range(len(parts) - 1)
+    )
