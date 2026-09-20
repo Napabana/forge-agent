@@ -264,16 +264,33 @@ def _contains_mutating_git_command(cmd: str) -> bool:
 
 
 def _is_repository_readonly(cmd: str) -> bool:
-    """Conservatively classify simple shell command sequences for Planning gates."""
+    """Conservatively classify simple read-only command chains for Planning gates."""
     stripped = cmd.strip()
     if not stripped:
         return False
-    if any(token in stripped for token in ("$(", "`", "|", "&", ">", "\n", "\r")):
+
+    # Keep expressive shell forms fail-safe. We intentionally support only simple
+    # ';' / '&&' chains so common "cd repo && cat ..." exploration is not blocked.
+    if any(token in stripped for token in ("$(", "`", "|", ">", "\n", "\r")):
         return False
-    segments = [part.strip() for part in stripped.split(";") if part.strip()]
+    if "||" in stripped or re.search(r"(?<!&)&(?!&)", stripped):
+        return False
+
+    segments = [
+        part.strip()
+        for part in re.split(r"\s*(?:&&|;)\s*", stripped)
+        if part.strip()
+    ]
     if not segments:
         return False
-    return all(_is_readonly(segment) for segment in segments)
+
+    def segment_is_readonly(segment: str) -> bool:
+        lowered = segment.lower()
+        if lowered == "cd" or lowered.startswith("cd "):
+            return True
+        return _is_readonly(segment)
+
+    return all(segment_is_readonly(segment) for segment in segments)
 
 
 def _needs_confirm(cmd: str) -> bool:
