@@ -522,3 +522,15 @@ pytest -q
 - 新增 `tests/test_repository_state.py`：直接锁定 runtime log append 不改变 non-Git content fingerprint，同时真实文件修改仍必须改变 fingerprint。
 - `tests/test_mcp_integration.py::test_stdio_server_process_crash_maps_to_remote_capability_and_closes` 在全量 suite 中于 `manager.start()` 握手阶段 2s 超时，未进入其真正要测的“已发现 tool 后 process crash → REMOTE_CAPABILITY”路径。生产 MCP manager 未修改；仅把 crash fixture timeout 对齐正常 stdio fixture 的 5s startup budget。
 - 当前补丁仍需用户本地复跑失败 4 项、相关专项和全量 pytest；ChatGPT 环境未运行 pytest，不得宣称 DONE。
+
+
+### 验证补充（2026-09-20，Planning v2 / Recovery v2 本地回归 DONE）
+
+- 用户已在本地基于 `dev@ab0f1b26ff6c79c5c12f6418185607ab939a658c` 完成前述失败点复验、相关专项与全量 pytest，并明确确认“全过”。
+- 最终通过轮次未提供具体 passed / skipped 数量、完整 stdout 或耗时，因此不得补造数字。
+- Planning v2 / Recovery v2 / Semantic Progress / provider-aware strict tool schema 本轮状态由 `IMPLEMENTED / LOCAL VALIDATION PENDING` 正式收口为 `DONE`。
+- 本地 deterministic regression 已覆盖 runtime-owned plan step identity、dynamic planning schema、terminal idempotency、revision lineage、per-category recovery budget + global hard ceiling、Skill/Plan/Test semantic progress、control-action NO_PROGRESS guard、non-Git runtime log pollution、Completion Guard、Runner acceptance 边界、MCP crash fixture 以及 strict schema adapter/config 接线。
+- 前一轮全量暴露的 4 个失败已经经过修复后重新验证全部通过；不得继续把 `4 failed, 973 passed...` 当作当前状态。
+- 当前尚未执行本轮 Planning/Recovery v2 的新 real-model E2E，因此不得宣称 step/token/latency、success-rate 或 pass@1 已改善。
+- 下一步：使用全新 clone/reset 的 `Napabana/pr-test:forge-p2-skill-demo` 执行真实模型 E2E，重点核验 malformed planning control、runtime step identity、idempotent terminal update、semantic progress 与 recovery category accounting；完成后另补 E2E 验证日志。
+- 验证日志：`docs/changes/2026-09-20/P2-Stage1-Planning-Recovery-v2本地回归-DONE.md`。
