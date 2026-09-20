@@ -52,6 +52,7 @@ class LLMConfig:
     context_window: int | None = None
     model_max_output_tokens: int | None = None
     max_output_tokens: int = 4096
+    strict_tool_schema: str = "auto"
 
     @property
     def request_max_output_tokens(self) -> int:
@@ -217,6 +218,17 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     model_max_output_tokens = _optional_positive_int(llm_raw, "model_max_output_tokens")
     if model_max_output_tokens is not None and max_output_tokens > model_max_output_tokens:
         raise ValueError("llm.max_output_tokens must be <= llm.model_max_output_tokens")
+    strict_tool_schema_raw = llm_raw.get("strict_tool_schema", "auto")
+    if strict_tool_schema_raw is True:
+        strict_tool_schema = "on"
+    elif strict_tool_schema_raw is False:
+        strict_tool_schema = "off"
+    elif isinstance(strict_tool_schema_raw, str):
+        strict_tool_schema = strict_tool_schema_raw.strip().lower()
+    else:
+        raise ValueError("llm.strict_tool_schema must be one of: auto, on, off")
+    if strict_tool_schema not in {"auto", "on", "off"}:
+        raise ValueError("llm.strict_tool_schema must be one of: auto, on, off")
 
     legacy_budget = _optional_positive_int(agent_raw, "budget_tokens") if "budget_tokens" in agent_raw else 80_000
     context_budget_cap = _optional_positive_int(agent_raw, "context_budget_cap") if "context_budget_cap" in agent_raw else legacy_budget
@@ -343,7 +355,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
         )
     mcp = MCPConfig(enabled=mcp_enabled, servers=tuple(mcp_servers))
 
-    llm = LLMConfig(provider=llm_raw.get("provider", "anthropic"), protocol=llm_raw.get("protocol", "auto"), model=llm_raw.get("model", "claude-sonnet-4-5"), api_key=llm_raw.get("api_key", ""), base_url=llm_raw.get("base_url", "") or "", context_window=context_window, model_max_output_tokens=model_max_output_tokens, max_output_tokens=max_output_tokens)
+    llm = LLMConfig(provider=llm_raw.get("provider", "anthropic"), protocol=llm_raw.get("protocol", "auto"), model=llm_raw.get("model", "claude-sonnet-4-5"), api_key=llm_raw.get("api_key", ""), base_url=llm_raw.get("base_url", "") or "", context_window=context_window, model_max_output_tokens=model_max_output_tokens, max_output_tokens=max_output_tokens, strict_tool_schema=strict_tool_schema)
     agent = AgentCfg(
         max_steps=int(agent_raw.get("max_steps", 40)),
         context_budget_cap=context_budget_cap,

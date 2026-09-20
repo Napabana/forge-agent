@@ -18,6 +18,7 @@ ReAct 主循环。整个 agent 的大脑。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -35,6 +36,7 @@ from agent.recovery import (
     FailureSource,
     RecoveryDecision,
     RecoveryRuntime,
+    SemanticProgressTracker,
     classify_tool_failure,
 )
 from context.history import ConversationHistory
@@ -313,7 +315,8 @@ class Agent:
         repo_map = getattr(self, "_repo_map_instance", RepoMap(task.repo_path))
         usage = SessionUsage()
         total_tokens = 0
-        steps_without_edit = 0
+        steps_without_semantic_progress = 0
+        semantic_progress = SemanticProgressTracker(capacity=64)
         loop_detector = LoopDetector(
             repeats=self._cfg.loop_detection_window,
             max_period=self._cfg.loop_detection_max_period,
@@ -326,6 +329,7 @@ class Agent:
         initial_repo_state = self._get_repo_state(task.repo_path)
         initial_repo_content_state = self._get_repo_content_state(task.repo_path)
         last_repo_state = initial_repo_state
+        last_repo_content_state = initial_repo_content_state
         fatal_error_key: str | None = None
         fatal_error_count = 0
 
@@ -359,7 +363,7 @@ class Agent:
                 warning = LLMMessage(role="user", content=step_budget_warning())
                 messages.append(warning)
                 injected_messages.append(warning)
-            tools = self._registry.get_schemas()
+            tools = list(self._active_tool_schemas())
             token_breakdown = self._trace_token_breakdown(
                 messages, tools, injected_messages=injected_messages,
             )
@@ -496,6 +500,19 @@ class Agent:
                     action.tool_call.name, action.tool_call.params
                 )
                 log.log_trace(control.event_type, step, **control.payload)
+                skill_progress = (
+                    control.accepted
+                    and control.event_type is EventType.SKILL_LOADED
+                    and not bool(control.payload.get("already_loaded"))
+                    and semantic_progress.mark_once(
+                        "skill",
+                        str(control.payload.get("skill") or ""),
+                    )
+                )
+                if skill_progress:
+                    steps_without_semantic_progress = 0
+                else:
+                    steps_without_semantic_progress += 1
                 history.add(LLMMessage(role="user", content=control.message))
                 continue
 
@@ -509,6 +526,23 @@ class Agent:
                     action.tool_call.name, action.tool_call.params
                 )
                 log.log_trace(control.event_type, step, **control.payload)
+                plan_version = (
+                    control.payload.get("new_version")
+                    if control.event_type is EventType.PLAN_REVISED
+                    else (control.payload.get("plan") or {}).get("version")
+                )
+                plan_progress = (
+                    control.accepted
+                    and control.event_type in {EventType.PLAN_CREATED, EventType.PLAN_REVISED}
+                    and semantic_progress.mark_once(
+                        "plan",
+                        f"{control.event_type.value}:{plan_version}",
+                    )
+                )
+                if plan_progress:
+                    steps_without_semantic_progress = 0
+                else:
+                    steps_without_semantic_progress += 1
                 if (
                     control.accepted
                     and control.event_type is EventType.PLAN_REVISED
@@ -820,8 +854,13 @@ class Agent:
 
                 current_repo_state = self._get_repo_state(task.repo_path)
                 repository_changed = current_repo_state != last_repo_state
+                current_repo_content_state = self._get_repo_content_state(task.repo_path)
+                repository_content_changed = (
+                    current_repo_content_state != last_repo_content_state
+                )
+                if repository_content_changed:
+                    last_repo_content_state = current_repo_content_state
                 if repository_changed:
-                    steps_without_edit = 0
                     last_repo_state = current_repo_state
                     if self._repo_map_mode() == "incremental":
                         if hasattr(self, "_repo_map_cache"):
@@ -843,16 +882,22 @@ class Agent:
                             self._repo_map_sync_requested = True
                     else:
                         self.invalidate_repo_map_cache(task.repo_path)
-                else:
-                    steps_without_edit += 1
 
+                test_evidence_advanced = False
                 if tc.name in self._cfg.test_tool_names:
                     test_attempted = True
                     last_test_passed = observation.is_success()
+                    test_evidence_advanced = semantic_progress.mark_once(
+                        "test",
+                        self._test_evidence_key(tc.name, observation),
+                    )
                     if last_test_passed:
-                        last_successful_test_content_state = self._get_repo_content_state(
-                            task.repo_path
-                        )
+                        last_successful_test_content_state = current_repo_content_state
+
+                if repository_content_changed or test_evidence_advanced:
+                    steps_without_semantic_progress = 0
+                else:
+                    steps_without_semantic_progress += 1
 
                 observation_event_ref = log.log_observation(
                     step=step,
@@ -1046,7 +1091,7 @@ class Agent:
                     history.add(LLMMessage(role="user", content=reflect_prompt))
                     logger.debug("Reflection triggered: test_failed at step %d", step)
                 elif (
-                    steps_without_edit >= self._cfg.reflection_no_edit_steps
+                    steps_without_semantic_progress >= self._cfg.reflection_no_edit_steps
                     and failure_category is not FailureCategory.INFRASTRUCTURE
                 ):
                     current_content_state = self._get_repo_content_state(task.repo_path)
@@ -1059,14 +1104,14 @@ class Agent:
                         # Verification/read-only inspection after a tested repository change
                         # is real progress. Do not force a replan merely because no new edit
                         # happened during the verification phase.
-                        steps_without_edit = 0
+                        steps_without_semantic_progress = 0
                     elif self._structured_recovery_enabled():
                         recovery = self._handle_recovery(
                             self._failure_context(
                                 category=FailureCategory.NO_PROGRESS,
                                 source=FailureSource.PROGRESS_GUARD,
                                 step=step,
-                                evidence=f"{steps_without_edit} consecutive steps without repository change",
+                                evidence=f"{steps_without_semantic_progress} consecutive steps without semantic progress",
                                 recent_actions=recent_actions,
                                 repository_changed=False,
                                 test_state=test_state,
@@ -1079,9 +1124,9 @@ class Agent:
                             return self._recovery_terminated_result(
                                 task, step, total_tokens, usage, log, recovery
                             )
-                        steps_without_edit = 0
+                        steps_without_semantic_progress = 0
                     else:
-                        reflect_prompt = reflection_no_edit(steps_without_edit)
+                        reflect_prompt = reflection_no_edit(steps_without_semantic_progress)
                         log.log_reflection(
                             step=step,
                             reason="no_edit",
@@ -1089,7 +1134,7 @@ class Agent:
                         )
                         history.add(LLMMessage(role="user", content=reflect_prompt))
                         logger.debug("Reflection triggered: no_edit at step %d", step)
-                        steps_without_edit = 0
+                        steps_without_semantic_progress = 0
 
             elif action.action_type == ActionType.REFLECTION:
                 history.add(LLMMessage(role="assistant", content=action.thought))
@@ -1231,6 +1276,18 @@ class Agent:
         return action.action_type.value
 
     @staticmethod
+    def _test_evidence_key(tool_name: str, observation: Observation) -> str:
+        payload = "\n".join(
+            (
+                tool_name,
+                observation.status.value,
+                observation.output or "",
+                observation.error or "",
+            )
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _detect_known_fatal_infrastructure_error(observation: Observation) -> str | None:
         """只检查可能经过 Runtime 的工具，不要所有失败 Observation 都检查。"""
         if observation.is_success():
@@ -1347,19 +1404,23 @@ class Agent:
             history.add_many(list(prepared.messages))
         return None
 
+    def _active_tool_schemas(self) -> tuple[LLMToolSchema, ...]:
+        """Single source of truth for schemas shown in prompt and sent to provider."""
+        planning_schemas = self._planning_runtime.schemas() if self._planning_runtime else ()
+        skill_schemas = self._skill_runtime.schemas() if self._skill_runtime else ()
+        return (
+            tuple(self._registry.get_schemas())
+            + tuple(planning_schemas)
+            + tuple(skill_schemas)
+        )
+
     def _render_request_parts(
         self,
         token_budget: TokenBudget,
         repo_map: RepoMap,
     ) -> tuple[str, str, tuple[LLMToolSchema, ...]]:
         """统一生成下一请求固定部分，供 pressure 计算与最终消息组装复用。"""
-        planning_schemas = self._planning_runtime.schemas() if self._planning_runtime else ()
-        skill_schemas = self._skill_runtime.schemas() if self._skill_runtime else ()
-        schemas = (
-            tuple(self._registry.get_schemas())
-            + tuple(planning_schemas)
-            + tuple(skill_schemas)
-        )
+        schemas = self._active_tool_schemas()
         mode = self._repo_map_mode()
         if not hasattr(self, "_repo_map_cache"):
             map_budget = token_budget.default_plan().repo_map

@@ -22,6 +22,7 @@ from typing import Any
 
 from agent.task import Action, ActionType, ToolCall
 from llm.base import LLMBackend, LLMMessage, LLMResponse, LLMToolSchema
+from llm.tool_schema import strictify_tool_parameters
 from llm.usage import TokenUsage
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class OpenAICompatBackend(LLMBackend):
         api_key: str,
         base_url: str | None = None,
         max_tokens: int = 4096,
+        strict_tool_schema: bool = False,
     ) -> None:
         try:
             from openai import OpenAI
@@ -59,6 +61,7 @@ class OpenAICompatBackend(LLMBackend):
 
         self._model = model
         self._max_tokens = max_tokens
+        self._strict_tool_schema = bool(strict_tool_schema)
         self._use_function_calling = not any(
             model.lower().startswith(prefix) for prefix in _NO_FUNCTION_CALLING
         )
@@ -99,7 +102,7 @@ class OpenAICompatBackend(LLMBackend):
         api_messages: list[dict],
         tools: list[LLMToolSchema],
     ) -> LLMResponse:
-        api_tools = [_to_openai_tool(t) for t in tools]
+        api_tools = [_to_openai_tool(t, strict=self._strict_tool_schema) for t in tools]
 
         response = self._client.chat.completions.create(
             model=self._model,
@@ -213,16 +216,20 @@ def _to_openai_messages(messages: list[LLMMessage]) -> list[dict]:
     return result
 
 
-def _to_openai_tool(schema: LLMToolSchema) -> dict:
-    """转换为 OpenAI tool schema 格式。"""
-    return {
-        "type": "function",
-        "function": {
-            "name": schema.name,
-            "description": schema.description,
-            "parameters": schema.parameters,
-        },
+def _to_openai_tool(schema: LLMToolSchema, *, strict: bool = False) -> dict:
+    """转换为 OpenAI tool schema；strict 只在 backend 明确支持时发送。"""
+    function = {
+        "name": schema.name,
+        "description": schema.description,
+        "parameters": (
+            strictify_tool_parameters(schema.parameters)
+            if strict
+            else schema.parameters
+        ),
     }
+    if strict:
+        function["strict"] = True
+    return {"type": "function", "function": function}
 
 #这里解析不对吧，没必要自己解析 completionusage输出不对，好像也没问题
 def _response_usage(

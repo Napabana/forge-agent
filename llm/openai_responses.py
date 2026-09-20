@@ -8,6 +8,7 @@ from typing import Any
 
 from agent.task import Action, ActionType, ToolCall
 from llm.base import LLMBackend, LLMMessage, LLMResponse, LLMToolSchema, StreamCallback
+from llm.tool_schema import strictify_tool_parameters
 from llm.usage import TokenUsage
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class OpenAIResponsesBackend(LLMBackend):
         api_key: str,
         base_url: str | None = None,
         max_tokens: int = 4096,
+        strict_tool_schema: bool = False,
     ) -> None:
         try:
             from openai import OpenAI
@@ -30,6 +32,7 @@ class OpenAIResponsesBackend(LLMBackend):
             raise ImportError("openai package not installed. Run: pip install openai")
         self._model = model
         self._max_tokens = max_tokens
+        self._strict_tool_schema = bool(strict_tool_schema)
 
     @property
     def model_name(self) -> str:
@@ -145,7 +148,10 @@ class OpenAIResponsesBackend(LLMBackend):
             "max_output_tokens": self._max_tokens,
         }
         if tools:
-            kwargs["tools"] = [_to_responses_tool(tool) for tool in tools]
+            kwargs["tools"] = [
+                _to_responses_tool(tool, strict=self._strict_tool_schema)
+                for tool in tools
+            ]
             kwargs["tool_choice"] = "auto"
         return kwargs
 
@@ -167,13 +173,21 @@ def _to_responses_input(messages: list[LLMMessage]) -> list[dict[str, Any]]:
     return result
 
 
-def _to_responses_tool(schema: LLMToolSchema) -> dict[str, Any]:
+def _to_responses_tool(
+    schema: LLMToolSchema,
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
     return {
         "type": "function",
         "name": schema.name,
         "description": schema.description,
-        "parameters": schema.parameters,
-        "strict": False,
+        "parameters": (
+            strictify_tool_parameters(schema.parameters)
+            if strict
+            else schema.parameters
+        ),
+        "strict": bool(strict),
     }
 
 

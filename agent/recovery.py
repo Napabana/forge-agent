@@ -1,11 +1,11 @@
 """Structured failure classification and bounded recovery policy for P2-2.
 
-This module does not execute tools, call providers, or own a second agent loop.
-It only converts runtime failure evidence into an inspectable RecoveryDecision.
-The existing Agent loop remains responsible for carrying out the next action.
+Recovery v2 keeps category-local retry semantics separate from a global hard ceiling.
+It also exposes a small bounded semantic-evidence tracker used by the existing Agent loop.
 """
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -52,6 +52,33 @@ class RecoveryStrategy(str, Enum):
     GIVE_UP = "give_up"
 
 
+class SemanticProgressTracker:
+    """Bounded deterministic de-duplication for semantic evidence."""
+
+    def __init__(self, capacity: int = 64) -> None:
+        if capacity < 1:
+            raise ValueError("semantic progress capacity must be >= 1")
+        self.capacity = int(capacity)
+        self._order: dict[str, deque[str]] = {}
+        self._seen: dict[str, set[str]] = {}
+
+    def mark_once(self, kind: str, key: str) -> bool:
+        kind = str(kind).strip()
+        key = str(key).strip()
+        if not kind or not key:
+            return False
+        order = self._order.setdefault(kind, deque())
+        seen = self._seen.setdefault(kind, set())
+        if key in seen:
+            return False
+        if len(order) >= self.capacity:
+            evicted = order.popleft()
+            seen.discard(evicted)
+        order.append(key)
+        seen.add(key)
+        return True
+
+
 @dataclass(frozen=True)
 class FailureContext:
     category: FailureCategory
@@ -95,6 +122,10 @@ class RecoveryDecision:
     requires_plan_revision: bool = False
     terminal: bool = False
     budget_exhausted: bool = False
+    category_occurrence: int = 0
+    category_max_attempts: int = 0
+    global_attempt: int = 0
+    global_max_attempts: int = 0
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -102,6 +133,10 @@ class RecoveryDecision:
             "reason": self.reason,
             "attempt": self.attempt,
             "max_attempts": self.max_attempts,
+            "category_occurrence": self.category_occurrence or self.attempt,
+            "category_max_attempts": self.category_max_attempts or self.max_attempts,
+            "global_attempt": self.global_attempt,
+            "global_max_attempts": self.global_max_attempts,
             "target_plan_step": self.target_plan_step,
             "requires_plan_revision": self.requires_plan_revision,
             "terminal": self.terminal,
@@ -110,18 +145,24 @@ class RecoveryDecision:
 
 
 class RecoveryPolicy:
-    """Deterministic policy over already-observed runtime failures."""
+    """Deterministic policy with per-category budget plus a global hard ceiling."""
 
     def __init__(
         self,
         mode: str | RecoveryMode = RecoveryMode.OFF,
         *,
         max_attempts: int = 4,
+        global_max_attempts: int | None = None,
     ) -> None:
         self.mode = RecoveryMode.parse(mode)
         if max_attempts < 1:
             raise ValueError("recovery max_attempts must be >= 1")
         self.max_attempts = int(max_attempts)
+        self.global_max_attempts = int(
+            global_max_attempts if global_max_attempts is not None else max_attempts * 3
+        )
+        if self.global_max_attempts < self.max_attempts:
+            raise ValueError("global recovery budget must be >= per-category max_attempts")
         self._attempts = 0
         self._category_counts: dict[FailureCategory, int] = {}
 
@@ -133,46 +174,81 @@ class RecoveryPolicy:
     def attempts_used(self) -> int:
         return self._attempts
 
+    def category_attempts_used(self, category: FailureCategory) -> int:
+        return self._category_counts.get(category, 0)
+
+    def _decision(
+        self,
+        context: FailureContext,
+        strategy: RecoveryStrategy,
+        reason: str,
+        *,
+        occurrence: int,
+        terminal: bool = False,
+        budget_exhausted: bool = False,
+        requires_revision: bool = False,
+    ) -> RecoveryDecision:
+        return RecoveryDecision(
+            strategy=strategy,
+            reason=reason,
+            attempt=occurrence,
+            max_attempts=self.max_attempts,
+            target_plan_step=context.plan_step_id,
+            requires_plan_revision=requires_revision,
+            terminal=terminal,
+            budget_exhausted=budget_exhausted,
+            category_occurrence=occurrence,
+            category_max_attempts=self.max_attempts,
+            global_attempt=self._attempts,
+            global_max_attempts=self.global_max_attempts,
+        )
+
     def decide(self, context: FailureContext) -> RecoveryDecision | None:
         if not self.enabled:
             return None
 
-        # Infrastructure is classified for completeness but P2-2 does not
-        # reinterpret the existing fatal infrastructure contract as recovery.
+        occurrence = self._category_counts.get(context.category, 0)
         if context.category is FailureCategory.INFRASTRUCTURE:
-            return RecoveryDecision(
+            return self._decision(
+                context,
                 RecoveryStrategy.GIVE_UP,
                 "Infrastructure failures remain governed by the existing fatal contract.",
-                attempt=self._attempts,
-                max_attempts=self.max_attempts,
+                occurrence=occurrence,
                 terminal=True,
             )
 
-        if self._attempts >= self.max_attempts:
-            return RecoveryDecision(
+        if occurrence >= self.max_attempts:
+            return self._decision(
+                context,
                 RecoveryStrategy.GIVE_UP,
-                "Structured recovery budget exhausted; stop instead of cycling indefinitely.",
-                attempt=self._attempts,
-                max_attempts=self.max_attempts,
-                target_plan_step=context.plan_step_id,
+                f"Recovery budget exhausted for category {context.category.value}; stop instead of cycling.",
+                occurrence=occurrence,
+                terminal=True,
+                budget_exhausted=True,
+            )
+        if self._attempts >= self.global_max_attempts:
+            return self._decision(
+                context,
+                RecoveryStrategy.GIVE_UP,
+                "Global structured recovery hard ceiling exhausted; stop instead of cycling indefinitely.",
+                occurrence=occurrence,
                 terminal=True,
                 budget_exhausted=True,
             )
 
         self._attempts += 1
-        occurrence = self._category_counts.get(context.category, 0) + 1
+        occurrence += 1
         self._category_counts[context.category] = occurrence
         strategy, reason = self._choose_strategy(context, occurrence)
         requires_revision = (
             strategy is RecoveryStrategy.REPLAN and context.plan_version is not None
         )
-        return RecoveryDecision(
-            strategy=strategy,
-            reason=reason,
-            attempt=self._attempts,
-            max_attempts=self.max_attempts,
-            target_plan_step=context.plan_step_id,
-            requires_plan_revision=requires_revision,
+        return self._decision(
+            context,
+            strategy,
+            reason,
+            occurrence=occurrence,
+            requires_revision=requires_revision,
         )
 
     def _choose_strategy(
@@ -219,11 +295,11 @@ class RecoveryPolicy:
             if has_plan:
                 return (
                     RecoveryStrategy.REPLAN,
-                    "Extended exploration without repository progress requires revising the current plan.",
+                    "Extended execution without semantic progress requires revising the current plan.",
                 )
             return (
                 RecoveryStrategy.CHANGE_APPROACH,
-                "Stop broad exploration and choose a concrete next action that can create progress.",
+                "Stop broad exploration and choose a concrete next action that can create semantic progress.",
             )
 
         if context.category is FailureCategory.COMPLETION_REJECTED:
@@ -258,7 +334,6 @@ class RecoveryPolicy:
                 "Resolve the unmet completion requirement before attempting to finish again.",
             )
 
-        # Generic recoverable tool errors.
         error_type = context.error_type or ""
         if error_type == "timeout":
             if occurrence == 1:
@@ -309,8 +384,13 @@ class RecoveryRuntime:
         mode: str | RecoveryMode = RecoveryMode.OFF,
         *,
         max_attempts: int = 4,
+        global_max_attempts: int | None = None,
     ) -> None:
-        self.policy = RecoveryPolicy(mode, max_attempts=max_attempts)
+        self.policy = RecoveryPolicy(
+            mode,
+            max_attempts=max_attempts,
+            global_max_attempts=global_max_attempts,
+        )
         self.pending_replan_from_version: int | None = None
         self.last_decision: RecoveryDecision | None = None
 
@@ -353,7 +433,6 @@ class RecoveryRuntime:
         )
 
     def render_context(self) -> str:
-        """Keep an unresolved replan gate visible across history trimming/compaction."""
         if not self.enabled or self.pending_replan_from_version is None:
             return ""
         return (
@@ -378,3 +457,17 @@ def classify_tool_failure(
     if tool_name in test_tool_names:
         return FailureCategory.TEST_FAILURE
     return FailureCategory.TOOL_FAILURE
+
+
+__all__ = [
+    "FailureCategory",
+    "FailureContext",
+    "FailureSource",
+    "RecoveryDecision",
+    "RecoveryMode",
+    "RecoveryPolicy",
+    "RecoveryRuntime",
+    "RecoveryStrategy",
+    "SemanticProgressTracker",
+    "classify_tool_failure",
+]

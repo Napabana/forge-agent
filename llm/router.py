@@ -10,6 +10,7 @@ import os
 
 from llm.base import LLMBackend
 from llm.capabilities import ModelCapabilities
+from llm.tool_schema import ToolSchemaCapabilities, resolve_tool_schema_capabilities
 
 _PROVIDER_BASE_URLS: dict[str, str | None] = {
     "anthropic": None,
@@ -46,6 +47,7 @@ def _attach_capabilities(
     semantic_packet_max_tokens: int | None = None,
     context_budget_cap: int | None = None,
     context_safety_margin_tokens: int | None = None,
+    strict_tool_schema: str | bool | None = "auto",
 ) -> LLMBackend:
     """把 capability / request policy 放到 Backend，而不是让 Agent 猜 model name。"""
     if model_max_output_tokens is not None and request_max_output_tokens > model_max_output_tokens:
@@ -165,18 +167,30 @@ def create_backend(
             max_tokens=request_max_output_tokens,
             base_url=base_url or None,
         )
+        backend.tool_schema_capabilities = ToolSchemaCapabilities(  # type: ignore[attr-defined]
+            strict_json_schema=False,
+            source="anthropic-native",
+        )
         return _attach_capabilities(backend, **attach_kwargs)
 
     resolved_base_url = base_url or _PROVIDER_BASE_URLS[provider]
     if protocol in {"responses", "response"}:
         from llm.openai_responses import OpenAIResponsesBackend
 
+        tool_schema_capabilities = resolve_tool_schema_capabilities(
+            provider=provider,
+            protocol="responses",
+            base_url=resolved_base_url,
+            strict_tool_schema=strict_tool_schema,
+        )
         backend = OpenAIResponsesBackend(
             model=model,
             api_key=resolved_key,
             base_url=resolved_base_url,
             max_tokens=request_max_output_tokens,
+            strict_tool_schema=tool_schema_capabilities.strict_json_schema,
         )
+        backend.tool_schema_capabilities = tool_schema_capabilities  # type: ignore[attr-defined]
         return _attach_capabilities(backend, **attach_kwargs)
 
     if protocol not in {"auto", "chat", "chat_completion", "chat_completions"}:
@@ -187,12 +201,20 @@ def create_backend(
 
     from llm.openai_compat import OpenAICompatBackend
 
+    tool_schema_capabilities = resolve_tool_schema_capabilities(
+        provider=provider,
+        protocol="chat_completions",
+        base_url=resolved_base_url,
+        strict_tool_schema=strict_tool_schema,
+    )
     backend = OpenAICompatBackend(
         model=model,
         api_key=resolved_key,
         base_url=resolved_base_url,
         max_tokens=request_max_output_tokens,
+        strict_tool_schema=tool_schema_capabilities.strict_json_schema,
     )
+    backend.tool_schema_capabilities = tool_schema_capabilities  # type: ignore[attr-defined]
     return _attach_capabilities(backend, **attach_kwargs)
 
 
@@ -212,5 +234,6 @@ def create_backend_from_config(config: dict) -> LLMBackend:
         semantic_packet_max_tokens=config.get("semantic_packet_max_tokens"),
         context_budget_cap=config.get("context_budget_cap"),
         context_safety_margin_tokens=config.get("context_safety_margin_tokens"),
+        strict_tool_schema=config.get("strict_tool_schema", "auto"),
         protocol=config.get("protocol", "auto"),
     )

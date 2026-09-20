@@ -245,7 +245,11 @@ def extract_metrics(run_result: RunResult, *, wall_time_seconds: float) -> Trial
             plan_created_count += 1
         elif event_type == "plan_revised":
             plan_revision_count += 1
-        elif event_type == "plan_step_completed" and payload.get("step_status") == "completed":
+        elif (
+            event_type == "plan_step_completed"
+            and payload.get("step_status") == "completed"
+            and payload.get("state_changed", True)
+        ):
             plan_step_completed_count += 1
         elif event_type == "planning_skipped":
             planning_skipped = True
