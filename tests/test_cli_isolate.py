@@ -167,3 +167,19 @@ def test_build_registry_keeps_process_cwd_independent_from_file_workspace(tmp_pa
         assert registry._tools[name]._default_cwd == str(cwd)
     for name in ("file_read", "file_view", "file_write"):
         assert registry._tools[name]._workspace == workspace.resolve()
+
+
+def test_run_registry_hides_git_mutation_tools(tmp_path):
+    from config.schema import AppConfig
+    from entry.cli import _build_run_registry
+
+    registry = _build_run_registry(
+        AppConfig(),
+        default_cwd=str(tmp_path),
+        workspace=str(tmp_path),
+    )
+
+    assert "git_status" in registry.tool_names
+    assert "git_diff" in registry.tool_names
+    assert "git_add" not in registry.tool_names
+    assert "git_commit" not in registry.tool_names

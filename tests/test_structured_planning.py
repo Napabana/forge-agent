@@ -552,14 +552,13 @@ def test_invalid_plan_create_feedback_repeats_required_shape(tmp_path: Path):
     assert "non-empty id and description" in result.message
 
 
-def test_system_prompt_prefers_native_git_tools():
+def test_system_prompt_does_not_delegate_commit_policy_to_model():
     from agent.prompt import build_system_prompt
 
     prompt = build_system_prompt(repo_path="/repo", tools=[])
 
-    assert "Do not create a Git commit unless" in prompt
-    assert "git_status/git_diff/git_add/git_commit" in prompt
-    assert "do not run mutating Git commands" in prompt
+    assert "Do not create a Git commit unless" not in prompt
+    assert "git_status/git_diff/git_add/git_commit" not in prompt
 
 def test_plan_step_update_feedback_lists_non_terminal_steps(tmp_path: Path):
     repo = _init_repo(tmp_path / "repo-update-contract")

@@ -88,6 +88,8 @@ def _build_registry(
     runtime=None,
     default_cwd=None,
     workspace=None,
+    *,
+    allow_git_mutation: bool = True,
 ):
     """根据配置组装工具注册表。
 
@@ -105,7 +107,7 @@ def _build_registry(
     process_cwd = str(default_cwd) if default_cwd else None
     fs_workspace = str(workspace) if workspace else None
 
-    return (
+    registry = (
         ToolRegistry()
         .register(ShellTool(runtime=runtime, default_cwd=process_cwd))
         .register(FileReadTool(workspace=fs_workspace))
@@ -117,8 +119,31 @@ def _build_registry(
         .register(PytestTool(runtime=runtime, default_cwd=process_cwd))
         .register(GitStatusTool(runtime=runtime, default_cwd=process_cwd))
         .register(GitDiffTool(runtime=runtime, default_cwd=process_cwd))
-        .register(GitAddTool(runtime=runtime, default_cwd=process_cwd))
-        .register(GitCommitTool(runtime=runtime, default_cwd=process_cwd))
+    )
+    if allow_git_mutation:
+        registry.register(
+            GitAddTool(runtime=runtime, default_cwd=process_cwd)
+        ).register(
+            GitCommitTool(runtime=runtime, default_cwd=process_cwd)
+        )
+    return registry
+
+
+def _build_run_registry(
+    cfg,
+    confirm_callback=None,
+    runtime=None,
+    default_cwd=None,
+    workspace=None,
+):
+    """Registry contract for ordinary run: inspect Git state, never commit from the model."""
+    return _build_registry(
+        cfg,
+        confirm_callback=confirm_callback,
+        runtime=runtime,
+        default_cwd=default_cwd,
+        workspace=workspace,
+        allow_git_mutation=False,
     )
 
 
@@ -250,7 +275,7 @@ def run(
         runtime_name = runtime.name if runtime is not None else "managed by isolate"
         click.echo(dim(f"  Sandbox: Docker ({runtime_name})"))
     # 注册工具
-    registry = _build_registry(
+    registry = _build_run_registry(
         config,
         confirm_callback=confirm_cb,
         runtime=runtime,
@@ -317,7 +342,7 @@ def run(
         registry=registry,
         config=agent_config,
         log_dir=config.agent.log_dir,
-        registry_builder=_build_registry,
+        registry_builder=_build_run_registry,
         confirm_callback=confirm_cb,
         mcp_config=config.mcp,
     )

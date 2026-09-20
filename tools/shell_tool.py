@@ -131,7 +131,8 @@ class ShellTool(BaseTool):
         return (
             "Execute a shell command and return its output (stdout + stderr combined). "
             "Timeout is 30s by default. Avoid long-running commands; "
-            "prefer targeted commands like 'grep' or 'pytest tests/foo.py'. Use the dedicated git_status/git_diff/git_add/git_commit tools for Git operations; do not run mutating Git commands such as git add or git commit through shell."
+            "prefer targeted commands like 'grep' or 'pytest tests/foo.py'. "
+            "Do not use shell for mutating Git operations."
         )
 
     def is_mutating(self, params: dict[str, Any] | None = None) -> bool:
