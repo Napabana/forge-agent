@@ -3,7 +3,7 @@
 日期：2026-09-20  
 问题来源：真实模型运行 `599cb93d_20260920_081010`  
 实现提交：`94810f962a81457d52793a9442406460664d849f`  
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**
+状态：**IMPLEMENTED / LOCAL VALIDATION PASSED**
 
 ## 1. 真实运行事实
 
@@ -118,7 +118,7 @@ Runtime context 现在明确：
 - 缺失 Skill name 不产生假的 `SKILL_SELECTED`；
 - Skill rejection 提示包含可用 catalog 名称。
 
-本日志创建时尚未收到用户本地 pytest 验证结果，因此不补造 passed 数量或耗时。
+用户已完成本轮建议的本地专项 pytest 回归，并确认测试通过。未提供完整 pytest stdout、passed 数量与耗时，因此不补造具体统计数字。
 
 ## 6. Evidence boundary
 
