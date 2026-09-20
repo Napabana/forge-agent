@@ -525,6 +525,22 @@ class Agent:
                 else:
                     steps_without_semantic_progress += 1
                 history.add(LLMMessage(role="user", content=control.message))
+                steps_without_semantic_progress, no_progress_result = (
+                    self._apply_no_progress_guard(
+                        task=task,
+                        step=step,
+                        steps_without_semantic_progress=steps_without_semantic_progress,
+                        log=log,
+                        history=history,
+                        recent_actions=recent_actions,
+                        initial_repo_content_state=initial_repo_content_state,
+                        last_successful_test_content_state=last_successful_test_content_state,
+                        total_tokens=total_tokens,
+                        usage=usage,
+                    )
+                )
+                if no_progress_result is not None:
+                    return no_progress_result
                 continue
 
             if (
@@ -562,6 +578,22 @@ class Agent:
                 ):
                     self._recovery_runtime.observe_plan_revision(self.current_plan.version)
                 history.add(LLMMessage(role="user", content=control.message))
+                steps_without_semantic_progress, no_progress_result = (
+                    self._apply_no_progress_guard(
+                        task=task,
+                        step=step,
+                        steps_without_semantic_progress=steps_without_semantic_progress,
+                        log=log,
+                        history=history,
+                        recent_actions=recent_actions,
+                        initial_repo_content_state=initial_repo_content_state,
+                        last_successful_test_content_state=last_successful_test_content_state,
+                        total_tokens=total_tokens,
+                        usage=usage,
+                    )
+                )
+                if no_progress_result is not None:
+                    return no_progress_result
                 continue
 
             if (
@@ -1105,47 +1137,23 @@ class Agent:
                     steps_without_semantic_progress >= self._cfg.reflection_no_edit_steps
                     and failure_category is not FailureCategory.INFRASTRUCTURE
                 ):
-                    current_content_state = self._get_repo_content_state(task.repo_path)
-                    current_change_is_verified = (
-                        last_successful_test_content_state is not None
-                        and current_content_state != initial_repo_content_state
-                        and current_content_state == last_successful_test_content_state
-                    )
-                    if current_change_is_verified:
-                        # Verification/read-only inspection after a tested repository change
-                        # is real progress. Do not force a replan merely because no new edit
-                        # happened during the verification phase.
-                        steps_without_semantic_progress = 0
-                    elif self._structured_recovery_enabled():
-                        recovery = self._handle_recovery(
-                            self._failure_context(
-                                category=FailureCategory.NO_PROGRESS,
-                                source=FailureSource.PROGRESS_GUARD,
-                                step=step,
-                                evidence=f"{steps_without_semantic_progress} consecutive steps without semantic progress",
-                                recent_actions=recent_actions,
-                                repository_changed=False,
-                                test_state=test_state,
-                            ),
+                    steps_without_semantic_progress, no_progress_result = (
+                        self._apply_no_progress_guard(
+                            task=task,
                             step=step,
+                            steps_without_semantic_progress=steps_without_semantic_progress,
                             log=log,
                             history=history,
+                            recent_actions=recent_actions,
+                            initial_repo_content_state=initial_repo_content_state,
+                            last_successful_test_content_state=last_successful_test_content_state,
+                            total_tokens=total_tokens,
+                            usage=usage,
+                            test_state=test_state,
                         )
-                        if recovery is not None and recovery.terminal:
-                            return self._recovery_terminated_result(
-                                task, step, total_tokens, usage, log, recovery
-                            )
-                        steps_without_semantic_progress = 0
-                    else:
-                        reflect_prompt = reflection_no_edit(steps_without_semantic_progress)
-                        log.log_reflection(
-                            step=step,
-                            reason="no_edit",
-                            prompt=reflect_prompt,
-                        )
-                        history.add(LLMMessage(role="user", content=reflect_prompt))
-                        logger.debug("Reflection triggered: no_edit at step %d", step)
-                        steps_without_semantic_progress = 0
+                    )
+                    if no_progress_result is not None:
+                        return no_progress_result
 
             elif action.action_type == ActionType.REFLECTION:
                 history.add(LLMMessage(role="assistant", content=action.thought))
@@ -1207,6 +1215,71 @@ class Agent:
             plan_version=plan.version if plan is not None else None,
             plan_step_id=plan.current_step_id if plan is not None else None,
         )
+
+    def _apply_no_progress_guard(
+        self,
+        *,
+        task: Task,
+        step: int,
+        steps_without_semantic_progress: int,
+        log: EventLog,
+        history: ConversationHistory,
+        recent_actions: list[str],
+        initial_repo_content_state: str,
+        last_successful_test_content_state: str | None,
+        total_tokens: int,
+        usage: SessionUsage,
+        test_state: str | None = None,
+    ) -> tuple[int, RunResult | None]:
+        """Apply the shared no-progress threshold for tools and runtime controls."""
+        if steps_without_semantic_progress < self._cfg.reflection_no_edit_steps:
+            return steps_without_semantic_progress, None
+
+        current_content_state = self._get_repo_content_state(task.repo_path)
+        current_change_is_verified = (
+            last_successful_test_content_state is not None
+            and current_content_state != initial_repo_content_state
+            and current_content_state == last_successful_test_content_state
+        )
+        if current_change_is_verified:
+            # Verification/read-only inspection after a tested repository change
+            # is real progress. Do not force a replan merely because no new edit
+            # happened during the verification phase.
+            return 0, None
+
+        if self._structured_recovery_enabled():
+            recovery = self._handle_recovery(
+                self._failure_context(
+                    category=FailureCategory.NO_PROGRESS,
+                    source=FailureSource.PROGRESS_GUARD,
+                    step=step,
+                    evidence=(
+                        f"{steps_without_semantic_progress} consecutive steps "
+                        "without semantic progress"
+                    ),
+                    recent_actions=recent_actions,
+                    repository_changed=False,
+                    test_state=test_state,
+                ),
+                step=step,
+                log=log,
+                history=history,
+            )
+            if recovery is not None and recovery.terminal:
+                return 0, self._recovery_terminated_result(
+                    task, step, total_tokens, usage, log, recovery
+                )
+            return 0, None
+
+        reflect_prompt = reflection_no_edit(steps_without_semantic_progress)
+        log.log_reflection(
+            step=step,
+            reason="no_edit",
+            prompt=reflect_prompt,
+        )
+        history.add(LLMMessage(role="user", content=reflect_prompt))
+        logger.debug("Reflection triggered: no_edit at step %d", step)
+        return 0, None
 
     def _handle_recovery(
         self,

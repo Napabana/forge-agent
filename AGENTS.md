@@ -503,3 +503,12 @@ pytest -q
 - 新增/扩展 regression：`tests/test_structured_planning.py`、`tests/test_structured_recovery.py`、`tests/test_agent_skills.py`、`tests/test_tool_schema_strictness.py`，并继续覆盖 Completion Guard / CLI / OpenAI Responses / Model-aware Token Budget / API / Chat / GitHub Issue 接线。
 - 当前 ChatGPT 执行容器无法解析 github.com，仓库也没有可由当前 connector 直接启动的新 workflow；因此本轮尚未真实运行当前候选 HEAD 的 pytest，不得写 DONE 或虚构 passed 数量。状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`。
 - 本轮实现日志：`docs/changes/2026-09-20/P2-Stage1-Planning-Recovery-v2收口.md`。本地应先跑日志中的专项回归，再跑全量 pytest；全部通过后再执行 `Napabana/pr-test:forge-p2-skill-demo` 真实模型 E2E，并另补验证 DONE 日志。
+
+
+### 修复补充（2026-09-20，Semantic Progress control-action guard）
+
+- 本地专项回归暴露 `tests/test_agent_skills.py::test_skill_load_is_semantic_progress_but_duplicate_load_is_not` 失败：预期 1 次 NO_PROGRESS，实际为 0。
+- 根因不是 Skill semantic-progress 去重失效；`agent/core.py` 对重复 Skill/Planning control 已正确增加 `steps_without_semantic_progress`，但 control branch 随后直接 `continue`，没有执行统一 NO_PROGRESS threshold。原测试后续第三次相同 `file_read` 又会先触发 LoopDetector，使 NO_PROGRESS 更难被观察到。
+- 修复：新增 `Agent._apply_no_progress_guard()`，普通 Tool、Skill control、Planning control 共用同一 threshold/recovery/reflection 逻辑；重复 `skill_load` 或 Planning no-op 现在不能靠 control-path `continue` 无限逃避 progress guard。
+- 测试改为在第二次重复 `skill_load` 当步就要求 NO_PROGRESS，移除会与 LoopDetector 竞争的第三次相同 read，并断言 NO_PROGRESS 与 duplicate Skill load 处于同一 step。
+- 此补丁仍需用户本地重跑专项与全量 pytest；ChatGPT 环境未执行 pytest，不得宣称通过。
