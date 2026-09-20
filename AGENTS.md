@@ -534,3 +534,17 @@ pytest -q
 - 当前尚未执行本轮 Planning/Recovery v2 的新 real-model E2E，因此不得宣称 step/token/latency、success-rate 或 pass@1 已改善。
 - 下一步：使用全新 clone/reset 的 `Napabana/pr-test:forge-p2-skill-demo` 执行真实模型 E2E，重点核验 malformed planning control、runtime step identity、idempotent terminal update、semantic progress 与 recovery category accounting；完成后另补 E2E 验证日志。
 - 验证日志：`docs/changes/2026-09-20/P2-Stage1-Planning-Recovery-v2本地回归-DONE.md`。
+
+
+### 验证补充（2026-09-20，Planning v2 / Recovery v2 真实模型 E2E DONE）
+
+- 用户已在全新/独立的 `Napabana/pr-test:forge-p2-skill-demo` 工作目录完成真实模型 E2E；模型为 `deepseek-v4.1-flash`，OpenAI-compatible 路径，最终 `SUCCESS`。
+- 本次结果：15 steps、89,485 tokens、89.0s；focused pytest 4 passed、full pytest 19 passed、repository release verifier 输出 `release contract: OK`，且未创建 Git commit。
+- 真实链路：`skill_load verify-release-contract → read implementation/tests/verifier → plan_create → focused test failure → failure_classified(test_failure) → recovery_selected(inspect) → file_write → focused pass → full pass → plan step completion → release verifier pass → remaining plan step completion → FINISH`。
+- Trace 确认 Runtime 生成 4 个稳定 step ids：`fix-normalize-label-to-normalize-all-whitespace-to-kebab-case`、`run-focused-pytest-file`、`run-full-pytest-suite`、`run-release-contract-verifier`；四次 completion 均为 `state_changed=true,idempotent=false`。
+- Trace 确认 Recovery accounting：`test_failure` 的 `category_occurrence=1`、`category_max_attempts=4`、`global_attempt=1`、`global_max_attempts=12`。
+- 用户提供的过滤 Trace 未出现 `plan_rejected`；本次可确认没有可见 malformed planning control。真实 run 也没有发生 plan revision、recovery exhaustion 或 completion rejection。
+- 本次没有触发 terminal duplicate update，因此 `state_changed=false,idempotent=true` 的真实模型路径没有被本次 run 覆盖；该契约仍由 deterministic regression 覆盖，不能写成 real-model evidence。
+- 与 Stage 1 旧 run（18 steps / 122,597 tokens / 98.6s）相比，本次单样本为 15 / 89,485 / 89.0s。只能作为同 fixture 的 small-sample observation，不能据此宣称总体 success-rate、pass@1 或稳定 token/latency 改善。
+- Planning v2 / Recovery v2 至此同时具备 deterministic regression DONE 与 real-model E2E DONE 证据。
+- 验证日志：`docs/changes/2026-09-20/P2-Stage1-Planning-Recovery-v2真实模型E2E-DONE.md`。
