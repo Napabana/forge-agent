@@ -182,3 +182,8 @@ def test_run_registry_hides_git_mutation_tools(tmp_path):
     assert "git_diff" in registry.tool_names
     assert "git_add" not in registry.tool_names
     assert "git_commit" not in registry.tool_names
+
+    blocked = registry.execute_tool("shell", {"cmd": "git commit -m should-not-run"})
+    assert blocked.success is False
+    assert blocked.error_type.value == "permission_denied"
+    assert "disabled for this entrypoint" in blocked.error

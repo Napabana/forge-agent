@@ -20,7 +20,7 @@ import re
 import subprocess
 from typing import Any, Callable
 
-from tools.base import BaseTool, ToolResult
+from tools.base import BaseTool, ToolErrorType, ToolResult
 from tools.runtime import LocalRuntime, Runtime
 
 
@@ -115,9 +115,11 @@ class ShellTool(BaseTool):
         confirm_callback: ConfirmCallback | None = None,
         runtime: Runtime | None = None,
         default_cwd: str | None = None,
+        allow_git_mutation: bool = True,
     ) -> None:
         self._confirm_callback = confirm_callback
         self._runtime = runtime or LocalRuntime()
+        self._allow_git_mutation = bool(allow_git_mutation)
         # default_cwd：LLM 未在 params 里显式传 cwd 时的默认工作目录。
         # orchestrator 用它把工具执行锁定到 worktree（M4 第二波）。
         self._default_cwd = default_cwd
@@ -168,6 +170,14 @@ class ShellTool(BaseTool):
 
         if not cmd:
             return ToolResult(success=False, output="", error="cmd is required")
+
+        if not self._allow_git_mutation and _contains_mutating_git_command(cmd):
+            return ToolResult(
+                success=False,
+                output="",
+                error="Mutating Git commands are disabled for this entrypoint.",
+                error_type=ToolErrorType.PERMISSION_DENIED,
+            )
 
         # 层 1：黑名单硬拦截
         blocked = _check_blocked(cmd)
@@ -242,6 +252,15 @@ def _is_readonly(cmd: str) -> bool:
         if stripped == prefix or stripped.startswith(prefix + " "):
             return True
     return False
+
+
+def _contains_mutating_git_command(cmd: str) -> bool:
+    """Detect Git commands whose side effects belong to delivery/runtime ownership."""
+    return re.search(
+        r"(?i)(?:^|[;&|]\s*)git\s+"
+        r"(?:add|commit|push|reset|checkout|switch|restore|merge|rebase|clean|rm|mv|tag)\b",
+        cmd,
+    ) is not None
 
 
 def _is_repository_readonly(cmd: str) -> bool:

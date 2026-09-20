@@ -42,6 +42,9 @@ Not exposed:
 
 因此 direct run 的 commit 行为不再由模型自由决定。
 
+同时 `ShellTool` 接收同一 `allow_git_mutation` capability。普通 run 即使模型尝试
+`shell("git commit ...")`、`git add`、`git reset` 等 mutating Git 命令，也会在工具执行前以 `permission_denied` 硬拒绝；该策略不因 `--confirm` 改变。
+
 `_build_registry()` 默认仍保留原有 Git mutation tools，避免破坏其它既有入口；GitHub Issue→PR 路径已有独立 delivery contract，在 create_pr 模式下同样移除 Agent 的 `git_add/git_commit`，由 `deliver_pull_request()` 在独立验收后确定性执行 add / commit / push / PR。
 
 ## Prompt 收口

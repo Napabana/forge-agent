@@ -109,7 +109,11 @@ def _build_registry(
 
     registry = (
         ToolRegistry()
-        .register(ShellTool(runtime=runtime, default_cwd=process_cwd))
+        .register(ShellTool(
+            runtime=runtime,
+            default_cwd=process_cwd,
+            allow_git_mutation=allow_git_mutation,
+        ))
         .register(FileReadTool(workspace=fs_workspace))
         .register(FileViewTool(workspace=fs_workspace))
         .register(FileWriteTool(workspace=fs_workspace))
