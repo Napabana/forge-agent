@@ -487,3 +487,19 @@ pytest -q
 - 本轮没有执行 real-model candidate A/B；不得宣称 Skill Evolution 提升 success rate、pass@1、trigger accuracy、token/step efficiency、latency 或长期 self-improvement。
 - P2 Agent Intelligence 的 P2-0 ～ P2-5 至此全部完成；后续若做统一 architecture ablation，应继续按 Evidence Pack 区分 deterministic regression 与 real-model small sample。
 - 验证日志：`docs/changes/2026-09-19/P2-5-Trajectory-driven-Skill-Evolution本地回归-DONE.md`。
+
+
+### 最后交接（2026-09-20，Planning v2 / Recovery v2 基础设施收口）
+
+- 本轮起点为 Stage 1 DONE 的 `dev@509ad31099639e84c9e8a06114b8df58100840a6`；实现链依次为 `d6da718ea9957c8153cd33a0f541adbb137d21b3`、`49d01e502d2673e59e07dd13b260996a53ddaf8e`、`f850097f625817fe9868c97527e1f0b2444ab5ca`，最终交接仍以当前 dev 最新 HEAD 为准。
+- Planning v2：模型只负责 goal/description/targets/verification 等语义规划；`PlanningRuntime` 确定性生成稳定 step identity，维护 version/status/lineage 与合法 transition。无 plan 时只暴露 `plan_create`；已有 plan 时只暴露 `plan_step_update / plan_revise`，并把合法 step ids 写入动态 enum。
+- terminal step 重复确认同一状态改为 accepted idempotent no-op，Trace 写 `idempotent=true,state_changed=false`；terminal rollback 仍拒绝。Eval 只统计真实 `state_changed=true` 的 completed transition，避免重复调用膨胀 process metric。
+- Recovery v2：`recovery_max_attempts` 作为 per-category budget；另保留 global hard ceiling，避免无界恢复。Trace 同时记录 category occurrence / category max / global attempt / global max；不同 failure category 不再互相吞掉小预算。
+- Semantic progress：repository content change、首次 Skill load、真实 plan create/revise、新 test evidence 都可推进；重复 Skill load、Planning no-op、重复相同 test evidence、普通 file_read 不会无限刷新。该逻辑继续复用现有 Agent loop，没有引入第二套 planner/recovery loop。
+- Provider strict schema capability 独立于 `ModelCapabilities`。新增 `llm/tool_schema.py`；OpenAI Chat / Responses 可通过 `llm.strict_tool_schema=on` 显式启用 strict conversion，`auto` 对未协商能力的 OpenAI-compatible/native endpoint 均保守关闭；Anthropic 继续使用原生 `input_schema`。
+- strict conversion 会递归满足 object `required/additionalProperties` 约束，并把 Forge 原本 optional 的字段转为 nullable；provider 返回 optional `null` 后，Core 在 Runtime validation 前按原始 schema 去掉这些 placeholder，既保留 strict provider contract，也不改变 Tool 的旧默认参数语义。
+- Core 新增单一 `_active_tool_schemas()`，system prompt 看到的 Planning/Skill schema 与真正传给 backend 的 tools 保持一致；之前只把 control schema 写进 prompt、但 provider tools 仅来自 ToolRegistry 的分叉已收口。
+- `config/default.yaml` 本轮按明确要求增加 `strict_tool_schema: auto`，当前兼容代理不会被默认强行 strict。没有修改 API Key 内容、B1/B2 fixture 或历史 `evals/results`。
+- 新增/扩展 regression：`tests/test_structured_planning.py`、`tests/test_structured_recovery.py`、`tests/test_agent_skills.py`、`tests/test_tool_schema_strictness.py`，并继续覆盖 Completion Guard / CLI / OpenAI Responses / Model-aware Token Budget / API / Chat / GitHub Issue 接线。
+- 当前 ChatGPT 执行容器无法解析 github.com，仓库也没有可由当前 connector 直接启动的新 workflow；因此本轮尚未真实运行当前候选 HEAD 的 pytest，不得写 DONE 或虚构 passed 数量。状态为 `IMPLEMENTED / LOCAL VALIDATION PENDING`。
+- 本轮实现日志：`docs/changes/2026-09-20/P2-Stage1-Planning-Recovery-v2收口.md`。本地应先跑日志中的专项回归，再跑全量 pytest；全部通过后再执行 `Napabana/pr-test:forge-p2-skill-demo` 真实模型 E2E，并另补验证 DONE 日志。
