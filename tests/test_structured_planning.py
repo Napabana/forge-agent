@@ -515,3 +515,36 @@ def test_empty_planning_context_has_zero_diagnostic_tokens(tmp_path: Path):
     ]
     assert len(llm_finished) == 1
     assert llm_finished[0]["payload"]["token_breakdown"]["planning_tokens"] == 0
+
+
+def test_planning_context_exposes_minimal_plan_create_contract(tmp_path: Path):
+    repo = _init_repo(tmp_path / "repo-contract")
+    task = Task("Inspect the repository.", str(repo), task_id="planning-contract")
+    runtime = PlanningRuntime(decide_planning(task, "always"))
+
+    context = runtime.render_context()
+
+    assert "plan_create requires a non-empty goal" in context
+    assert "each step requires a non-empty id and description" in context
+
+
+def test_invalid_plan_create_feedback_repeats_required_shape(tmp_path: Path):
+    repo = _init_repo(tmp_path / "repo-invalid-plan")
+    task = Task("Inspect the repository.", str(repo), task_id="planning-invalid")
+    runtime = PlanningRuntime(decide_planning(task, "always"))
+
+    result = runtime.apply_control("plan_create", {"goal": "", "steps": []})
+
+    assert result.accepted is False
+    assert "Expected plan_create params" in result.message
+    assert "non-empty id and description" in result.message
+
+
+def test_system_prompt_prefers_native_git_tools():
+    from agent.prompt import build_system_prompt
+
+    prompt = build_system_prompt(repo_path="/repo", tools=[])
+
+    assert "Do not create a Git commit unless" in prompt
+    assert "git_status/git_diff/git_add/git_commit" in prompt
+    assert "do not run mutating Git commands" in prompt

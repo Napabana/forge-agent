@@ -334,6 +334,8 @@ class PlanningRuntime:
                 f"Decision: {self.decision.reason}.\n"
                 "No execution plan exists yet. Read-only exploration is allowed, but create "
                 "a plan with plan_create before any repository-mutating tool call.\n"
+                "plan_create requires a non-empty goal and a non-empty steps list; each step "
+                "requires a non-empty id and description (for example: inspect, edit, verify).\n"
                 "The plan is runtime state; it does not prove task completion."
             )
         plan = self.current_plan
@@ -366,9 +368,15 @@ class PlanningRuntime:
                 return self._revise(params)
             raise ValueError(f"unknown planning control: {name}")
         except (TypeError, ValueError) as exc:
+            hint = ""
+            if name == PLAN_CREATE:
+                hint = (
+                    " Expected plan_create params: non-empty goal; non-empty steps; "
+                    "each step must include non-empty id and description."
+                )
             return PlanControlResult(
                 accepted=False,
-                message=f"[PLANNING CONTROL REJECTED] {exc}",
+                message=f"[PLANNING CONTROL REJECTED] {exc}.{hint}",
                 event_type=EventType.PLAN_REJECTED,
                 payload={"control": name, "error": str(exc)},
             )

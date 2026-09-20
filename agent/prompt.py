@@ -40,6 +40,8 @@ explore the repository, make the necessary code changes, and verify they work co
 - If tests fail, read the error carefully and fix the root cause, not the symptom
 - If you are stuck after several attempts, reflect on your approach and try differently
 - Make the smallest change that fixes the problem
+- Do not create a Git commit unless the task or delivery workflow explicitly requires one
+- For Git operations, prefer the dedicated git_status/git_diff/git_add/git_commit tools; do not run mutating Git commands such as git add or git commit through shell
 - When done, return a normal final response with a concise summary
 - Do not call a `finish` or `give_up` tool; they are terminal actions, not tools
 - If you truly cannot solve the task, respond with `GIVE_UP: <reason>`
