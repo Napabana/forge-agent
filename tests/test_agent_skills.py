@@ -346,3 +346,45 @@ def test_eval_variant_maps_to_real_skill_architecture():
     assert _planning_mode_for_variant("planning_recovery_skills_mcp") == "always"
     assert _recovery_mode_for_variant("planning_recovery_skills_mcp") == "structured"
     assert _skills_enabled_for_variant("planning_recovery_skills_mcp") is True
+
+def test_missing_skill_name_is_rejected_without_false_selected_trace(tmp_path: Path):
+    repo = tmp_path / "repo-missing-skill-name"
+    repo.mkdir()
+    _write_skill(
+        repo / ".agents" / "skills",
+        "verify-python-fix",
+        description="Use for verified Python bug fixes.",
+        body="Run focused and full tests.",
+    )
+
+    result, _, _, rows = _run(
+        tmp_path,
+        [_load(""), _finish()],
+        repo=repo,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    assert _events(rows, EventType.SKILL_SELECTED) == []
+    rejected = _events(rows, EventType.SKILL_REJECTED)
+    assert len(rejected) == 1
+    assert "unknown skill" in rejected[0]["payload"]["error"]
+
+
+def test_skill_load_rejection_feedback_names_available_catalog(tmp_path: Path):
+    repo = tmp_path / "repo-skill-hint"
+    repo.mkdir()
+    _write_skill(
+        repo / ".agents" / "skills",
+        "verify-python-fix",
+        description="Use for verified Python bug fixes.",
+        body="Run focused and full tests.",
+    )
+    catalog = SkillCatalog.discover(repo)
+    from skills.runtime import SkillRuntime
+
+    runtime = SkillRuntime(catalog, enabled=True)
+    result = runtime.apply_control("skill_load", {"name": ""})
+
+    assert result.accepted is False
+    assert "Expected skill_load params" in result.message
+    assert "verify-python-fix" in result.message

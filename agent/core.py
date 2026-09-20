@@ -485,11 +485,13 @@ class Agent:
                 and self._skill_runtime.is_control(action.tool_call.name)
             ):
                 if action.tool_call.name == SKILL_LOAD:
-                    log.log_trace(
-                        EventType.SKILL_SELECTED,
-                        step,
-                        skill=str(action.tool_call.params.get("name", "")),
-                    )
+                    selected = str(action.tool_call.params.get("name", "")).strip()
+                    if selected and self._skill_runtime.catalog.get(selected) is not None:
+                        log.log_trace(
+                            EventType.SKILL_SELECTED,
+                            step,
+                            skill=selected,
+                        )
                 control = self._skill_runtime.apply_control(
                     action.tool_call.name, action.tool_call.params
                 )

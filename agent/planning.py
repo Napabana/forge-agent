@@ -353,8 +353,10 @@ class PlanningRuntime:
                 suffix += " | verify: " + step.verification
             lines.append(f"- [{step.status.value}] {step.step_id}: {step.description}{suffix}")
         lines.append(
-            "Use plan_step_update for explicit progress and plan_revise only when new evidence "
-            "makes the current plan outdated. Plan status never replaces tests or acceptance."
+            "Use plan_step_update only with an existing non-terminal step_id "
+            "(pending or in_progress); never update completed/skipped steps again. "
+            "Use plan_revise only when new evidence makes the current plan outdated. "
+            "Plan status never replaces tests or acceptance."
         )
         return "\n".join(lines)
 
@@ -373,6 +375,22 @@ class PlanningRuntime:
                 hint = (
                     " Expected plan_create params: non-empty goal; non-empty steps; "
                     "each step must include non-empty id and description."
+                )
+            elif name == PLAN_STEP_UPDATE:
+                candidates = (
+                    [
+                        step.step_id
+                        for step in self.current_plan.steps
+                        if step.status in {PlanStepStatus.PENDING, PlanStepStatus.IN_PROGRESS}
+                    ]
+                    if self.current_plan is not None
+                    else []
+                )
+                available = ", ".join(candidates) or "none"
+                hint = (
+                    " Expected plan_step_update params: step_id must name an existing "
+                    "pending/in_progress step and status must be in_progress, completed, "
+                    f"or skipped. Current non-terminal step ids: {available}."
                 )
             return PlanControlResult(
                 accepted=False,

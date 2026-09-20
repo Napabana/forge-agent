@@ -129,6 +129,10 @@ class BaseTool(ABC):
         """Unknown/new tools fail safe as mutation-capable unless explicitly read-only."""
         return ToolEffect.MAY_MUTATE_REPOSITORY
 
+    def is_mutating(self, params: dict[str, Any] | None = None) -> bool:
+        """Classify one concrete invocation for repository mutation gating."""
+        return self.effect is ToolEffect.MAY_MUTATE_REPOSITORY
+
     @property
     def metadata(self) -> dict[str, Any]:
         """Optional non-secret execution metadata for policy and Trace correlation."""
@@ -202,9 +206,12 @@ class ToolRegistry:
         return self
 
     def is_mutating(self, name: str, params: Any | None = None) -> bool:
-        """Conservative gate: unknown tools may mutate repository state."""
+        """Conservative gate with per-invocation classification when supported."""
         tool = self._tools.get(name)
-        return tool is None or tool.effect is ToolEffect.MAY_MUTATE_REPOSITORY
+        if tool is None:
+            return True
+        normalized = params if isinstance(params, dict) else {}
+        return tool.is_mutating(normalized)
 
     def get_tool(self, name: str) -> BaseTool | None:
         return self._tools.get(name)

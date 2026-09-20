@@ -134,6 +134,11 @@ class ShellTool(BaseTool):
             "prefer targeted commands like 'grep' or 'pytest tests/foo.py'. Use the dedicated git_status/git_diff/git_add/git_commit tools for Git operations; do not run mutating Git commands such as git add or git commit through shell."
         )
 
+    def is_mutating(self, params: dict[str, Any] | None = None) -> bool:
+        """Classify shell calls for Planning without changing permission semantics."""
+        command = str((params or {}).get("cmd", "")).strip()
+        return not _is_repository_readonly(command)
+
     @property
     def parameters_schema(self) -> dict[str, Any]:
         return {
@@ -236,6 +241,19 @@ def _is_readonly(cmd: str) -> bool:
         if stripped == prefix or stripped.startswith(prefix + " "):
             return True
     return False
+
+
+def _is_repository_readonly(cmd: str) -> bool:
+    """Conservatively classify simple shell command sequences for Planning gates."""
+    stripped = cmd.strip()
+    if not stripped:
+        return False
+    if any(token in stripped for token in ("$(", "`", "|", "&", ">", "\n", "\r")):
+        return False
+    segments = [part.strip() for part in stripped.split(";") if part.strip()]
+    if not segments:
+        return False
+    return all(_is_readonly(segment) for segment in segments)
 
 
 def _needs_confirm(cmd: str) -> bool:

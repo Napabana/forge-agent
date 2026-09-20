@@ -18,6 +18,7 @@ from evals.coding_agent.graders import extract_metrics
 from llm.base import LLMMessage, MockBackend
 from tools.base import ToolEffect, ToolRegistry
 from tools.file_tool import FileReadTool, FileWriteTool
+from tools.shell_tool import ShellTool
 
 
 def _init_repo(root: Path) -> Path:
@@ -389,6 +390,17 @@ def test_tool_effect_defaults_fail_safe_and_read_tools_opt_in(tmp_path: Path):
     assert registry.is_mutating("file_write", {"path": "value.txt"}) is True
     assert registry.is_mutating("future_unknown_tool", {}) is True
 
+    registry.register(ShellTool())
+    assert registry.is_mutating(
+        "shell",
+        {"cmd": "cat pytest.ini; echo ---; cat calculator.py"},
+    ) is False
+    assert registry.is_mutating("shell", {"cmd": "pytest -q"}) is False
+    assert registry.is_mutating("shell", {"cmd": "git status --short"}) is False
+    assert registry.is_mutating("shell", {"cmd": "echo fixed > value.txt"}) is True
+    assert registry.is_mutating("shell", {"cmd": "git commit -m fix"}) is True
+    assert registry.is_mutating("shell", {"cmd": "cat value.txt; rm value.txt"}) is True
+
 
 def test_eval_architecture_variants_map_to_real_planning_configs():
     assert _planning_mode_for_variant("baseline_react") == "off"
@@ -548,3 +560,30 @@ def test_system_prompt_prefers_native_git_tools():
     assert "Do not create a Git commit unless" in prompt
     assert "git_status/git_diff/git_add/git_commit" in prompt
     assert "do not run mutating Git commands" in prompt
+
+def test_plan_step_update_feedback_lists_non_terminal_steps(tmp_path: Path):
+    repo = _init_repo(tmp_path / "repo-update-contract")
+    task = Task("Inspect the repository.", str(repo), task_id="planning-update-contract")
+    runtime = PlanningRuntime(decide_planning(task, "always"))
+    assert runtime.apply_control(
+        "plan_create",
+        {
+            "goal": "inspect then verify",
+            "steps": [
+                {"id": "inspect", "description": "inspect"},
+                {"id": "verify", "description": "verify"},
+            ],
+        },
+    ).accepted
+    assert runtime.apply_control(
+        "plan_step_update",
+        {"step_id": "inspect", "status": "completed"},
+    ).accepted
+
+    rejected = runtime.apply_control(
+        "plan_step_update",
+        {"step_id": "inspect", "status": "completed"},
+    )
+
+    assert rejected.accepted is False
+    assert "Current non-terminal step ids: verify" in rejected.message

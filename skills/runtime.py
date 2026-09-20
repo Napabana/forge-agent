@@ -134,9 +134,16 @@ class SkillRuntime:
                 return self._load_reference(params)
             raise ValueError(f"unknown skill control: {name}")
         except (OSError, TypeError, ValueError) as exc:
+            hint = ""
+            if name == SKILL_LOAD:
+                available = ", ".join(self.catalog.names) or "none"
+                hint = (
+                    " Expected skill_load params: provide a non-empty name from the "
+                    f"available catalog: {available}."
+                )
             return SkillControlResult(
                 accepted=False,
-                message=f"[SKILL CONTROL REJECTED] {exc}",
+                message=f"[SKILL CONTROL REJECTED] {exc}.{hint}",
                 event_type=EventType.SKILL_REJECTED,
                 payload={"control": name, "error": str(exc)},
             )
