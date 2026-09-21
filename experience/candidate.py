@@ -38,7 +38,7 @@ class DeterministicCandidateGenerator:
     def generate(self, pattern: ExperiencePattern, *, skill_name: str | None = None) -> SkillCandidate:
         name = skill_name or f"experience-{pattern.pattern_type.value.replace('_', '-')}-{pattern.pattern_id[-8:]}"
         if pattern.pattern_type is PatternType.RECOVERY_WORKFLOW:
-            description = "Use when a coding task hits a structured failure matching this repeatedly observed recovery motif."
+            description = "Use when a coding task hits a structured failure matching this observed recovery motif."
             failure = pattern.failure_categories[0] if pattern.failure_categories else "unknown"
             recovery = pattern.recovery_strategies[0] if pattern.recovery_strategies else "unknown"
             lines = [
