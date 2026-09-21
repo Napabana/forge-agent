@@ -137,6 +137,20 @@ class TestPermission:
         assert perm.check(block("shell", cmd="od -c config.py")).is_allow
         assert perm.check(block("shell", cmd="strings artifact.bin")).is_allow
 
+    def test_readonly_pipeline_is_allowed(self):
+        perm = PermissionManager()
+        assert perm.check(block("shell", cmd="git diff | cat")).is_allow
+        assert perm.check(block("shell", cmd="cat value.txt | tail -1")).is_allow
+
+    def test_pipeline_with_mutating_or_unknown_stage_confirms(self):
+        perm = PermissionManager()
+        assert perm.check(
+            block("shell", cmd="cat value.txt | tee copy.txt")
+        ).is_confirm
+        assert perm.check(
+            block("shell", cmd="python -c \"print('x')\" | cat")
+        ).is_confirm
+
     def test_sudo_denied(self):
         # s20 DENY_LIST 补充项 sudo
         perm = PermissionManager()

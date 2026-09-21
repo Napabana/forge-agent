@@ -283,35 +283,57 @@ def _contains_mutating_git_command(cmd: str) -> bool:
 
 
 def _is_repository_readonly(cmd: str) -> bool:
-    """Conservatively classify simple read-only command chains for Planning gates."""
+    """Conservatively classify a small, provably read-only shell subset.
+
+    Supported composition:
+    - simple read-only commands from _READONLY_PREFIXES;
+    - cd as a standalone chain segment;
+    - ; / && chains of those commands;
+    - pipelines where every stage is independently read-only.
+
+    Everything with redirection, command substitution, background execution,
+    ||, or an unknown/expressive command fails safe as mutation-capable.
+    """
     stripped = cmd.strip()
     if not stripped:
         return False
 
-    # Keep expressive shell forms fail-safe. We intentionally support only simple
-    # ';' / '&&' chains so common "cd repo && cat ..." exploration is not blocked.
-    if any(token in stripped for token in ("$(", "`", "|", ">", "\n", "\r")):
+    if any(token in stripped for token in ("$(", "`", ">", "<", "\n", "\r")):
         return False
     if "||" in stripped or re.search(r"(?<!&)&(?!&)", stripped):
         return False
 
-    segments = [
+    chains = [
         part.strip()
         for part in re.split(r"\s*(?:&&|;)\s*", stripped)
         if part.strip()
     ]
-    if not segments:
+    if not chains:
         return False
 
-    def segment_is_readonly(segment: str) -> bool:
-        lowered = segment.lower()
-        if lowered == "cd" or lowered.startswith("cd "):
-            return True
-        return _is_readonly(segment)
+    for chain in chains:
+        stages = [
+            part.strip()
+            for part in re.split(r"(?<!\|)\|(?!\|)", chain)
+        ]
+        if not stages or any(not stage for stage in stages):
+            return False
 
-    return all(segment_is_readonly(segment) for segment in segments)
+        if len(stages) == 1:
+            lowered = stages[0].lower()
+            if lowered == "cd" or lowered.startswith("cd "):
+                continue
 
+        # cd in a pipeline has surprising subshell semantics; use cd && ... instead.
+        if any(
+            stage.lower() == "cd" or stage.lower().startswith("cd ")
+            for stage in stages
+        ):
+            return False
+        if not all(_is_readonly(stage) for stage in stages):
+            return False
 
+    return True
 def _needs_confirm(cmd: str) -> bool:
     """Require confirmation whenever a command is not provably repository-read-only.
 

@@ -410,7 +410,7 @@ def test_tool_effect_defaults_fail_safe_and_read_tools_opt_in(tmp_path: Path):
     assert registry.is_mutating(
         "shell",
         {"cmd": "cd /tmp/repo && cat value.txt | tail -1"},
-    ) is True
+    ) is False
     assert registry.is_mutating("shell", {"cmd": "pytest -q"}) is False
     assert registry.is_mutating("shell", {"cmd": "git status --short"}) is False
     assert registry.is_mutating("shell", {"cmd": "echo fixed > value.txt"}) is True
@@ -423,6 +423,14 @@ def test_tool_effect_defaults_fail_safe_and_read_tools_opt_in(tmp_path: Path):
     assert registry.is_mutating("shell", {"cmd": "find . -delete"}) is True
     assert registry.is_mutating("shell", {"cmd": "awk 'BEGIN {system(\"touch x\")}'"}) is True
     assert registry.is_mutating("shell", {"cmd": "xxd value.txt"}) is False
+    assert registry.is_mutating("shell", {"cmd": "git diff | cat"}) is False
+    assert registry.is_mutating("shell", {"cmd": "wc -c value.txt | tail -1"}) is False
+    assert registry.is_mutating("shell", {"cmd": "cat value.txt | tee copy.txt"}) is True
+    assert registry.is_mutating(
+        "shell",
+        {"cmd": "python -c \"print('x')\" | cat"},
+    ) is True
+    assert registry.is_mutating("shell", {"cmd": "cat value.txt > copy.txt"}) is True
 
 
 def test_eval_architecture_variants_map_to_real_planning_configs():
