@@ -1419,9 +1419,13 @@ J. P2-0 Harness 先跑 not_executed validation
    ↓
 K. 需要真实效果证据时再跑 --real-model architecture smoke
    ↓
-L. P2-5 offline evolution regression / candidate eval
+L. P2-5 先跑 --mine-only，再人工审 Candidate
    ↓
-M. Trace / Session / Worktree / Evidence 最终核对
+M. final gate 先 dry-run；只有需要真实证据时手工 --execute
+   ↓
+N. 已有 real-model artifacts 需要重分析时用 --replay-existing
+   ↓
+O. Trace / Session / Worktree / Evidence 最终核对
 ```
 
 ## 19. 手工验收清单
@@ -1486,9 +1490,13 @@ M. Trace / Session / Worktree / Evidence 最终核对
 - [ ] Skill scripts 不绕过 ToolExecutor 自动执行；
 - [ ] MCP Tool 使用 `mcp__<server>__<tool>` namespace 并继续经过 Permission/Hook/Trace；
 - [ ] Eval CLI 不加 `--real-model` 时不会产生真实 Provider 调用；
-- [ ] Evolution candidate 与正式 `.agents/skills/` 隔离；
-- [ ] Promotion 只有 persisted PASS decision 后显式执行；
-- [ ] 没有把 deterministic regression 写成真实模型效果提升。
+- [ ] Evolution mining 只有 `success + acceptance=passed` trajectory 才进入 positive evidence；
+- [ ] `run_skill_evolution.py --mine-only` 报告 `provider_calls=0`，Candidate 与正式 `.agents/skills/` 隔离；
+- [ ] final gate 不加 `--execute` 时只做 dry-run，不创建 Provider backend；
+- [ ] `--replay-existing` 只重分析已有 baseline/candidate artifacts，不覆盖原始真实证据；
+- [ ] Promotion 只有 persisted PASS decision 后显式执行；REJECT 不会自动部署；
+- [ ] recovery Candidate metadata 不提前泄漏完整 next action，具体 guidance 需 `skill_load`；
+- [ ] 没有把 deterministic regression 或单次真实 E2E 写成稳定模型效果提升。
 
 ## 20. 回归与证据
 
@@ -1501,7 +1509,9 @@ python -m pytest -q \
   tests/test_structured_recovery.py \
   tests/test_agent_skills.py \
   tests/test_mcp_integration.py \
-  tests/test_skill_evolution.py
+  tests/test_skill_evolution.py \
+  tests/test_real_skill_evolution_driver.py \
+  tests/test_real_skill_evolution_eval.py
 
 python -m evals.verify_evidence_pack
 python -m pytest -q
