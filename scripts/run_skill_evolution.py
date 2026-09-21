@@ -176,7 +176,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Deliberately import only the offline P2-5 modules after CLI validation.
-    from experience.candidate import DeterministicCandidateGenerator
+    from experience.candidate import (
+        CANDIDATE_RENDERER_VERSION,
+        DeterministicCandidateGenerator,
+    )
     from experience.promotion import PromotionGateConfig
     from experience.store import CandidateStore
     from experience.trajectory import (
@@ -239,6 +242,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "schema_version": 1,
         "mode": "mine_only",
         "mining_strategy": MINING_STRATEGY_VERSION,
+        "candidate_renderer": CANDIDATE_RENDERER_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "repo": str(repo),
         "provider_calls": 0,
@@ -260,6 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Repo        : {repo}")
     print(f"Traces      : {len(normalized)} total / {len(eligible)} eligible")
     print(f"Strategy    : {MINING_STRATEGY_VERSION}")
+    print(f"Renderer    : {CANDIDATE_RENDERER_VERSION}")
     print(f"Patterns    : {len(patterns)}")
     print(f"Candidates  : {len(candidate_rows)}")
     print(f"Store       : {'disabled' if store is None else store.root}")
