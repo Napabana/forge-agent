@@ -30,17 +30,34 @@ def guidance_prompt(topic: str = "navigation") -> str:
     )
 )
 def lookup_project_guidance(topic: str) -> dict[str, str]:
-    """Return deterministic repository guidance without network access."""
-    normalized = topic.strip().lower()
+    """Return deterministic repository guidance without network access.
+
+    The fixture tests MCP capability use, not whether a model guesses one exact
+    enum-like lookup key. Normalize common natural-language topic variants so
+    semantically equivalent policy/config/test queries resolve deterministically.
+    """
+    normalized = " ".join(
+        topic.strip().lower().replace("_", " ").replace("-", " ").split()
+    )
     guidance = {
         "configuration": "Use the canonical setting in src/app/config.py rather than hardcoding a duplicate value.",
         "tests": "Run the repository tests after the final code change before finishing.",
         "navigation": "Inspect the canonical configuration module before editing callers.",
         "policy": "Set POLICY_MODE = 'strict' in src/app/config.py; that file is the canonical organization policy setting.",
     }
+
+    if "policy" in normalized:
+        guidance_key = "policy"
+    elif "config" in normalized or "configuration" in normalized:
+        guidance_key = "configuration"
+    elif "test" in normalized or "verify" in normalized:
+        guidance_key = "tests"
+    else:
+        guidance_key = "navigation"
+
     return {
         "topic": normalized,
-        "guidance": guidance.get(normalized, guidance["navigation"]),
+        "guidance": guidance[guidance_key],
         "source": "forge-eval-mcp-fixture",
     }
 

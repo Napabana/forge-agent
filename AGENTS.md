@@ -560,3 +560,14 @@ pytest -q
 - 新增 registry regression：process cwd 中放置外部 fixture，三个 search tools 默认只能看到 workspace 内容，并拒绝 absolute/relative escape。
 - 配置加载同时收紧：显式传入 `--config` 但文件不存在时不再 silent fallback 到默认空配置，而是抛出 `FileNotFoundError`；路径含反斜杠时提示 Linux/WSL 使用 `/`。
 - 本轮补丁需要用户本地跑定向测试和全量回归后，再用新 output dir 执行 MCP real-model r2。不得复用/覆盖 r1，也不得把 r1 的 0 success 当作 MCP outcome。
+
+
+### 修复补充（2026-09-21，P2-4 MCP pr-test real E2E：guidance topic normalization）
+
+- 用户在 `Napabana/pr-test:forge-p2-mcp-demo` 上完成真实 MCP direct-run；MCP tool 被真实调用 6 次，最终 Step 26 的 topic `policy` 返回 `POLICY_MODE='strict'`，随后成功修改 `src/app/config.py` 并验证 runtime 输出 `'strict'`。
+- Run 最终为 `INCOMPLETE`（30 steps / 343,717 tokens / 339.8s），原因是 max_steps，而非 MCP transport/call failure。
+- 根因：固定 MCP eval fixture 的 `lookup_project_guidance(topic)` 原先只对精确 key `policy` 返回 policy guidance；`policy_mode`、`policy mode configuration`、`organization policy`、`required policy mode value` 都退回 generic navigation。真实模型因此连续重复 MCP lookup，并触发 NO_PROGRESS / replan / 额外 repository exploration。
+- 这属于 eval fixture 的 exact-key trap，不应把“猜中一个隐藏枚举 key”混入 MCP capability 验收。修复后 topic 先统一 underscore/hyphen/whitespace，再按自然语义关键词路由；包含 `policy` 的查询稳定返回 policy guidance，config/test 查询同理。
+- `tests/test_mcp_integration.py` 的真实 stdio fixture regression 新增 `required policy mode value` 与 `policy_mode` 两种自然查询，均必须得到 strict policy guidance。
+- 本轮不同时修改 shell Git conservative classification、Planning gate 或 max_steps；这些是在重复无效 guidance 后出现的次生行为，避免把 MCP fixture 修复扩成无关控制面改造。
+- 需要用户本地先跑 MCP/CLI 定向回归，再 reset/reclone `pr-test:forge-p2-mcp-demo` 执行新的 real-model E2E。

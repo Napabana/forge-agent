@@ -489,6 +489,21 @@ def test_official_stdio_discover_invoke_structured_error_timeout_and_cleanup():
         assert "src/app/config.py" in structured.output
         assert "forge-eval-mcp-fixture" in structured.output
 
+        policy = registry.execute_tool(
+            namespaced_tool_name("eval_docs", "lookup_project_guidance"),
+            {"topic": "required policy mode value"},
+        )
+        assert policy.success
+        assert "POLICY_MODE" in policy.output
+        assert "strict" in policy.output
+
+        underscored_policy = registry.execute_tool(
+            namespaced_tool_name("eval_docs", "lookup_project_guidance"),
+            {"topic": "policy_mode"},
+        )
+        assert underscored_policy.success
+        assert "strict" in underscored_policy.output
+
         failed = registry.execute_tool(
             namespaced_tool_name("eval_docs", "fail_lookup"),
             {"message": "fixture boom"},
