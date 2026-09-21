@@ -628,3 +628,16 @@ pytest -q
 - 当前容器无法直接 clone GitHub（DNS 解析失败），因此没有在这里运行完整 forge-agent checkout 的仓库级 pytest，也没有执行真实 pr-test Agent tasks；不能把 deterministic validation 写成 real-model success。
 - 本轮更新日志：`docs/changes/2026-09-21/P2-5真实任务Batch-Runner.md`。
 - 下一步由用户在本地 pull 最新 `dev`，准备 clean `pr-test-agent-practice`，先 dry-run；只有用户手动执行 `--execute` 时才开始真实 Provider 调用。真实 A/B/C accepted traces 产生后再进入 P2-5。
+
+
+### 最后交接（2026-09-21，P2-5 真实 Trace Mining Driver）
+
+- 真实 practice batch 已最终完成：A/B/C 均为 `success + acceptance=passed + P2-5 eligible`；最终成功 batch summary 为 84 steps / 1,227,602 tokens / 1439.1s，得到 3 条 eligible Trace v2。
+- 新增 `scripts/run_skill_evolution.py`，把现有 P2-5 library API 接成安全的真实 Trace 入口。当前只允许显式 `--mine-only`，不会构造 LLM backend、不会运行 EvaluationHarness、不会触发真实 Provider、不会自动 promotion。
+- driver 支持重复 `--trace`，也支持直接读取 Batch Runner 的 `batch_summary.json -> eligible_traces_for_p2_5`。
+- 执行链固定为 `load_trajectory -> ExperienceMiner -> DeterministicCandidateGenerator -> CandidateStore -> mining_report.json/SKILL.md`；不按自然语言相似度合并 workflow，完全遵守现有 typed signature grouping。
+- driver 报告当前 `PromotionGateConfig().min_evidence_count`（默认 2）并为每个 candidate 标记 `promotion_evidence_ready`。若全部 candidate 证据不足，明确提示不要继续消耗 real-model evaluation tokens。
+- CandidateStore 默认仍位于 target repo 的 `.forge-agent/experience/`，与正式 `.agents/skills/` 隔离；同一 evidence 重跑会复用既有 candidate，不静默覆盖。
+- 新增 `tests/test_real_skill_evolution_driver.py`，覆盖 batch-summary 输入、matching workflow evidence=2、single-evidence not-ready、ineligible trace 不 mining、CandidateStore 幂等、显式 mine-only gate。
+- 新增日志：`docs/changes/2026-09-21/P2-5真实Trace-Mining-Driver.md`。
+- 下一步：用户本地先跑专项测试，再对真实 batch summary 执行一次 0-API `--mine-only`；只有实际 mining 结果出现合理且 evidence-ready 的 candidate，才进入 real-model baseline/candidate evaluation。
