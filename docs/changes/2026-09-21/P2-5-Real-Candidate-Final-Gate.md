@@ -236,3 +236,49 @@ python scripts/run_real_skill_evolution_eval.py \
 ```
 
 该命令不得创建 Provider backend。
+
+
+## 最终真实验收结论
+
+对首轮 8 个 real-model Agent trials 执行 0-API replay 后，最终结论如下：
+
+- 四个任务的 baseline 与 candidate 功能 outcome 全部成功；
+- target / should-trigger 均出现 failure/recovery 事件：各自 `failure_classified_count=2`、`recovery_selected_count=2`；
+- candidate variant 均发现 1 个 Skill metadata（`skill_discovered_count=1`）；
+- 但 target / should-trigger 均 `skill_selected_count=0`、`skill_loaded_count=0`；
+- should-not-trigger 与 non-regression 均未错误加载 Candidate；
+- 所有 case `evaluation_failed=false`；
+- PromotionGate 最终保持 `REJECT`，理由收敛为：target / should-trigger 未加载 Candidate 且 process motif 未通过；
+- 不再存在“candidate outcome failed / baseline-success regression”的误报。
+
+因此：
+
+**P2-5 的真实闭环验收通过，但本次 Candidate 不通过 PromotionGate。**
+
+这验证了完整链路：
+
+```text
+real accepted traces
+→ deterministic motif mining
+→ Candidate Skill
+→ baseline/candidate real-model evaluation
+→ process/outcome separation
+→ deterministic PromotionGate
+→ REJECT without promotion
+```
+
+这里的 REJECT 是有效结果，不应为了演示效果强行调参为 PASS。
+
+### 对 Candidate 本身的诊断
+
+本次 Candidate 的旧 metadata 包含 observed next semantic action（INSPECT）。P2-3 SkillRuntime 在 Skill 未加载时就会把 description 放入 metadata catalog，因此核心 recovery 行为提前暴露，可能降低模型调用 `skill_load` 的必要性。
+
+后续实现已修复 future candidate renderer：
+
+- renderer version：`progressive_disclosure_v2`；
+- description 只包含 failure category + recovery strategy + 明确要求“load before choosing next semantic action”；
+- observed next semantic action 只保留在 SKILL.md full instructions；
+- mining report 新增 `candidate_renderer` 字段；
+- 旧 real-model artifact 保持不变，不重新解释成新 Candidate 的评测结果。
+
+本次首轮 Candidate `candidate-80bb153c9f364a1c` 保持 REJECT，不 promotion，也不重新调用 Provider。
