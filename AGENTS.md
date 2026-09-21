@@ -714,3 +714,16 @@ pytest -q
 - future Candidate renderer 已改为 `progressive_disclosure_v2`：metadata 只包含 failure/recovery trigger，并明确要求在选择下一语义动作前 load Skill；具体 next action 只存在完整 SKILL.md 中。mining report 新增 `candidate_renderer` 字段。
 - 旧 real-model artifacts 保持 immutable；新 renderer 产生的新 candidate identity/hash 不能冒充旧 Candidate 的 A/B 结果。
 - 下一步只需用户本地跑相关 pytest 回归；P2-5 不再需要 API 调用。
+
+
+### 最后交接（2026-09-21，P2 Agent Intelligence 总文档收口）
+
+- P2-0 ～ P2-5 已完成并正式收口；本轮不再新增 Agent capability，只做文档/证据一致性整理。
+- README.md 已补充 P2 真实闭环摘要、P2-5 recovery_motif_v2 / PromotionGate REJECT 真实证据、progressive_disclosure_v2 边界，并链接阶段总收口文档。
+- USAGE.md 已把旧 “P2-5 只有 offline Python API” 更新为真实可执行工作流：run_skill_evolution.py --mine-only、final-gate dry-run、显式 --execute、0-API --replay-existing，并更新验收顺序/回归清单。
+- docs/todo/P2-Agent-Intelligence-执行计划.md 已标记 DONE / REAL E2E CLOSED，补充 2026-09-21 P2-5 真实闭环。
+- 新增 docs/changes/2026-09-21/P2-Agent-Intelligence-总收口.md，统一整理 P2-0～P2-5 架构、关键源码、真实验收、可说/不可说边界。
+- docs/evidence/README.md 已同步真实证据：P2-4 记录独立 pr-test MCP E2E；P2-5 记录 3 条 accepted source traces + 8 个 real-model final-gate trials + Candidate REJECT/no promotion；删除 “real-model 未执行” 的旧表述。
+- 静态一致性检查已确认：README 有总收口链接和 8-trial final gate；USAGE 不再含旧 “offline Python API，不是 CLI”；Evidence 不再含旧 P2-5 no-real-model anchor；P2 plan 标记 DONE；总收口文档存在并记录 REJECT。
+- 用户在本轮文档收口前已确认最终相关 pytest “全过”；本轮后续提交均为 Markdown/AGENTS 文档修改，没有修改生产 Python 行为，因此未要求重复消耗 Provider。
+- 下一步建议转入简历/面试收口：从 docs/changes/2026-09-21/P2-Agent-Intelligence-总收口.md 提炼 1 页项目叙事、简历 bullet 与面试追问答案；不要继续为了增加关键词堆 P2 功能。
