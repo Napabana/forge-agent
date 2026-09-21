@@ -27,7 +27,12 @@ def evaluation_role(task: EvalTask) -> EvaluationRole:
     return matched[0] if matched else EvaluationRole.NON_REGRESSION
 
 
-def _candidate_suite(suite: EvaluationSuite, candidate: SkillCandidate) -> EvaluationSuite:
+def _candidate_suite(
+    suite: EvaluationSuite,
+    candidate: SkillCandidate,
+    *,
+    process_graders: tuple[GraderSpec, ...] = (),
+) -> EvaluationSuite:
     tasks: list[EvalTask] = []
     for task in suite.tasks:
         role = evaluation_role(task)
@@ -46,6 +51,11 @@ def _candidate_suite(suite: EvaluationSuite, candidate: SkillCandidate) -> Evalu
                     required=False,
                 ),
             )
+        if (
+            role in {EvaluationRole.TARGET, EvaluationRole.SHOULD_TRIGGER}
+            and process_graders
+        ):
+            graders = graders + process_graders
         tasks.append(EvalTask(
             task_id=task.task_id,
             description=task.description,
@@ -179,6 +189,7 @@ def evaluate_candidate(
     repetitions: int = 1,
     evidence_kind: str = "deterministic_harness",
     real_model_executed: bool = False,
+    candidate_process_graders: tuple[GraderSpec, ...] = (),
 ) -> EvaluationRecord:
     """Run baseline and candidate variants through the existing P2-0 harness."""
     root = Path(output_dir).resolve()
@@ -190,7 +201,11 @@ def evaluate_candidate(
         root / "candidate-skills",
         base_skill_root=base_skill_root,
     )
-    candidate_suite = _candidate_suite(suite, candidate)
+    candidate_suite = _candidate_suite(
+        suite,
+        candidate,
+        process_graders=candidate_process_graders,
+    )
     baseline_variant = "evolution_baseline"
     candidate_variant = "evolution_candidate"
     baseline_results = EvaluationHarness(
