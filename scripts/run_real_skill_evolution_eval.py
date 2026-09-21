@@ -11,8 +11,18 @@ from agent.core import AgentConfig
 from agent.runner import ExecutionRunner
 from config.schema import load_config
 from evals.coding_agent.runner import validate_suite_references
-from evals.coding_agent.schema import EvaluationSuite, GraderSpec
-from experience.evaluation import evaluate_candidate, evaluation_role
+from evals.coding_agent.schema import (
+    EvaluationSuite,
+    GraderResult,
+    GraderSpec,
+    TrialMetrics,
+    TrialResult,
+)
+from experience.evaluation import (
+    build_evaluation_record,
+    evaluate_candidate,
+    evaluation_role,
+)
 from experience.promotion import PromotionGate
 from experience.schema import EvaluationRole, PatternType, SkillCandidate
 from llm.router import create_backend_from_config
@@ -31,6 +41,120 @@ DEFAULT_SUITE = (
 def _default_output_dir() -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return ROOT / "evals" / "results" / f"p2-5-real-candidate-eval-{stamp}"
+
+
+def _trial_result_from_dict(raw: dict[str, Any]) -> TrialResult:
+    metrics_raw = dict(raw.get("metrics") or {})
+    graders_raw = list(raw.get("grader_results") or ())
+    metrics = TrialMetrics(**metrics_raw)
+    graders = tuple(
+        GraderResult(
+            grader_id=str(item.get("grader_id") or ""),
+            kind=str(item.get("kind") or ""),
+            passed=bool(item.get("passed")),
+            required=bool(item.get("required")),
+            detail=str(item.get("detail") or ""),
+            evidence=dict(item.get("evidence") or {}),
+        )
+        for item in graders_raw
+    )
+    return TrialResult(
+        suite_id=str(raw.get("suite_id") or ""),
+        task_id=str(raw.get("task_id") or ""),
+        trial_id=str(raw.get("trial_id") or ""),
+        variant=str(raw.get("variant") or ""),
+        repetition=int(raw.get("repetition") or 1),
+        execution_status=str(raw.get("execution_status") or ""),
+        evidence_kind=str(raw.get("evidence_kind") or ""),
+        real_model_executed=bool(raw.get("real_model_executed")),
+        run_status=str(raw.get("run_status") or ""),
+        termination_reason=(
+            str(raw["termination_reason"])
+            if raw.get("termination_reason") is not None
+            else None
+        ),
+        acceptance_status=str(raw.get("acceptance_status") or ""),
+        success=bool(raw.get("success")),
+        metrics=metrics,
+        grader_results=graders,
+        trace_ref=(str(raw["trace_ref"]) if raw.get("trace_ref") is not None else None),
+        patch_ref=(str(raw["patch_ref"]) if raw.get("patch_ref") is not None else None),
+        final_state_ref=(
+            str(raw["final_state_ref"])
+            if raw.get("final_state_ref") is not None
+            else None
+        ),
+        error=(str(raw["error"]) if raw.get("error") is not None else None),
+    )
+
+
+def _load_trial_results(path: Path) -> list[TrialResult]:
+    if not path.is_file():
+        raise SystemExit(f"missing evaluation trial artifact: {path}")
+    results: list[TrialResult] = []
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"invalid trial JSON at {path}:{line_no}: {exc}"
+            ) from exc
+        if not isinstance(raw, dict):
+            raise SystemExit(f"trial row at {path}:{line_no} must be an object")
+        results.append(_trial_result_from_dict(raw))
+    if not results:
+        raise SystemExit(f"no trial results found in {path}")
+    return results
+
+
+def _summary_payload(
+    *,
+    candidate: SkillCandidate,
+    record,
+    decision,
+    evaluation_path: Path,
+    decision_path: Path,
+    mode: str,
+    provider_calls: int | str,
+) -> dict[str, Any]:
+    return {
+        "mode": mode,
+        "provider_calls": provider_calls,
+        "candidate_id": candidate.candidate_id,
+        "candidate_skill": candidate.skill_name,
+        "pattern_id": candidate.pattern_id,
+        "evaluation_record_id": record.record_id,
+        "promotion_status": decision.status.value,
+        "promotion_reasons": list(decision.reasons),
+        "cases": [
+            {
+                "task_id": case.task_id,
+                "role": case.role.value,
+                "baseline_success": case.baseline_success,
+                "candidate_success": case.candidate_success,
+                "baseline_required_graders_passed": (
+                    case.baseline_required_graders_passed
+                ),
+                "candidate_required_graders_passed": (
+                    case.candidate_required_graders_passed
+                ),
+                "candidate_loaded": case.candidate_loaded,
+                "candidate_process_passed": case.candidate_process_passed,
+                "baseline_steps": case.baseline_steps,
+                "candidate_steps": case.candidate_steps,
+                "baseline_tokens": case.baseline_tokens,
+                "candidate_tokens": case.candidate_tokens,
+                "evaluation_failed": case.evaluation_failed,
+                "failure_reason": case.failure_reason,
+            }
+            for case in record.cases
+        ],
+        "evaluation_path": str(evaluation_path),
+        "decision_path": str(decision_path),
+        "auto_promoted": False,
+    }
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -234,10 +358,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--suite", default=str(DEFAULT_SUITE))
     parser.add_argument("--config", default=None)
     parser.add_argument("--output-dir", default=None)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--execute",
         action="store_true",
         help="Explicitly run the configured real model. Without this flag the command is 0-API.",
+    )
+    mode.add_argument(
+        "--replay-existing",
+        action="store_true",
+        help=(
+            "Rebuild EvaluationRecord/PromotionDecision from existing baseline/candidate "
+            "trial artifacts without creating a model backend."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -252,6 +385,50 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.output_dir
         else _default_output_dir().resolve()
     )
+
+    if args.replay_existing:
+        baseline_results = _load_trial_results(output_dir / "baseline" / "raw.jsonl")
+        candidate_results = _load_trial_results(output_dir / "candidate" / "raw.jsonl")
+        record = build_evaluation_record(
+            candidate=candidate,
+            suite=suite,
+            baseline_results=baseline_results,
+            candidate_results=candidate_results,
+            baseline_variant="evolution_baseline",
+            candidate_variant="evolution_candidate",
+        )
+        decision = PromotionGate().evaluate(candidate, record)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        replay_dir = output_dir / f"reanalysis-{stamp}"
+        replay_dir.mkdir(parents=True, exist_ok=False)
+        evaluation_path = replay_dir / "evaluation.json"
+        decision_path = replay_dir / "promotion_decision.json"
+        summary_path = replay_dir / "final_gate_summary.json"
+        evaluation_path.write_text(
+            json.dumps(record.to_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        decision_path.write_text(
+            json.dumps(decision.to_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        summary = _summary_payload(
+            candidate=candidate,
+            record=record,
+            decision=decision,
+            evaluation_path=evaluation_path,
+            decision_path=decision_path,
+            mode="replay_existing",
+            provider_calls=0,
+        )
+        summary["source_baseline_trials"] = str(output_dir / "baseline" / "raw.jsonl")
+        summary["source_candidate_trials"] = str(output_dir / "candidate" / "raw.jsonl")
+        summary_path.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0
 
     with tempfile.TemporaryDirectory(prefix="forge-p2-5-real-gate-ref-") as temp_dir:
         reference_validation = validate_suite_references(suite, temp_dir)
@@ -318,34 +495,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         json.dumps(decision.to_dict(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    summary = {
-        "candidate_id": candidate.candidate_id,
-        "candidate_skill": candidate.skill_name,
-        "pattern_id": candidate.pattern_id,
-        "evaluation_record_id": record.record_id,
-        "promotion_status": decision.status.value,
-        "promotion_reasons": list(decision.reasons),
-        "cases": [
-            {
-                "task_id": case.task_id,
-                "role": case.role.value,
-                "baseline_success": case.baseline_success,
-                "candidate_success": case.candidate_success,
-                "candidate_loaded": case.candidate_loaded,
-                "candidate_process_passed": case.candidate_process_passed,
-                "baseline_steps": case.baseline_steps,
-                "candidate_steps": case.candidate_steps,
-                "baseline_tokens": case.baseline_tokens,
-                "candidate_tokens": case.candidate_tokens,
-                "evaluation_failed": case.evaluation_failed,
-                "failure_reason": case.failure_reason,
-            }
-            for case in record.cases
-        ],
-        "evaluation_path": str(output_dir / "evaluation.json"),
-        "decision_path": str(decision_path),
-        "auto_promoted": False,
-    }
+    summary = _summary_payload(
+        candidate=candidate,
+        record=record,
+        decision=decision,
+        evaluation_path=output_dir / "evaluation.json",
+        decision_path=decision_path,
+        mode="execute",
+        provider_calls="real_model",
+    )
     summary_path = output_dir / "final_gate_summary.json"
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
