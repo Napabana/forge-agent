@@ -336,5 +336,11 @@ class TestToolExecutor:
         registry.register(fake_tool("boom", error=RuntimeError("boom")))
 
         assert ToolExecutor(registry).execute("timeout", {}).error_type is ToolErrorType.TIMEOUT
-        assert ToolExecutor(registry).execute("shell", {}).error_type is ToolErrorType.INFRASTRUCTURE
+        # The safe production executor applies PermissionManager before tool
+        # execution. Use a valid, provably read-only shell command so this test
+        # reaches the underlying ToolResult classification it is intended to cover.
+        assert (
+            ToolExecutor(registry).execute("shell", {"cmd": "ls"}).error_type
+            is ToolErrorType.INFRASTRUCTURE
+        )
         assert ToolExecutor(registry).execute("boom", {}).error_type is ToolErrorType.TOOL_EXECUTION
