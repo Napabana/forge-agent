@@ -378,85 +378,199 @@ python -m evals.coding_agent \
   --output-dir evals/results/local-one-task
 ```
 
-### 3.6 P2-5 Skill Evolution：offline Python API，不是 CLI
+### 3.6 P2-5 Skill Evolution：先离线 mining，再显式 real-model final gate
 
-当前没有 `agent evolve` 或自动 promotion 命令。正确主链：
+P2-5 现在既有 library API，也有两个明确分离的脚本入口：
 
 ```text
-Trace v2 / TrialResult
-  ↓ load_trajectory
-ExperienceMiner
+scripts/run_skill_evolution.py
+    └─ 只做真实 Trace 的 offline mining / Candidate 生成
+       默认不构造 Provider backend
+
+scripts/run_real_skill_evolution_eval.py
+    └─ Candidate final gate
+       默认 dry-run = 0 API
+       只有显式 --execute 才调用真实模型
+       --replay-existing 只重分析已有真实 trial = 0 API
+```
+
+完整主链：
+
+```text
+accepted Trace v2
   ↓
-DeterministicCandidateGenerator
+recovery_motif_v2 / successful workflow mining
   ↓
-CandidateStore
+Candidate Skill
   ↓
-evaluate_candidate → P2-0 EvaluationHarness
+source-evidence threshold
+  ↓
+baseline vs candidate EvaluationHarness
   ↓
 PromotionGate
   ↓
-save_decision
+PASS / REJECT / INSUFFICIENT_EVIDENCE / EVALUATION_FAILED
   ↓
-显式 PromotionManager.promote()
+只有 PASS + 人工确认后才显式 promote()
 ```
 
-核心 API 形态：
+#### 3.6.1 用真实 Trace 做 0-API mining
+
+如果已经有 Batch Runner 生成的 `batch_summary.json`：
+
+```bash
+python scripts/run_skill_evolution.py \
+  --repo /path/to/target-repo \
+  --batch-summary /path/to/batch_summary.json \
+  --mine-only \
+  --no-store
+```
+
+也可以重复传入单条 Trace：
+
+```bash
+python scripts/run_skill_evolution.py \
+  --repo /path/to/target-repo \
+  --trace /path/to/trace-a.jsonl \
+  --trace /path/to/trace-b.jsonl \
+  --mine-only \
+  --no-store
+```
+
+这一步只做：
+
+```text
+load_trajectory
+→ eligibility check
+→ ExperienceMiner
+→ DeterministicCandidateGenerator
+→ mining_report.json / candidate.json / SKILL.md
+```
+
+不会运行 EvaluationHarness，也不会调用 Provider。报告会显式包含：
+
+- `provider_calls=0`；
+- `evaluation_executed=false`；
+- `mining_strategy=recovery_motif_v2`；
+- `candidate_renderer=progressive_disclosure_v2`；
+- 每个 pattern 的 `evidence_count` 与 `promotion_evidence_ready`。
+
+默认 PromotionGate source evidence threshold 是 2。没有 candidate 达到阈值时，应停在这里，不要为了凑 evidence 或烧 API 去放宽 Gate。
+
+#### 3.6.2 先人工审 Candidate，再做 final-gate dry-run
+
+优先检查：
+
+```text
+mining_report.json
+candidates/<skill-name>/candidate.json
+candidates/<skill-name>/SKILL.md
+```
+
+确认 Candidate 不是简单复述现有 deterministic policy，也没有把无关 workflow 强行合并。
+
+然后先跑 **0-API dry-run**：
+
+```bash
+python scripts/run_real_skill_evolution_eval.py \
+  --mining-report /path/to/mining_report.json \
+  --pattern-id pattern-xxxxxxxxxxxxxxxx \
+  --output-dir /path/to/final-gate-output
+```
+
+dry-run 会校验 candidate identity/hash、source evidence、suite/reference solution 与 planned trials。没有 `--execute` 时不会创建 model backend。
+
+当前 recovery final gate 保留四种角色：
+
+```text
+TARGET
+SHOULD_TRIGGER
+SHOULD_NOT_TRIGGER
+NON_REGRESSION
+```
+
+1 repetition 时是 4 tasks × baseline/candidate = 8 个 Agent trials。
+
+#### 3.6.3 只有显式 `--execute` 才跑真实模型
+
+确认 dry-run 后，再手工追加：
+
+```bash
+python scripts/run_real_skill_evolution_eval.py \
+  --mining-report /path/to/mining_report.json \
+  --pattern-id pattern-xxxxxxxxxxxxxxxx \
+  --output-dir /path/to/final-gate-output \
+  --execute
+```
+
+这一步会真实调用当前配置的 Provider。输出包括：
+
+```text
+baseline/
+candidate/
+evaluation.json
+promotion_decision.json
+final_gate_summary.json
+```
+
+脚本只计算 PromotionGate，不会自动把 Candidate 写入正式 `.agents/skills/`。
+
+#### 3.6.4 已经跑过真实模型时，用 replay，不要重复烧 API
+
+如果发现报告语义或分析代码需要修正，但已有 baseline/candidate real-model artifacts 仍有效：
+
+```bash
+python scripts/run_real_skill_evolution_eval.py \
+  --mining-report /path/to/mining_report.json \
+  --pattern-id pattern-xxxxxxxxxxxxxxxx \
+  --output-dir /path/to/existing-final-gate-output \
+  --replay-existing
+```
+
+这条命令读取现有：
+
+```text
+baseline/raw.jsonl
+candidate/raw.jsonl
+```
+
+在新的 `reanalysis-<UTC>/` 下重建 EvaluationRecord / PromotionDecision，`provider_calls=0`，不会覆盖原始真实 trial。
+
+replay 还会输出：
+
+- run / acceptance 状态；
+- failure / recovery 计数；
+- Skill discovered / selected / loaded 计数；
+- grader 明细。
+
+因此可以区分“任务根本没触发 recovery”和“触发了 recovery，但 Candidate 没被选择/加载”。
+
+#### 3.6.5 Promotion 是最后的显式动作
+
+Candidate 默认与正式 Skill 隔离：
+
+```text
+<TARGET_REPO>/.forge-agent/experience/   # Candidate / eval / decision
+<TARGET_REPO>/.agents/skills/           # 正式 project Skills
+```
+
+只有 persisted EvaluationRecord 与匹配的 `PASS` decision 才允许：
 
 ```python
-from evals.coding_agent.schema import EvaluationSuite
-from experience.candidate import DeterministicCandidateGenerator
-from experience.evaluation import evaluate_candidate
-from experience.promotion import PromotionGate, PromotionManager
-from experience.schema import CandidateStatus, PromotionStatus
-from experience.store import CandidateStore
-from experience.trajectory import ExperienceMiner, load_trajectory
+from experience.promotion import PromotionManager
 
-repo = "/path/to/target-repo"
-trajectories = [
-    load_trajectory("/path/to/trace-a.jsonl").normalized,
-    load_trajectory("/path/to/trace-b.jsonl").normalized,
-]
-pattern = ExperienceMiner().mine(trajectories)[0]
-candidate = DeterministicCandidateGenerator().generate(pattern)
-
-store = CandidateStore(repo)
-store.save_candidate(candidate)
-store.set_status(candidate.candidate_id, candidate.candidate_version, CandidateStatus.EVALUATING)
-
-suite = EvaluationSuite.load("evals/fixtures/skill_evolution/suite.json")
-
-# runner_factory_builder 必须返回 P2-0 使用的 ExecutionRunner factory；
-# tests/test_skill_evolution.py 给出了 deterministic 示例。
-record = evaluate_candidate(
-    candidate=candidate,
-    suite=suite,
-    output_dir="/tmp/forge-evolution-eval",
-    runner_factory_builder=runner_factory_builder,
-)
-store.save_evaluation(record)
-
-decision = PromotionGate().evaluate(candidate, record)
-store.save_decision(decision)
-
-if decision.status is PromotionStatus.PASS:
-    PromotionManager(repo, store).promote(candidate, decision)
+PromotionManager(repo, store).promote(candidate, decision)
 ```
 
-Candidate 默认在 `<TARGET_REPO>/.forge-agent/experience/`，不会自动进入 `<TARGET_REPO>/.agents/skills/`。只有持久化 evaluation + PASS decision 后显式 `promote()` 才部署。
-
-Forge-managed Skill rollback：
+Forge-managed Skill 可以显式 rollback：
 
 ```python
 PromotionManager(repo, store).rollback("skill-name", 1)
 ```
 
-deterministic 验证：
+`REJECT` 是正常结果。它意味着当前 Candidate 没有通过部署门槛，不意味着 P2-5 pipeline 自身失败。
 
-```bash
-python -m pytest -q tests/test_skill_evolution.py
-```
-
-这证明 mechanism/regression contract，不是“Agent 已经自主进化”。
+当前真实闭环曾得到一个 `REJECT`：Candidate 在 target / should-trigger 中功能 outcome 均通过，recovery trigger 也真实发生，但 Skill 没有被 select/load，因此没有可验证的 process 增量，最终没有 promotion。这个结果只证明 Gate 的真实拒绝路径工作，不证明稳定性能提升。
 
 ### 3.7 P2 最小手工检查
 
