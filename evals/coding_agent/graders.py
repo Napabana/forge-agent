@@ -75,14 +75,21 @@ def _grade_recovery_motif(spec: GraderSpec, context: GraderContext) -> GraderRes
                 continue
             for skill_index in range(recovery_index + 1, len(events)):
                 skill_event = events[skill_index]
+                skill_type = str(skill_event.get("event_type") or "")
+                if skill_type in {"failure_classified", "recovery_selected"}:
+                    break
                 skill_payload = skill_event.get("payload") or {}
                 if (
-                    skill_event.get("event_type") == "skill_loaded"
+                    skill_type == "skill_loaded"
                     and str(skill_payload.get("skill") or "") == skill_name
                 ):
                     observed_operation = None
                     for operation_index in range(skill_index + 1, len(events)):
-                        observed_operation = _semantic_operation(events[operation_index])
+                        operation_event = events[operation_index]
+                        operation_type = str(operation_event.get("event_type") or "")
+                        if operation_type in {"failure_classified", "recovery_selected"}:
+                            break
+                        observed_operation = _semantic_operation(operation_event)
                         if observed_operation is not None:
                             break
                     matched = {
