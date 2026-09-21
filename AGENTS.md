@@ -656,3 +656,12 @@ pytest -q
 - 当前执行环境尝试 clone GitHub 运行完整专项 pytest 仍失败于 DNS：`Could not resolve host: github.com`，因此需要用户本地完成专项回归。
 - 新增日志：`docs/changes/2026-09-21/P2-5-Recovery-Motif-Mining-v2.md`。
 - 下一步：用户 pull 最新 dev，跑 `tests/test_skill_evolution.py + tests/test_real_skill_evolution_driver.py`，然后对同一真实 batch summary 再执行一次 0-API `--mine-only --no-store`；只有真实 motif 达到 evidence_count>=2 且内容有意义时，才进入 real-model candidate evaluation。
+
+
+### 最后交接（2026-09-21，Recovery candidate trigger metadata）
+
+- 复核 P2-3 SkillRuntime 后确认：未加载 Skill 时，模型只看到 catalog 中的 skill name + description；旧 recovery candidate description 对所有 motif 都是同一句泛化文本，真实运行时缺乏可区分触发条件。
+- `experience/candidate.py` 已将 recovery candidate description 改为显式包含 `failure category + recovery strategy + observed next semantic action`，例如 `test_failure + inspect + INSPECT`。
+- `scripts/run_skill_evolution.py` 的 candidate report/CLI 新增 description/trigger 展示，便于在真实 A/B evaluation 前人工审查 trigger 是否具体且有意义。
+- `tests/test_skill_evolution.py` 新增 trigger-specific description 断言。
+- 本次仍未调用任何真实 Provider；下一步先判断 gate-ready motif 是否只是复述现有 `RecoveryPolicy`，再决定是否值得 real-model evaluation。
