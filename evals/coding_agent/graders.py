@@ -14,6 +14,110 @@ from evals.coding_agent.schema import GraderResult, GraderSpec, TrialMetrics
 
 _TEST_TOOLS = {"test", "pytest"}
 _FILE_READ_TOOLS = {"file_read", "file_view"}
+_INSPECT_TOOLS = {"file_read", "file_view", "search_text", "find_files", "find_symbol", "grep", "search", "repo_map", "repo_search"}
+_EDIT_TOOLS = {"file_write", "file_edit", "apply_patch"}
+
+
+def _semantic_operation(event: dict[str, Any]) -> str | None:
+    event_type = str(event.get("event_type") or "")
+    payload = event.get("payload") or {}
+    if event_type == "tool_execution_started":
+        tool_name = str(payload.get("tool_name") or "")
+        if tool_name in _INSPECT_TOOLS:
+            return "INSPECT"
+        if tool_name in _EDIT_TOOLS:
+            return "EDIT"
+        if tool_name in _TEST_TOOLS:
+            return "TEST"
+        if tool_name == "shell":
+            return "SHELL"
+        if payload.get("capability_provider") == "mcp" or tool_name.startswith("mcp__"):
+            return "EXTERNAL_TOOL"
+        return "TOOL" if tool_name else None
+    if event_type == "plan_created":
+        return "PLAN"
+    if event_type == "plan_revised":
+        return "REPLAN"
+    if event_type == "completion_rejected":
+        return "COMPLETION_REJECTED"
+    return None
+
+
+def _grade_recovery_motif(spec: GraderSpec, context: GraderContext) -> GraderResult:
+    events = load_trace_events(context.run_result.trace_path if context.run_result else None)
+    failure_category = str(spec.params.get("failure_category") or "")
+    recovery_strategy = str(spec.params.get("recovery_strategy") or "")
+    skill_name = str(spec.params.get("skill_name") or "")
+    next_operation = str(spec.params.get("next_operation") or "")
+
+    matched: dict[str, int | str | None] = {
+        "failure_index": None,
+        "recovery_index": None,
+        "skill_index": None,
+        "next_operation": None,
+    }
+    for failure_index, event in enumerate(events):
+        payload = event.get("payload") or {}
+        if (
+            event.get("event_type") != "failure_classified"
+            or str(payload.get("category") or "") != failure_category
+        ):
+            continue
+        for recovery_index in range(failure_index + 1, len(events)):
+            recovery_event = events[recovery_index]
+            recovery_payload = recovery_event.get("payload") or {}
+            if recovery_event.get("event_type") == "failure_classified":
+                break
+            if (
+                recovery_event.get("event_type") != "recovery_selected"
+                or str(recovery_payload.get("strategy") or "") != recovery_strategy
+            ):
+                continue
+            for skill_index in range(recovery_index + 1, len(events)):
+                skill_event = events[skill_index]
+                skill_payload = skill_event.get("payload") or {}
+                if (
+                    skill_event.get("event_type") == "skill_loaded"
+                    and str(skill_payload.get("skill") or "") == skill_name
+                ):
+                    observed_operation = None
+                    for operation_index in range(skill_index + 1, len(events)):
+                        observed_operation = _semantic_operation(events[operation_index])
+                        if observed_operation is not None:
+                            break
+                    matched = {
+                        "failure_index": failure_index,
+                        "recovery_index": recovery_index,
+                        "skill_index": skill_index,
+                        "next_operation": observed_operation,
+                    }
+                    passed = observed_operation == next_operation
+                    detail = (
+                        f"failure={failure_category}, recovery={recovery_strategy}, "
+                        f"skill={skill_name}, next_operation={observed_operation}, "
+                        f"expected={next_operation}"
+                    )
+                    return GraderResult(
+                        spec.grader_id,
+                        spec.kind,
+                        passed,
+                        spec.required,
+                        detail,
+                        matched,
+                    )
+            break
+    detail = (
+        f"required ordered motif not observed: failure={failure_category}, "
+        f"recovery={recovery_strategy}, skill={skill_name}, next={next_operation}"
+    )
+    return GraderResult(
+        spec.grader_id,
+        spec.kind,
+        False,
+        spec.required,
+        detail,
+        matched,
+    )
 
 
 @dataclass(frozen=True)
@@ -104,6 +208,9 @@ def grade(spec: GraderSpec, context: GraderContext) -> GraderResult:
             f"changed={changed}, expected={expected}",
             {"status_porcelain": completed.stdout[-4000:]},
         )
+
+    if spec.kind == "recovery_motif":
+        return _grade_recovery_motif(spec, context)
 
     if spec.kind == "skill_selection":
         trace_path = context.run_result.trace_path if context.run_result else None
