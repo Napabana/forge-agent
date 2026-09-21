@@ -12,6 +12,7 @@ from experience.schema import EvaluationCase, EvaluationRecord, EvaluationRole, 
 
 RunnerFactoryBuilder = Callable[[Path | None], RunnerFactory]
 _EVOLUTION_GRADER_ID = "evolution-skill-trigger"
+_PROCESS_GRADER_KINDS = frozenset({"run_trace", "skill_selection", "recovery_motif"})
 
 
 def evaluation_role(task: EvalTask) -> EvaluationRole:
@@ -102,8 +103,22 @@ def materialize_candidate_skill_root(
     return target
 
 
-def _required_graders_passed(result: TrialResult) -> bool:
-    return all(item.passed for item in result.grader_results if item.required)
+def _required_outcome_graders_passed(result: TrialResult) -> bool:
+    """Outcome checks exclude process-only evidence used by the promotion gate."""
+    return all(
+        item.passed
+        for item in result.grader_results
+        if item.required and item.kind not in _PROCESS_GRADER_KINDS
+    )
+
+
+def _outcome_success(result: TrialResult) -> bool:
+    return (
+        result.execution_status == "executed"
+        and result.run_status == "success"
+        and result.acceptance_status in {"not_requested", "passed"}
+        and _required_outcome_graders_passed(result)
+    )
 
 
 def _candidate_loaded(result: TrialResult, candidate_name: str) -> tuple[bool, bool]:
@@ -161,10 +176,10 @@ def build_evaluation_record(
             task_id=task_id,
             repetition=repetition,
             role=evaluation_role(tasks[task_id]),
-            baseline_success=left.success,
-            candidate_success=right.success,
-            baseline_required_graders_passed=_required_graders_passed(left),
-            candidate_required_graders_passed=_required_graders_passed(right),
+            baseline_success=_outcome_success(left),
+            candidate_success=_outcome_success(right),
+            baseline_required_graders_passed=_required_outcome_graders_passed(left),
+            candidate_required_graders_passed=_required_outcome_graders_passed(right),
             candidate_loaded=loaded,
             candidate_process_passed=process_passed,
             baseline_steps=left.metrics.steps,
