@@ -179,7 +179,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     from experience.candidate import DeterministicCandidateGenerator
     from experience.promotion import PromotionGateConfig
     from experience.store import CandidateStore
-    from experience.trajectory import ExperienceMiner, load_trajectory
+    from experience.trajectory import (
+        MINING_STRATEGY_VERSION,
+        ExperienceMiner,
+        load_trajectory,
+    )
 
     loaded = []
     for trace in traces:
@@ -233,6 +237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = {
         "schema_version": 1,
         "mode": "mine_only",
+        "mining_strategy": MINING_STRATEGY_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "repo": str(repo),
         "provider_calls": 0,
@@ -253,6 +258,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("\nP2-5 real-trace mining — OFFLINE / API calls = 0")
     print(f"Repo        : {repo}")
     print(f"Traces      : {len(normalized)} total / {len(eligible)} eligible")
+    print(f"Strategy    : {MINING_STRATEGY_VERSION}")
     print(f"Patterns    : {len(patterns)}")
     print(f"Candidates  : {len(candidate_rows)}")
     print(f"Store       : {'disabled' if store is None else store.root}")
