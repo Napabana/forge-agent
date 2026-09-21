@@ -11,10 +11,10 @@ from agent.core import AgentConfig
 from agent.runner import ExecutionRunner
 from config.schema import load_config
 from evals.coding_agent.runner import validate_suite_references
-from evals.coding_agent.schema import EvaluationRole, EvaluationSuite, GraderSpec
+from evals.coding_agent.schema import EvaluationSuite, GraderSpec
 from experience.evaluation import evaluate_candidate, evaluation_role
 from experience.promotion import PromotionGate
-from experience.schema import PatternType, SkillCandidate
+from experience.schema import EvaluationRole, PatternType, SkillCandidate
 from llm.router import create_backend_from_config
 from tools.base import ToolRegistry
 from tools.file_tool import FileEditTool, FileReadTool, FileViewTool, FileWriteTool
