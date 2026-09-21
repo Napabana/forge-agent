@@ -372,3 +372,18 @@ CLI
 4. 真实 A/B/C 完成后，从 batch summary 提取 eligible Trace v2，再进入 P2-5 candidate generation/evaluation。
 
 本轮到此停止，不替用户触发真实 Provider。
+
+
+## 最终真实 Batch 结果（2026-09-21）
+
+将 Batch Runner 默认 step budget 调整为 60 后，用户从同一 checkpoint 继续执行：
+
+- Task A：已是 `SUCCESS / acceptance=passed / P2-5 eligible`，resume 正确 SKIP，未重复调用 API。
+- Task B：31 steps / 381,712 tokens / 692.2s，focused batch tests 19 passed，full suite 47 passed，最终 `success + acceptance=passed + P2-5 eligible`。
+- Task C：32 steps / 602,226 tokens / 488.4s，focused policy tests 21 passed，full suite 68 passed，最终 `success + acceptance=passed + P2-5 eligible`。
+- 本次成功 batch summary：84 steps / 1,227,602 tokens / 1439.1s。
+- eligible traces 共 3 条，A/B/C 全部可作为 P2-5 positive mining 输入。
+
+B 运行中出现一次 LLM timeout 和一次 connection error，均由现有 bounded retry 恢复，没有导致最终任务失败。
+
+因此本 Batch Runner 的真实任务生成目标已经完成。后续不再继续生成额外 task，而转入 `scripts/run_skill_evolution.py --mine-only` 做真实 Trace mining/candidate generation。
