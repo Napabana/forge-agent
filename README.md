@@ -430,6 +430,10 @@ cancel
 
 文件工具自身也接收 workspace，因此 direct 模式的文件读写不会仅依赖 LLM 自觉提供正确路径。
 
+针对已有文件的局部修改优先使用 `file_edit`：它要求 `old_text` 在目标文件中唯一出现，并基于原始 bytes 做一次 exact replacement，因此未命中的区域不会被重新序列化，能够保留 CRLF/LF、EOF newline、BOM 等原始格式。只有新建文件或确实需要整文件重写时才使用 `file_write`。
+
+Shell effect 采用 fail-safe 分类：只有可证明只读的命令才标记为 read-only；`python -c`、`find`、`awk` 等表达能力较强的命令不再仅凭前缀视为只读。只读 pipeline 仅在每个 stage 都属于明确只读子集时放行，例如 `git diff | cat`；重定向、command substitution、未知 stage 或 mutation-capable stage 仍按 may-mutate 处理。
+
 ## 9. Worktree 与 TaskEngine：隔离 Git 工作区，而不是“复制仓库”
 
 核心文件：`task/engine.py`、`runtime/worktree.py`、`agent/orchestrate.py`。

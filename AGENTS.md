@@ -586,3 +586,16 @@ pytest -q
 - 本轮没有提供可核验的 Docker/sandbox trace，因此不得把 host filesystem isolation 写成 real-model verified；search/file workspace isolation 已由 deterministic regression 覆盖，shell sandbox 仍属于已有独立 runtime contract。
 - P2-4 MCP 至此具备 deterministic regression + real-model pr-test E2E 双层证据，可正式收口为 DONE。后续进入 P2-5 Trajectory-driven Skill Evolution 验收/实操。
 - 验证日志：`docs/changes/2026-09-21/P2-4-MCP-pr-test-Real-Model-E2E-DONE.md`。
+
+
+### 收口补充（2026-09-21，MCP E2E 后噪声治理：IMPLEMENTED / LOCAL VALIDATION PENDING）
+
+- pr-test 测试分支 `forge-p2-mcp-demo` 新增 `.gitattributes`：`* text=auto eol=lf`，用于冻结 benchmark checkout 的 LF 语义，提交 `0de0c7cc8d947999900e65c2c25b30c9ebfa3af1`。
+- Forge 新增 `FileEditTool`：唯一 exact replacement，基于 raw bytes 替换，保留未修改区域的 CRLF/LF、EOF newline、BOM；workspace / Permission 路径边界与 file_write 一致。提交 `164513ee523a236b5ec63d897a7d5fb2585cb0a7`。
+- Shell fail-safe 收紧：`python -c/python3 -c`、`find`、`awk`、`sed -n` 不再按简单只读前缀处理；PermissionManager 与 Planning 统一复用 `_is_repository_readonly`，未知/表达能力强的命令保守 CONFIRM。提交 `f658b1e35bd974461bf16c60f3d83f521c6bd3b4`。
+- 只读 pipeline 支持：`cat | tail`、`git diff | cat`、`wc | tail` 只有在所有 stage 都可证明只读时标记 READ_ONLY；重定向、command substitution、background、`||`、未知/可变更 stage 仍 fail-safe。提交 `d1edd08401285ee981a5cf0b623b680cbb284411`。
+- System Prompt 明确：有专用 repo tool 时优先于 shell；existing file localized change 优先 file_edit；没有 tests/repo policy/diff 证据时不要检查 CRLF/EOF newline；post-edit verification 通过后避免重复检查并 FINISH。提交 `7ecbdc3b8cc7e3c6e8288c07460babbcc79998bd`。
+- Semantic Progress 新增 MCP evidence：首次成功且内容唯一的 MCP observation 可推进 semantic progress；完全相同的重复 MCP output 不重复刷新进度。提交 `c1d3ed24b388e90b034be51f61baf66928ce4326`。
+- 本轮只完成实现与 deterministic tests 补充；当前执行环境无法联网拉取仓库，因此没有在这里真实运行 pytest。用户本地验证前不得写“tests passed”。
+- 推荐定向测试：`tests/test_day3.py tests/test_cli_isolate.py tests/test_harness.py tests/test_structured_planning.py tests/test_structured_recovery.py tests/test_repo_map_prompt_layout.py tests/test_mcp_integration.py`，随后再跑全量 `python -m pytest -q`。
+- 该轮目标是收敛 MCP real-model run 中的非 Provider 噪声，不产生任何 token/latency improvement claim；需要重新跑 clean pr-test E2E 后才能比较轨迹。

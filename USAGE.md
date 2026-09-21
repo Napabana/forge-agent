@@ -143,7 +143,36 @@ agent:
 
 此时 80k 是 Forge 自己的输入预算 cap fallback，不代表模型真实 Context Window。
 
-### 2.2 旧字段仍能用
+### 2.2 编辑工具选择
+
+对于已有文件的小范围修改，优先让 Agent 使用：
+
+```text
+file_edit(path, old_text, new_text)
+```
+
+`file_edit` 要求 `old_text` 在目标文件中恰好出现一次；它只替换这一段 UTF-8 字节，未修改区域保持原样，因此适合避免 CRLF/LF、EOF newline 等格式噪声。
+
+以下情况再使用 `file_write`：
+
+- 新建文件；
+- 目标文件需要整体重写；
+- 不能可靠构造唯一 exact replacement。
+
+Shell 只在没有等价专用工具时使用。Forge 对 Shell 的 read-only 判断是保守的；只有全部 stage 都可证明只读的 pipeline 才按只读处理。
+
+正式 benchmark 前建议确保目标仓库工作树干净：
+
+```bash
+git config core.autocrlf false
+git reset --hard
+git clean -fdx
+git status --short
+```
+
+最后一条应无输出。
+
+### 2.3 旧字段仍能用
 
 当前为了兼容历史配置：
 
