@@ -36,6 +36,47 @@ def _dedupe_consecutive(items: Iterable[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _recovery_motifs(workflow: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    """Extract bounded typed recovery motifs from a full normalized workflow.
+
+    A motif is anchored by one classified failure and the first recovery strategy
+    selected for that failure. At most the first semantic action after recovery is
+    retained as local context. Full workflow provenance remains on the source
+    trajectory; it is deliberately not part of the grouping key.
+    """
+    motifs: list[tuple[str, ...]] = []
+    seen: set[tuple[str, ...]] = set()
+    for index, token in enumerate(workflow):
+        if not token.startswith("FAIL:"):
+            continue
+        failure = token.split(":", 1)[1]
+        recovery: str | None = None
+        context: str | None = None
+        for cursor in range(index + 1, len(workflow)):
+            current = workflow[cursor]
+            if current.startswith("FAIL:"):
+                break
+            if not current.startswith("RECOVER:"):
+                continue
+            recovery = current.split(":", 1)[1]
+            for next_cursor in range(cursor + 1, len(workflow)):
+                next_token = workflow[next_cursor]
+                if next_token.startswith(("FAIL:", "RECOVER:")):
+                    break
+                context = next_token
+                break
+            break
+        if recovery is None:
+            continue
+        motif = (f"failure:{failure}", f"recovery:{recovery}")
+        if context is not None:
+            motif += (context,)
+        if motif not in seen:
+            seen.add(motif)
+            motifs.append(motif)
+    return tuple(motifs)
+
+
 def _load_trace(path: Path) -> tuple[tuple[dict[str, Any], ...], str]:
     if not path.is_file():
         raise ValueError(f"trace artifact does not exist: {path}")
@@ -213,35 +254,58 @@ def load_trajectory(
 
 
 class ExperienceMiner:
-    """Deterministically groups eligible typed trajectories into exact patterns."""
+    """Deterministically mine reusable patterns from eligible typed trajectories.
+
+    Successful workflows keep the original exact full-workflow grouping. Recovery
+    workflows are mined as bounded local motifs so harmless differences elsewhere
+    in a run do not prevent repeated recovery evidence from aggregating.
+    """
 
     def mine(self, trajectories: Iterable[NormalizedTrajectory]) -> tuple[ExperiencePattern, ...]:
         groups: dict[tuple[str, tuple[str, ...]], list[NormalizedTrajectory]] = {}
         for trajectory in trajectories:
             if not trajectory.eligible or not trajectory.workflow:
                 continue
-            pattern_type = (
-                PatternType.RECOVERY_WORKFLOW
-                if trajectory.has_recovery
-                else PatternType.SUCCESSFUL_WORKFLOW
-            )
-            if pattern_type is PatternType.RECOVERY_WORKFLOW:
-                recovery_signature = tuple(
-                    [f"failure:{value}" for value in trajectory.failure_categories]
-                    + [f"recovery:{value}" for value in trajectory.recovery_strategies]
-                )
-                signature = recovery_signature + trajectory.workflow
+            if trajectory.has_recovery:
+                for signature in _recovery_motifs(trajectory.workflow):
+                    groups.setdefault(
+                        (PatternType.RECOVERY_WORKFLOW.value, signature),
+                        [],
+                    ).append(trajectory)
             else:
-                signature = trajectory.workflow
-            groups.setdefault((pattern_type.value, signature), []).append(trajectory)
+                groups.setdefault(
+                    (PatternType.SUCCESSFUL_WORKFLOW.value, trajectory.workflow),
+                    [],
+                ).append(trajectory)
 
         patterns: list[ExperiencePattern] = []
         for (pattern_type_value, signature), members in groups.items():
-            ordered = sorted(members, key=lambda item: (item.ref.run_id, item.ref.task_id, item.ref.trace_sha256, item.ref.trace_ref))
-            failure_categories = tuple(sorted({item for member in ordered for item in member.failure_categories}))
-            recovery_strategies = tuple(sorted({item for member in ordered for item in member.recovery_strategies}))
+            ordered = sorted(
+                members,
+                key=lambda item: (
+                    item.ref.run_id,
+                    item.ref.task_id,
+                    item.ref.trace_sha256,
+                    item.ref.trace_ref,
+                ),
+            )
+            pattern_type = PatternType(pattern_type_value)
+            if pattern_type is PatternType.RECOVERY_WORKFLOW:
+                failure_categories = tuple(
+                    token.split(":", 1)[1]
+                    for token in signature
+                    if token.startswith("failure:")
+                )
+                recovery_strategies = tuple(
+                    token.split(":", 1)[1]
+                    for token in signature
+                    if token.startswith("recovery:")
+                )
+            else:
+                failure_categories = ()
+                recovery_strategies = ()
             patterns.append(ExperiencePattern.build(
-                pattern_type=PatternType(pattern_type_value),
+                pattern_type=pattern_type,
                 signature=signature,
                 source_trajectories=tuple(member.ref for member in ordered),
                 failure_categories=failure_categories,
