@@ -621,6 +621,7 @@ pytest -q
 - 每个成功 run 完成后还通过 `experience.trajectory.load_trajectory` 复核当前 P2-5 positive-mining eligibility；因此 summary 中的 eligible trace 与 P2-5 当前 `success + acceptance passed` contract 同源。
 - dry-run 是默认安全模式；只有显式 `--execute` 才进入 backend 构造。内存 override 固定 `planning=always / recovery=structured / skills=false / MCP disabled / max_steps=30`，未修改 `config/default.yaml`。
 - 新增 resume checkpoint：保存 repo path/base branch/base HEAD/working-tree fingerprint 与每个 Task 的 status/acceptance/trace/steps/tokens/elapsed；`--resume` 只跳过真正 accepted + eligible 的任务，未知人工修改在 Provider 构造前 fail-closed；A/B/C 全部通过时 execute+resume 不构造 backend。
+- Provider/框架若以异常形式终止，Batch Runner 也会先保存当前 working-tree fingerprint 与失败状态再停止，不自动改 prompt 或重试；后续 `--resume` 仍基于 checkpoint 做安全判断。
 - 新增 `tests/test_pr_test_practice_batch.py`，覆盖 dry-run provider 隔离、resume skip、all-passed zero-provider resume、checkpoint drift 拒绝与 hidden probe 编译。
 - 本窗口严格未调用真实 DeepSeek/OpenAI/Anthropic/KRILL Provider。离线验证：脚本/测试 `py_compile` 通过；专项 no-provider stub 环境 `5 passed in 0.12s`；synthetic calculator repo 上 A/B/C 三个 hidden verifier 均实际返回 True。
 - 当前容器无法直接 clone GitHub（DNS 解析失败），因此没有在这里运行完整 forge-agent checkout 的仓库级 pytest，也没有执行真实 pr-test Agent tasks；不能把 deterministic validation 写成 real-model success。
