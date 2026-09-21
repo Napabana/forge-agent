@@ -119,6 +119,24 @@ class TestPermission:
         dec = perm.check(block("shell", cmd="ls -la"))
         assert dec.is_allow
 
+    def test_python_inline_code_is_not_treated_as_readonly(self):
+        perm = PermissionManager()
+        dec = perm.check(
+            block("shell", cmd="python -c \"open('x','w').write('y')\"")
+        )
+        assert dec.is_confirm
+
+    def test_unknown_shell_command_fails_safe_to_confirm(self):
+        perm = PermissionManager()
+        dec = perm.check(block("shell", cmd="custom-tool --do-something"))
+        assert dec.is_confirm
+
+    def test_byte_inspection_tools_are_readonly(self):
+        perm = PermissionManager()
+        assert perm.check(block("shell", cmd="xxd config.py")).is_allow
+        assert perm.check(block("shell", cmd="od -c config.py")).is_allow
+        assert perm.check(block("shell", cmd="strings artifact.bin")).is_allow
+
     def test_sudo_denied(self):
         # s20 DENY_LIST 补充项 sudo
         perm = PermissionManager()

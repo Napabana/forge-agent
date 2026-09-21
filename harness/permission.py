@@ -25,6 +25,7 @@ from typing import Any
 from tools.shell_tool import (
     _BLOCKED_PATTERNS,
     _CONFIRM_KEYWORDS,
+    _is_repository_readonly,
 )
 from tools.base import ToolEffect, ToolRegistry
 
@@ -168,10 +169,12 @@ class PermissionManager:
         for pattern in self.deny_patterns:
             if pattern.lower() in cmd_lower:
                 return _deny(f"'{pattern}' is on the deny list")
+        if _is_repository_readonly(command):
+            return ALLOW
         for kw in self.confirm_keywords:
             if kw in cmd_lower:
                 return _confirm(f"destructive command: {command}")
-        return ALLOW
+        return _confirm(f"shell command is not provably read-only: {command}")
 
 
 def _path_escape_reason(path: str, workspace: str) -> str:

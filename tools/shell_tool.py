@@ -48,12 +48,11 @@ _READONLY_PREFIXES: tuple[str, ...] = (
     "cat", "head", "tail", "less", "more",
     "echo", "printf",
     "pwd", "whoami", "which", "type",
-    "find", "locate",
+    "locate",
     "grep", "egrep", "fgrep", "rg", "ag",
-    "wc", "sort", "uniq", "cut", "awk", "sed -n",
+    "wc", "sort", "uniq", "cut",
     "diff", "diff3",
-    "file", "stat",
-    "python -c", "python3 -c",
+    "file", "stat", "od", "xxd", "strings",
     "python -m pytest", "python3 -m pytest", "pytest",
     "git status", "git diff", "git log", "git show",
     "git branch", "git tag", "git remote",
@@ -314,14 +313,14 @@ def _is_repository_readonly(cmd: str) -> bool:
 
 
 def _needs_confirm(cmd: str) -> bool:
+    """Require confirmation whenever a command is not provably repository-read-only.
+
+    This intentionally shares the same conservative classifier used by Planning.
+    Direct runs without a confirmation callback keep the historical execution
+    behavior; when confirmation is enabled, unknown/expressive shell commands are
+    no longer silently treated as safe merely because they lack one keyword.
     """
-    判断命令是否需要用户确认。
-    不在白名单 且 包含危险关键词 → 需要确认。
-    """
-    if _is_readonly(cmd):
-        return False
-    cmd_lower = cmd.lower()
-    return any(kw in cmd_lower for kw in _CONFIRM_KEYWORDS)
+    return not _is_repository_readonly(cmd)
 
 
 def _truncate(text: str, max_chars: int) -> str:

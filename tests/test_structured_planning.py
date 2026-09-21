@@ -416,6 +416,13 @@ def test_tool_effect_defaults_fail_safe_and_read_tools_opt_in(tmp_path: Path):
     assert registry.is_mutating("shell", {"cmd": "echo fixed > value.txt"}) is True
     assert registry.is_mutating("shell", {"cmd": "git commit -m fix"}) is True
     assert registry.is_mutating("shell", {"cmd": "cat value.txt; rm value.txt"}) is True
+    assert registry.is_mutating(
+        "shell",
+        {"cmd": "python -c \"open('value.txt','w').write('x')\""},
+    ) is True
+    assert registry.is_mutating("shell", {"cmd": "find . -delete"}) is True
+    assert registry.is_mutating("shell", {"cmd": "awk 'BEGIN {system(\"touch x\")}'"}) is True
+    assert registry.is_mutating("shell", {"cmd": "xxd value.txt"}) is False
 
 
 def test_eval_architecture_variants_map_to_real_planning_configs():
