@@ -7,7 +7,9 @@
 3. `agent run --isolate` Git Worktree；
 4. `agent run --sandbox` 与 `--isolate --sandbox` Docker；
 5. GitHub Issue → Agent → Acceptance → PR；
-6. EventLog / Trace v2 / Session / Worktree 产物检查。
+6. P2 Planning / Recovery / Skills / MCP 的运行与 Trace 检查；
+7. P2-0 Evaluation Harness 与 P2-5 offline mining / real-model final gate / replay；
+8. EventLog / Trace v2 / Session / Worktree / Evidence 产物检查。
 
 项目整体架构与实现文件说明见 [`README.md`](README.md)。
 
