@@ -605,7 +605,10 @@ def _trajectory_eligible(trace_path: str | None) -> tuple[bool, str]:
         return False, "missing trace_path"
     from experience.trajectory import load_trajectory
 
-    loaded = load_trajectory(trace_path)
+    try:
+        loaded = load_trajectory(trace_path)
+    except Exception as exc:
+        return False, f"trajectory_check_failed:{type(exc).__name__}:{exc}"
     normalized = loaded.normalized
     return bool(normalized.eligible), normalized.eligibility_reason
 
@@ -782,13 +785,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             state["updated_at"] = datetime.now(timezone.utc).isoformat()
             _persist(artifact_dir, state)
 
-            result, elapsed, eligible, reason = _run_task(
-                task_id,
-                repo=repo,
-                runner=runner,
-                permission=permission,
-                renderer=renderer,
-            )
+            try:
+                result, elapsed, eligible, reason = _run_task(
+                    task_id,
+                    repo=repo,
+                    runner=runner,
+                    permission=permission,
+                    renderer=renderer,
+                )
+            except BaseException as exc:
+                state["tasks"][task_id] = {
+                    "status": "interrupted" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed",
+                    "acceptance_status": "skipped",
+                    "acceptance_error": f"batch execution raised {type(exc).__name__}: {exc}",
+                    "steps": 0,
+                    "tokens": 0,
+                    "elapsed": 0.0,
+                    "trace_path": None,
+                    "trajectory_eligible": False,
+                    "trajectory_eligibility_reason": "batch_execution_exception",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }
+                state["repo_snapshot"] = _repo_snapshot(repo)
+                state["updated_at"] = datetime.now(timezone.utc).isoformat()
+                _persist(artifact_dir, state)
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                print(f"\nSTOP: Task {task_id} raised {type(exc).__name__}: {exc}")
+                exit_code = 1
+                break
+
             record = _record_from_result(result, elapsed, eligible, reason)
             state["tasks"][task_id] = record
             state["repo_snapshot"] = _repo_snapshot(repo)
