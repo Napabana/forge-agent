@@ -107,12 +107,19 @@ def _required_graders_passed(result: TrialResult) -> bool:
 
 
 def _candidate_loaded(result: TrialResult, candidate_name: str) -> tuple[bool, bool]:
+    loaded = False
+    process_checks: list[bool] = []
     for grader in result.grader_results:
-        if grader.grader_id != _EVOLUTION_GRADER_ID:
-            continue
-        selected = {str(value) for value in grader.evidence.get("selected_skills", [])}
-        return candidate_name in selected, grader.passed
-    return False, True
+        if grader.grader_id == _EVOLUTION_GRADER_ID:
+            selected = {
+                str(value)
+                for value in grader.evidence.get("selected_skills", [])
+            }
+            loaded = candidate_name in selected
+            process_checks.append(grader.passed)
+        elif grader.kind == "recovery_motif":
+            process_checks.append(grader.passed)
+    return loaded, all(process_checks) if process_checks else True
 
 
 def _evaluation_failed(result: TrialResult) -> tuple[bool, str | None]:
