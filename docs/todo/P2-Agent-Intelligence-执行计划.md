@@ -1,13 +1,18 @@
 # P2 Agent Intelligence 执行计划
 
-状态更新时间：2026-09-19  
-当前实现基线：`dev@62076b792cfd18d5bb4473000a1538a4e4206e7c`
+状态更新时间：2026-09-21  
+阶段状态：**DONE / REAL E2E CLOSED**  
+收口基线：以当前 `dev` 最新 HEAD 为准；P2-5 最终真实闭环与 progressive-disclosure 修复已完成。
+
+> 最终总结见 `docs/changes/2026-09-21/P2-Agent-Intelligence-总收口.md`。
 
 > 命名说明：仓库历史上已经存在 “P2 Repo Map” 实验与证据目录。本计划使用 **P2 Agent Intelligence** 作为新阶段名称，子任务编号为 P2-0 ～ P2-5，避免把旧 Repo Map P2 重新解释为未完成。
 
 ## 0. 阶段目标
 
 P0/P1 已完成 Agent loop、Tool lifecycle、Permission/Hook/Cancel、Trace v2、Context Compaction、Session、Failure Harness、Repo Map、Acceptance、GitHub delivery 与 Evidence Pack。
+
+P2-0 ～ P2-5 已全部完成并收口。最终实现没有引入第二套 Agent loop：Planning、Recovery、Skills、MCP 进入现有 runtime，Evaluation Harness 作为统一任务级评测外环，Trajectory Evolution 位于 post-run offline path。P2-5 已完成真实 accepted trajectories → mining → Candidate → real-model baseline/candidate final gate → PromotionGate REJECT 的完整闭环；REJECT 被保留为有效结果，没有为了演示效果强行 promotion。
 
 P2 不再继续堆普通 Tool/UI，而是补齐 coding agent 的任务级智能闭环：
 
@@ -666,6 +671,17 @@ mcp_integration/
 - P2-5 不回写 source Trace，也不创建 Trace v3；candidate/eval/promotion lifecycle 写入独立 bounded `evolution_events.jsonl`，只存 id/hash/reference 等 metadata。
 - 新增独立 `evals/fixtures/skill_evolution/` 与 `tests/test_skill_evolution.py`；不修改 P2-0 frozen suite 或历史 `evals/results`。
 - 用户已在本地完成 P2-5 专项、P2-3/P2-2/P2-1/P2-0/Trace/Runner/Failure Harness 回归、Evidence Pack 校验与全量 pytest，并明确确认全部通过。最终通过轮次未提供具体 passed 数量、完整 stdout 或耗时，因此不补造数字。
+
+真实闭环补充（2026-09-21）：
+
+- 使用独立 `pr-test` practice batch 产生 3 条 `success + acceptance=passed + trajectory eligible` 的真实 Trace v2；accepted batch 合计 84 steps / 1,227,602 tokens / 1439.1s，仅作为 source evidence，不作为性能结论。
+- 首轮完整 recovery workflow grouping 在真实数据上过度碎片化，升级为 `recovery_motif_v2`：`failure category → recovery strategy → first semantic action`；successful workflow 仍保持完整 workflow 精确分组。
+- 同一 3 条 Trace 重新 mining 得到 7 个 recovery motifs，其中 3 个达到默认 `min_evidence_count=2`。人工对照现有 RecoveryPolicy 后，只选择 `no_progress → change_approach → INSPECT` 进入真实 final gate，避免为重复 deterministic policy 的 Candidate 浪费 API。
+- final gate 保留 TARGET / SHOULD_TRIGGER / SHOULD_NOT_TRIGGER / NON_REGRESSION 四角色，执行 baseline/candidate 共 8 个 real-model Agent trials。首轮运行中的 timeout/connection retry 被既有 provider retry 恢复，没有 evaluation infrastructure failure。
+- 0-API replay 修正 outcome/process 报告语义后确认：四个 baseline/candidate 功能 outcome 全部成功；target/should-trigger 均真实发生 failure/recovery，但 Candidate 只被 discover，没有 select/load；PromotionGate 最终 `REJECT`，没有 promotion。
+- 真实 E2E 暴露 progressive-disclosure 问题：旧 Candidate description 提前暴露 next semantic action。future renderer 已升级为 `progressive_disclosure_v2`，metadata 只保留 failure/recovery trigger，具体下一动作必须 `skill_load` 后从完整 `SKILL.md` 获得。
+- 新增安全入口：`scripts/run_skill_evolution.py --mine-only`、`scripts/run_real_skill_evolution_eval.py` 默认 dry-run、显式 `--execute`、以及 0-API `--replay-existing`。历史 real-model artifacts 保持 immutable。
+- 用户最终在本地确认 P2-5 收口后的相关回归全部通过；本轮未提供最终 passed 数量或耗时，因此不补造数字。
 
 ## 定位
 
