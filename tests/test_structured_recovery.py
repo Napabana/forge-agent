@@ -106,6 +106,41 @@ def _revise_action() -> Action:
     )
 
 
+class SequenceMCPTool(BaseTool):
+    def __init__(self, outputs: list[str]) -> None:
+        self.outputs = list(outputs)
+
+    @property
+    def effect(self) -> ToolEffect:
+        return ToolEffect.READ_ONLY
+
+    @property
+    def name(self) -> str:
+        return "mcp__fixture__guidance"
+
+    @property
+    def description(self) -> str:
+        return "deterministic MCP-like evidence tool"
+
+    @property
+    def metadata(self) -> dict:
+        return {
+            "capability_provider": "mcp",
+            "mcp_server_id": "fixture",
+            "mcp_remote_tool_name": "guidance",
+            "mcp_transport": "stdio",
+        }
+
+    @property
+    def parameters_schema(self) -> dict:
+        return {"type": "object", "properties": {}, "required": []}
+
+    def execute(self, params: dict) -> ToolResult:
+        if not self.outputs:
+            raise AssertionError("MCP output script exhausted")
+        return ToolResult(success=True, output=self.outputs.pop(0))
+
+
 class SequenceTestTool(BaseTool):
     def __init__(self, outcomes: list[bool]) -> None:
         self.outcomes = list(outcomes)
@@ -641,3 +676,45 @@ def test_new_test_evidence_progresses_once_but_duplicate_result_does_not(tmp_pat
         if row["payload"]["category"] == "no_progress"
     ]
     assert len(no_progress) == 1
+
+
+def test_new_mcp_evidence_progresses_once_but_duplicate_result_does_not(tmp_path: Path):
+    repo = _init_repo(tmp_path / "mcp-evidence")
+    registry = ToolRegistry().register(
+        SequenceMCPTool([
+            "policy=strict",
+            "policy=strict",
+            "policy=strict; verify=tests",
+        ])
+    )
+    task = Task(
+        "Inspect external capability evidence.",
+        str(repo),
+        task_id="mcp-evidence",
+        max_steps=6,
+    )
+    result, _, _, rows = _run(
+        tmp_path,
+        [
+            _call("mcp__fixture__guidance"),
+            _call("mcp__fixture__guidance"),
+            _call("mcp__fixture__guidance"),
+            _finish(),
+        ],
+        registry,
+        task=task,
+        config=AgentConfig(
+            max_steps=6,
+            repo_map_mode="none",
+            recovery_mode="structured",
+            reflection_no_edit_steps=1,
+        ),
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    no_progress = [
+        row for row in _events(rows, EventType.FAILURE_CLASSIFIED.value)
+        if row["payload"]["category"] == "no_progress"
+    ]
+    assert len(no_progress) == 1
+    assert no_progress[0]["payload"]["step_id"] == 2

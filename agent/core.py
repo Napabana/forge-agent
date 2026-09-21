@@ -932,12 +932,26 @@ class Agent:
                     last_test_passed = observation.is_success()
                     test_evidence_advanced = semantic_progress.mark_once(
                         "test",
-                        self._test_evidence_key(tc.name, observation),
+                        self._observation_evidence_key(tc.name, observation),
                     )
                     if last_test_passed:
                         last_successful_test_content_state = current_repo_content_state
 
-                if repository_content_changed or test_evidence_advanced:
+                mcp_evidence_advanced = False
+                if (
+                    observation.is_success()
+                    and tool_metadata.get("capability_provider") == "mcp"
+                ):
+                    mcp_evidence_advanced = semantic_progress.mark_once(
+                        "mcp",
+                        self._observation_evidence_key(tc.name, observation),
+                    )
+
+                if (
+                    repository_content_changed
+                    or test_evidence_advanced
+                    or mcp_evidence_advanced
+                ):
                     steps_without_semantic_progress = 0
                 else:
                     steps_without_semantic_progress += 1
@@ -1360,7 +1374,7 @@ class Agent:
         return action.action_type.value
 
     @staticmethod
-    def _test_evidence_key(tool_name: str, observation: Observation) -> str:
+    def _observation_evidence_key(tool_name: str, observation: Observation) -> str:
         payload = "\n".join(
             (
                 tool_name,
