@@ -63,9 +63,11 @@ class RunEventRenderer:
             tool = observation.get("tool_name", "unknown")
             color = "green" if status == "success" else "red"
             click.echo(click.style(f"  Observation [{tool}]: {status}", fg=color))
-            detail = observation.get("error") or observation.get("output") or ""
-            if detail and (not self.compact or status != "success"):
-                lines = str(detail).strip().splitlines()
+            show_detail = not self.compact or status != "success"
+            output = str(observation.get("output") or "").strip()
+            error = str(observation.get("error") or "").strip()
+            if show_detail and output:
+                lines = output.splitlines()
                 for line in lines[:self.preview_lines]:
                     click.echo(click.style(f"    {line}", dim=True))
                 if len(lines) > self.preview_lines:
@@ -73,6 +75,8 @@ class RunEventRenderer:
                         f"    ... ({len(lines) - self.preview_lines} more lines)",
                         dim=True,
                     ))
+            if show_detail and status != "success" and error:
+                click.echo(click.style(f"    Error: {error}", dim=True))
             return
 
         if event_type is EventType.PLAN_CREATED:
