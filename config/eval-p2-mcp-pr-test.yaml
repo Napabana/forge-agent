@@ -1,0 +1,42 @@
+llm:
+  provider: openai
+  protocol: chat_completions
+  model: deepseek-v4.1-flash
+  api_key: ${KRILL_API_KEY}
+  base_url: https://api.krill-code.net/coding/v1
+  strict_tool_schema: auto
+  context_window: 1000000
+  model_max_output_tokens: 384000
+  max_output_tokens: 50000
+
+agent:
+  max_steps: 30
+  planning_mode: always
+  recovery_mode: structured
+  recovery_max_attempts: 4
+  skills_enabled: false
+  context_budget_cap: 384000
+  context_safety_margin_tokens: 40000
+  log_dir: ./logs
+
+mcp:
+  enabled: true
+  servers:
+    - id: eval_docs
+      transport: stdio
+      command: python
+      args:
+        - evals/fixtures/coding_agent/mcp/server.py
+      timeout_seconds: 5
+      trust_read_only_annotations: true
+
+tools:
+  shell:
+    timeout: 30
+    max_output_tokens: 10000
+  file:
+    max_view_lines: 100
+
+context:
+  repo_map_budget: 12000
+  history_window: 20
