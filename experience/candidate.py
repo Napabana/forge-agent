@@ -5,6 +5,8 @@ from typing import Protocol
 
 from experience.schema import ExperiencePattern, PatternType, SkillCandidate
 
+CANDIDATE_RENDERER_VERSION = "progressive_disclosure_v2"
+
 
 class CandidateGenerator(Protocol):
     def generate(self, pattern: ExperiencePattern, *, skill_name: str | None = None) -> SkillCandidate: ...
@@ -48,12 +50,7 @@ class DeterministicCandidateGenerator:
             next_action = context_tokens[0] if context_tokens else None
             description = (
                 f"Use after structured recovery classifies {failure} and selects "
-                f"{recovery}"
-                + (
-                    f"; the observed next semantic action is {next_action}."
-                    if next_action
-                    else "."
-                )
+                f"{recovery}; load this Skill before choosing the next semantic action."
             )
             lines = [
                 "# Recovery Motif",
