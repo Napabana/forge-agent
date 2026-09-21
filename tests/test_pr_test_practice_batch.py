@@ -140,3 +140,47 @@ def test_resume_rejects_unknown_working_tree_state(tmp_path: Path):
             expected_branch=batch.EXPECTED_BRANCH,
             resume_state=state,
         )
+
+
+def test_max_steps_cli_default_and_override():
+    default_args = batch.build_parser().parse_args(["--repo", ".", "--dry-run"])
+    assert default_args.max_steps == batch.DEFAULT_MAX_STEPS == 60
+
+    overridden = batch.build_parser().parse_args([
+        "--repo",
+        ".",
+        "--dry-run",
+        "--max-steps",
+        "73",
+    ])
+    assert overridden.max_steps == 73
+
+
+def test_dry_run_surfaces_custom_max_steps_without_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setattr(
+        batch,
+        "_build_execution_runner",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("provider path reached")),
+    )
+    code = batch.main([
+        "--repo",
+        str(repo),
+        "--dry-run",
+        "--max-steps",
+        "73",
+        "--artifact-root",
+        str(tmp_path / "results"),
+    ])
+    assert code == 0
+    output = capsys.readouterr().out
+    assert "max_steps=73" in output
+
+
+def test_max_steps_must_be_positive():
+    with pytest.raises(SystemExit, match="--max-steps must be >= 1"):
+        batch.main(["--repo", ".", "--dry-run", "--max-steps", "0"])
