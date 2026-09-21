@@ -96,3 +96,23 @@ def test_shared_renderer_surfaces_control_flow_events(capsys):
     assert "Plan revised v1→v2: Adjust verification." in output
     assert "Skill loaded: verify-python-fix" in output
     assert "Recovery exhausted [permission_denied]: Budget exhausted." in output
+
+
+def test_failed_observation_surfaces_output_and_error(capsys):
+    renderer = RunEventRenderer(preview_lines=2)
+    renderer(_event(EventType.OBSERVATION, {
+        "step": 3,
+        "observation": {
+            "tool_name": "test",
+            "status": "error",
+            "output": "ImportError while collecting test module\nfrom calc_core import CalculatorError\nthird line",
+            "error": "pytest exited with code 2",
+        },
+    }))
+
+    output = capsys.readouterr().out
+    assert "Observation [test]: error" in output
+    assert "ImportError while collecting test module" in output
+    assert "from calc_core import CalculatorError" in output
+    assert "1 more lines" in output
+    assert "Error: pytest exited with code 2" in output
