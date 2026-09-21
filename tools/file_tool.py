@@ -1,9 +1,10 @@
 """
 tools/file_tool.py
 
-文件操作工具，提供三个 action：
+文件操作工具，提供四个 action：
 - file_read:   读取文件全部内容
 - file_view:   分窗口查看文件（防止一次读爆上下文）
+- file_edit:   唯一 exact replacement，保留未修改字节与行尾格式
 - file_write:  写入文件（全量覆盖）
 
 设计原则：
@@ -19,7 +20,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from tools.base import BaseTool, ToolEffect, ToolResult
+from tools.base import BaseTool, ToolEffect, ToolErrorType, ToolResult
 
 
 # 单次 file_read 最多返回的行数，超出提示用 file_view
@@ -203,6 +204,122 @@ class FileViewTool(BaseTool):
             nav = f"\n[Lines {start_line}–{end_line} of {total}. End of file.]"
 
         return ToolResult(success=True, output=numbered + nav)
+
+
+class FileEditTool(BaseTool):
+    """
+    对已有文件做一次唯一 exact replacement。
+
+    params:
+        path (str):     文件路径
+        old_text (str): 必须在文件中恰好出现一次的原文本
+        new_text (str): 替换后的文本
+
+    使用原始 bytes 做 UTF-8 exact replacement，只改命中的字节区间，
+    因此不会把未修改区域的 CRLF/LF、EOF newline 或 BOM 重新序列化。
+    """
+
+    def __init__(self, workspace: str | Path | None = None) -> None:
+        self._workspace = Path(workspace).resolve() if workspace else None
+
+    @property
+    def name(self) -> str:
+        return "file_edit"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Edit an existing file by replacing one exact, unique text occurrence. "
+            "Prefer this for localized changes because bytes outside the replacement "
+            "are preserved, including line endings and trailing-newline state. "
+            "The call fails if old_text is missing or occurs more than once."
+        )
+
+    @property
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the existing file to edit",
+                },
+                "old_text": {
+                    "type": "string",
+                    "description": "Exact text that must occur exactly once",
+                },
+                "new_text": {
+                    "type": "string",
+                    "description": "Replacement text",
+                },
+            },
+            "required": ["path", "old_text", "new_text"],
+        }
+
+    def execute(self, params: dict[str, Any]) -> ToolResult:
+        resolved = _resolve_workspace_path(params.get("path", ""), self._workspace)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        path = resolved
+        old_text = params.get("old_text", "")
+        new_text = params.get("new_text", "")
+
+        if not old_text:
+            return ToolResult(
+                success=False,
+                output="",
+                error="old_text must not be empty",
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
+        if not path.exists():
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"File not found: {path}",
+            )
+        if not path.is_file():
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Not a file: {path}",
+            )
+
+        old_bytes = old_text.encode("utf-8")
+        new_bytes = new_text.encode("utf-8")
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            return ToolResult(success=False, output="", error=str(exc))
+
+        occurrences = raw.count(old_bytes)
+        if occurrences == 0:
+            return ToolResult(
+                success=False,
+                output="",
+                error="old_text was not found in the target file",
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
+        if occurrences != 1:
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"old_text must be unique; found {occurrences} occurrences",
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
+
+        updated = raw.replace(old_bytes, new_bytes, 1)
+        try:
+            path.write_bytes(updated)
+        except OSError as exc:
+            return ToolResult(success=False, output="", error=str(exc))
+
+        return ToolResult(
+            success=True,
+            output=(
+                f"Replaced 1 exact occurrence in {path}; "
+                "bytes outside the replacement were preserved."
+            ),
+        )
 
 
 class FileWriteTool(BaseTool):

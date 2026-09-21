@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.file_tool import FileReadTool, FileViewTool, FileWriteTool
+from tools.file_tool import FileEditTool, FileReadTool, FileViewTool, FileWriteTool
 from tools.git_tool import GitAddTool, GitCommitTool, GitDiffTool, GitStatusTool
 from tools.search_tool import FindFilesTool, FindSymbolTool, SearchTextTool
 from tools.shell_tool import ShellTool, _check_blocked, _truncate
@@ -154,6 +154,87 @@ class TestFileViewTool:
         result = tool.execute({"path": "notes.txt"})
         assert result.success
         assert "hello" in result.output
+
+
+# ===========================================================================
+# FileEditTool
+# ===========================================================================
+
+class TestFileEditTool:
+    tool = FileEditTool()
+
+    def test_exact_replacement_preserves_crlf_and_eof_newline(self, tmp_path):
+        path = tmp_path / "config.py"
+        path.write_bytes(b'HEADER\r\nPOLICY_MODE = "legacy"\r\nTAIL\r\n')
+
+        result = self.tool.execute({
+            "path": str(path),
+            "old_text": 'POLICY_MODE = "legacy"',
+            "new_text": 'POLICY_MODE = "strict"',
+        })
+
+        assert result.success
+        assert path.read_bytes() == (
+            b'HEADER\r\nPOLICY_MODE = "strict"\r\nTAIL\r\n'
+        )
+
+    def test_exact_replacement_preserves_missing_eof_newline(self, tmp_path):
+        path = tmp_path / "config.py"
+        path.write_bytes(b'POLICY_MODE = "legacy"')
+
+        result = self.tool.execute({
+            "path": str(path),
+            "old_text": "legacy",
+            "new_text": "strict",
+        })
+
+        assert result.success
+        assert path.read_bytes() == b'POLICY_MODE = "strict"'
+
+    def test_rejects_missing_old_text(self, tmp_path):
+        path = tmp_path / "config.py"
+        path.write_text("x = 1\n")
+        result = self.tool.execute({
+            "path": str(path),
+            "old_text": "x = 2",
+            "new_text": "x = 3",
+        })
+        assert not result.success
+        assert result.error_type.value == "invalid_arguments"
+        assert "not found" in result.error.lower()
+
+    def test_rejects_non_unique_old_text(self, tmp_path):
+        path = tmp_path / "config.py"
+        path.write_text("x = 1\nx = 1\n")
+        result = self.tool.execute({
+            "path": str(path),
+            "old_text": "x = 1",
+            "new_text": "x = 2",
+        })
+        assert not result.success
+        assert result.error_type.value == "invalid_arguments"
+        assert "unique" in result.error.lower()
+
+    def test_rejects_empty_old_text(self, tmp_path):
+        path = tmp_path / "config.py"
+        path.write_text("x = 1\n")
+        result = self.tool.execute({
+            "path": str(path),
+            "old_text": "",
+            "new_text": "x",
+        })
+        assert not result.success
+        assert result.error_type.value == "invalid_arguments"
+
+    def test_workspace_rejects_escape(self, tmp_path):
+        tool = FileEditTool(workspace=tmp_path)
+        result = tool.execute({
+            "path": "../outside.txt",
+            "old_text": "a",
+            "new_text": "b",
+        })
+        assert not result.success
+        assert "escapes workspace" in result.error.lower()
 
 
 # ===========================================================================

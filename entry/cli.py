@@ -98,7 +98,7 @@ def _build_registry(
     confirm_callback 仅保留 registry_builder 兼容；生产确认统一由外层 ToolExecutor 执行。
     """
     from tools.base import ToolRegistry
-    from tools.file_tool import FileReadTool, FileViewTool, FileWriteTool
+    from tools.file_tool import FileEditTool, FileReadTool, FileViewTool, FileWriteTool
     from tools.git_tool import GitAddTool, GitCommitTool, GitDiffTool, GitStatusTool
     from tools.search_tool import FindFilesTool, FindSymbolTool, SearchTextTool
     from tools.shell_tool import ShellTool
@@ -116,6 +116,7 @@ def _build_registry(
         ))
         .register(FileReadTool(workspace=fs_workspace))
         .register(FileViewTool(workspace=fs_workspace))
+        .register(FileEditTool(workspace=fs_workspace))
         .register(FileWriteTool(workspace=fs_workspace))
         .register(SearchTextTool(workspace=fs_workspace))
         .register(FindFilesTool(workspace=fs_workspace))

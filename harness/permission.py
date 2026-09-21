@@ -75,11 +75,11 @@ ALLOW = PermissionDecision(Decision.ALLOW)
 
 # 受 workspace 路径边界约束的文件工具（读+写）。
 # M4 决策：读工具也管，防 LLM 读 workspace 外的系统文件（/etc/passwd 等）。
-# 含别名兼容（file_read/file_view/file_write 是 forge-agent 的工具名；
+# 含别名兼容（file_read/file_view/file_edit/file_write 是 forge-agent 的工具名；
 # read_file/write_file/edit 等是 s20 风格别名）。
 _PATH_BOUND_TOOLS = frozenset({
     # forge-agent 工具
-    "file_read", "file_view", "file_write",
+    "file_read", "file_view", "file_edit", "file_write",
     # s20 / 通用别名
     "read_file", "view_file", "write_file", "edit_file", "edit",
 })
