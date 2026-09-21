@@ -665,3 +665,17 @@ pytest -q
 - `scripts/run_skill_evolution.py` 的 candidate report/CLI 新增 description/trigger 展示，便于在真实 A/B evaluation 前人工审查 trigger 是否具体且有意义。
 - `tests/test_skill_evolution.py` 新增 trigger-specific description 断言。
 - 本次仍未调用任何真实 Provider；下一步先判断 gate-ready motif 是否只是复述现有 `RecoveryPolicy`，再决定是否值得 real-model evaluation。
+
+
+### 最后交接（2026-09-21，P2-5 Real-model Candidate Final Gate）
+
+- 用户本地 P2-5 v2 专项回归已通过：`tests/test_skill_evolution.py + tests/test_real_skill_evolution_driver.py` 共 30 passed；同一 3 条真实 accepted traces 重新 mining 后得到 7 个 recovery motifs，其中 3 个 evidence=2 / gate-ready=yes。
+- 经过与 `agent/recovery.py`、Planning 控制逻辑对照，最终只选择 `pattern-591db3daf06f6bad = no_progress -> change_approach -> INSPECT` 进入真实 A/B。其余两个 gate-ready pattern（tool_failure->inspect->INSPECT、no_progress->change_approach->PLAN）与已有确定性控制重复度过高，暂不花 API。
+- 新增 `evals/fixtures/skill_evolution/real_recovery_motif_suite.json`：四角色 TARGET / SHOULD_TRIGGER / SHOULD_NOT_TRIGGER / NON_REGRESSION，1 repetition，最终正式 gate 共 8 个 real-model Agent trials。
+- 新增 `scripts/run_real_skill_evolution_eval.py`：默认 dry-run 严格 0 API；只有显式 `--execute` 才创建 backend。真实执行使用 planning=off、recovery=structured、repo_map=none、最小工具集；target/should-trigger no-progress threshold=2，其他角色=6。
+- 新增 `recovery_motif` process grader（schema/graders/runner）：要求严格观察 `failure_classified(no_progress) -> recovery_selected(change_approach) -> skill_loaded(candidate) -> next semantic action=INSPECT`；不能提前加载、不能跨 recovery segment 拼接。
+- `experience/evaluation.py` 支持 candidate-specific process graders 与 real-model run metadata；`candidate_process_passed` 同时包含 skill-selection 与 recovery-motif 检查。
+- final-gate 真实执行结束后会生成 `evaluation.json`、`promotion_decision.json`、`final_gate_summary.json`，调用现有 `PromotionGate`，但绝不自动 promotion。
+- 新增 `tests/test_real_skill_evolution_eval.py`，覆盖 ordered motif grader、错误顺序/错误 next action 拒绝，以及默认 dry-run 0 API。
+- 新增日志：`docs/changes/2026-09-21/P2-5-Real-Candidate-Final-Gate.md`。
+- 下一步：用户 pull 最新 dev，跑 `tests/test_coding_agent_eval.py + tests/test_skill_evolution.py + tests/test_real_skill_evolution_driver.py + tests/test_real_skill_evolution_eval.py`；通过后对真实 mining report + Pattern 4 跑不带 `--execute` 的 dry-run，确认 provider_calls=0、paired_trials=8、reference validation 全通过。只有用户明确手工执行 `--execute` 时才花 Provider token。
