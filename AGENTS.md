@@ -571,3 +571,18 @@ pytest -q
 - `tests/test_mcp_integration.py` 的真实 stdio fixture regression 新增 `required policy mode value` 与 `policy_mode` 两种自然查询，均必须得到 strict policy guidance。
 - 本轮不同时修改 shell Git conservative classification、Planning gate 或 max_steps；这些是在重复无效 guidance 后出现的次生行为，避免把 MCP fixture 修复扩成无关控制面改造。
 - 需要用户本地先跑 MCP/CLI 定向回归，再 reset/reclone `pr-test:forge-p2-mcp-demo` 执行新的 real-model E2E。
+
+
+### 验证补充（2026-09-21，P2-4 MCP pr-test real-model E2E DONE）
+
+- 用户在独立目标仓库 `Napabana/pr-test:forge-p2-mcp-demo` 上完成第二轮真实模型 MCP direct-run；Forge Agent 只提供 Agent/MCP runtime，业务读写目标为 pr-test。
+- 修复 natural topic routing 后，Step 1 首次调用 `mcp__eval_docs__lookup_project_guidance`（topic=`policy mode configuration`）即返回 `Set POLICY_MODE = 'strict' in src/app/config.py`，不再依赖猜中 magic key `policy`。
+- Agent 随后读取 pr-test 的 `src/app/config.py` / `runtime.py` / test，创建 plan，将 canonical config 从 `legacy` 修改为 `strict`，并在最终修改后执行全量 `tests/`：16 passed。
+- 最终行为验证输出 `policy_mode -> strict`，未创建 Git commit，Run 以 `SUCCESS / completion_satisfied` 收口。终端结果：29 steps、295,016 tokens、779.2s。
+- 本轮真实证明：MCP server discovery → model selects namespaced MCP tool → ToolExecutor lifecycle → MCPToolAdapter → MCP server structured result → model consumes external guidance → pr-test repository edit → post-edit tests → FINISH/Completion Guard。
+- `Acceptance: not_requested` 仅表示 Runner 没有额外 independent AcceptanceContract；Agent Core 的 completion guard 仍依据 require_changes/require_tests/final repository content state 执行，最终 SUCCESS 说明这些内建完成性条件已满足。
+- 本轮不能作为 MCP 性能改善证据：模型在 CRLF/trailing-newline preservation 上产生多次 file_write/shell 检查，并出现一次 LLM timeout；29 steps / 295k tokens / 779.2s 只能作为成功轨迹，不用于 token/latency efficiency claim。
+- pr-test clone 在运行前已有 Windows/WSL line-ending 导致的工作树噪声（如 `.gitignore`）；它没有提供 policy 正确答案，也不否定 MCP capability 结果，但后续正式 benchmark 应使用 `core.autocrlf=false` + clean reset 的冻结 fixture。
+- 本轮没有提供可核验的 Docker/sandbox trace，因此不得把 host filesystem isolation 写成 real-model verified；search/file workspace isolation 已由 deterministic regression 覆盖，shell sandbox 仍属于已有独立 runtime contract。
+- P2-4 MCP 至此具备 deterministic regression + real-model pr-test E2E 双层证据，可正式收口为 DONE。后续进入 P2-5 Trajectory-driven Skill Evolution 验收/实操。
+- 验证日志：`docs/changes/2026-09-21/P2-4-MCP-pr-test-Real-Model-E2E-DONE.md`。

@@ -532,6 +532,14 @@ skill enabled
 - 新增 `tests/test_mcp_integration.py`、官方 SDK in-process protocol test、真实 local stdio Host E2E、server crash/timeout/multi-server/lifecycle/permission/hook/cancel/planning/recovery/package tests。
 - 用户已完成本地修复并 push，P2-4 已按交接约定收口为 DONE；保留已记录的定向测试事实，不补造未提供的全量 pytest 数量或耗时。
 
+真实模型补充验收（2026-09-21）：
+
+- 使用独立 `Napabana/pr-test:forge-p2-mcp-demo` 作为业务目标仓库，避免把 Forge Agent 开发仓库本身当测试 workspace。
+- natural topic routing 修复后，模型第一次 `mcp__eval_docs__lookup_project_guidance` 调用即获得 canonical path + required value，随后只修改 pr-test 的 `src/app/config.py`。
+- 修改后的全量测试 `16 passed`，行为验证 `policy_mode -> strict`，最终 `SUCCESS`；29 steps、295,016 tokens、779.2s。
+- 该 run 用于证明真实 MCP capability 主链，不用于性能结论；CRLF/trailing-newline 探索与一次 provider timeout 显著污染 step/token/time。
+- 本轮未提供 sandbox trace，不把 shell host-filesystem isolation 记作 real-model MCP evidence。
+
 ## 参考设计
 
 ### Model Context Protocol 官方架构
