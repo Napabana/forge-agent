@@ -679,3 +679,14 @@ pytest -q
 - 新增 `tests/test_real_skill_evolution_eval.py`，覆盖 ordered motif grader、错误顺序/错误 next action 拒绝，以及默认 dry-run 0 API。
 - 新增日志：`docs/changes/2026-09-21/P2-5-Real-Candidate-Final-Gate.md`。
 - 下一步：用户 pull 最新 dev，跑 `tests/test_coding_agent_eval.py + tests/test_skill_evolution.py + tests/test_real_skill_evolution_driver.py + tests/test_real_skill_evolution_eval.py`；通过后对真实 mining report + Pattern 4 跑不带 `--execute` 的 dry-run，确认 provider_calls=0、paired_trials=8、reference validation 全通过。只有用户明确手工执行 `--execute` 时才花 Provider token。
+
+
+### 最后交接（2026-09-21，P2-5 Final Gate 本地回归与 Dry-run DONE）
+
+- 用户本地完成 final-gate 相关回归：`tests/test_coding_agent_eval.py + tests/test_skill_evolution.py + tests/test_real_skill_evolution_driver.py + tests/test_real_skill_evolution_eval.py` 共 46 passed / 16.63s。
+- 对真实 mining report 的 `pattern-591db3daf06f6bad = failure:no_progress -> recovery:change_approach -> INSPECT` 完成 final-gate dry-run。
+- dry-run 明确 `provider_calls=0`、`paired_trials=8`、`repetitions=1`、planning=off、recovery=structured、repo_map=none、target/should-trigger no-progress threshold=2、non-trigger threshold=6。
+- Candidate identity：`candidate-80bb153c9f364a1c` / Skill `experience-recovery-workflow-f06f6bad`；source evidence_count=2。
+- ordered process grader 已锁定：`failure_classified(no_progress) -> recovery_selected(change_approach) -> skill_loaded(candidate) -> next semantic action=INSPECT`，required=true。
+- 四个 reference solutions 均通过 deterministic validation：target-normalize-label、should-trigger-timeout-policy、should-not-trigger-config、non-regression-triple。
+- 下一步：用户手工对同一命令追加 `--execute`，执行 8 个 real-model Agent trials。该步骤会真实调用 Provider；运行完成后先审查 `final_gate_summary.json` / `promotion_decision.json`，不自动 promotion。
