@@ -38,9 +38,23 @@ class DeterministicCandidateGenerator:
     def generate(self, pattern: ExperiencePattern, *, skill_name: str | None = None) -> SkillCandidate:
         name = skill_name or f"experience-{pattern.pattern_type.value.replace('_', '-')}-{pattern.pattern_id[-8:]}"
         if pattern.pattern_type is PatternType.RECOVERY_WORKFLOW:
-            description = "Use when a coding task hits a structured failure matching this observed recovery motif."
             failure = pattern.failure_categories[0] if pattern.failure_categories else "unknown"
             recovery = pattern.recovery_strategies[0] if pattern.recovery_strategies else "unknown"
+            context_tokens = [
+                token
+                for token in pattern.signature
+                if not token.startswith(("failure:", "recovery:", "FAIL:", "RECOVER:"))
+            ]
+            next_action = context_tokens[0] if context_tokens else None
+            description = (
+                f"Use after structured recovery classifies {failure} and selects "
+                f"{recovery}"
+                + (
+                    f"; the observed next semantic action is {next_action}."
+                    if next_action
+                    else "."
+                )
+            )
             lines = [
                 "# Recovery Motif",
                 "",
