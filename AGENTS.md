@@ -690,3 +690,16 @@ pytest -q
 - ordered process grader 已锁定：`failure_classified(no_progress) -> recovery_selected(change_approach) -> skill_loaded(candidate) -> next semantic action=INSPECT`，required=true。
 - 四个 reference solutions 均通过 deterministic validation：target-normalize-label、should-trigger-timeout-policy、should-not-trigger-config、non-regression-triple。
 - 下一步：用户手工对同一命令追加 `--execute`，执行 8 个 real-model Agent trials。该步骤会真实调用 Provider；运行完成后先审查 `final_gate_summary.json` / `promotion_decision.json`，不自动 promotion。
+
+
+### 最后交接（2026-09-21，P2-5 首轮真实 A/B REJECT + 0-API Replay）
+
+- 用户完成 Pattern 4 的 8 个 real-model Agent trials，原始 PromotionGate=REJECT；运行中一次 timeout retry、一次 connection retry 均被 provider retry 恢复，所有 case `evaluation_failed=false`。
+- non-regression / should-not-trigger baseline 与 candidate 均成功且 Candidate 未加载；target / should-trigger 原始 candidate trial success=false，Candidate 未加载且 process grader=false。
+- 复核发现原 final-gate 把 required `recovery_motif` process grader 合并进 `TrialResult.success`，PromotionGate 又单独检查 Skill load/process，导致可能把 process failure 重复描述成 outcome failure/regression。
+- `experience/evaluation.py` 已改为在 Evolution record 中分离 outcome 与 process evidence；功能 success 只由 run status + acceptance + required outcome graders 决定。
+- `recovery_motif` 在 Trial 层改为 non-blocking，PromotionGate 仍单独强制 process requirement。
+- `scripts/run_real_skill_evolution_eval.py` 新增 `--replay-existing`：读取首轮 baseline/candidate raw.jsonl 离线重建 EvaluationRecord/PromotionDecision，provider_calls=0；写入新的 `reanalysis-<UTC>/`，不覆盖原始 real-model artifacts。
+- replay 额外输出 failure/recovery 与 Skill discovered/selected/loaded counts、grader details，用来判断 target/should-trigger 是“没有触发 recovery”还是“触发后没有 load Skill”。
+- 另发现 Candidate metadata 当前包含 observed next semantic action（INSPECT），而 Skill metadata 在未加载时即可见，可能让模型直接吸收核心经验、降低 `skill_load` 必要性；先作为真实验收发现记录，不修改首轮 Candidate、不为了 PASS 重跑 API。
+- 下一步：用户 pull 最新 dev、跑专项回归，然后对已有 `p2-5-pattern4-final-gate` 执行 `--replay-existing`，仅做 0-API 重分析。
