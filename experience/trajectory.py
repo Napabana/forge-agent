@@ -39,10 +39,11 @@ def _dedupe_consecutive(items: Iterable[str]) -> tuple[str, ...]:
 def _recovery_motifs(workflow: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
     """Extract bounded typed recovery motifs from a full normalized workflow.
 
-    A motif is anchored by one classified failure and the first recovery strategy
-    selected for that failure. At most the first semantic action after recovery is
-    retained as local context. Full workflow provenance remains on the source
-    trajectory; it is deliberately not part of the grouping key.
+    A motif is anchored by one classified failure and one recovery strategy selected
+    before the next classified failure. At most the first semantic action after that
+    recovery is retained as local context. Multiple recovery escalations for the same
+    failure therefore remain independently mineable. Full workflow provenance stays
+    on the source trajectory and is deliberately not part of the grouping key.
     """
     motifs: list[tuple[str, ...]] = []
     seen: set[tuple[str, ...]] = set()
@@ -50,8 +51,6 @@ def _recovery_motifs(workflow: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
         if not token.startswith("FAIL:"):
             continue
         failure = token.split(":", 1)[1]
-        recovery: str | None = None
-        context: str | None = None
         for cursor in range(index + 1, len(workflow)):
             current = workflow[cursor]
             if current.startswith("FAIL:"):
@@ -59,21 +58,19 @@ def _recovery_motifs(workflow: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
             if not current.startswith("RECOVER:"):
                 continue
             recovery = current.split(":", 1)[1]
+            context: str | None = None
             for next_cursor in range(cursor + 1, len(workflow)):
                 next_token = workflow[next_cursor]
                 if next_token.startswith(("FAIL:", "RECOVER:")):
                     break
                 context = next_token
                 break
-            break
-        if recovery is None:
-            continue
-        motif = (f"failure:{failure}", f"recovery:{recovery}")
-        if context is not None:
-            motif += (context,)
-        if motif not in seen:
-            seen.add(motif)
-            motifs.append(motif)
+            motif = (f"failure:{failure}", f"recovery:{recovery}")
+            if context is not None:
+                motif += (context,)
+            if motif not in seen:
+                seen.add(motif)
+                motifs.append(motif)
     return tuple(motifs)
 
 
