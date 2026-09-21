@@ -109,6 +109,40 @@ def _load_trial_results(path: Path) -> list[TrialResult]:
     return results
 
 
+def _trial_diagnostics(results: list[TrialResult]) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    for result in results:
+        diagnostics.append(
+            {
+                "task_id": result.task_id,
+                "variant": result.variant,
+                "run_status": result.run_status,
+                "termination_reason": result.termination_reason,
+                "acceptance_status": result.acceptance_status,
+                "raw_trial_success": result.success,
+                "steps": result.metrics.steps,
+                "tokens": result.metrics.total_tokens,
+                "failure_classified_count": result.metrics.failure_classified_count,
+                "recovery_selected_count": result.metrics.recovery_selected_count,
+                "skill_discovered_count": result.metrics.skill_discovered_count,
+                "skill_selected_count": result.metrics.skill_selected_count,
+                "skill_loaded_count": result.metrics.skill_loaded_count,
+                "graders": [
+                    {
+                        "id": grader.grader_id,
+                        "kind": grader.kind,
+                        "passed": grader.passed,
+                        "required": grader.required,
+                        "detail": grader.detail,
+                        "evidence": grader.evidence,
+                    }
+                    for grader in result.grader_results
+                ],
+            }
+        )
+    return diagnostics
+
+
 def _summary_payload(
     *,
     candidate: SkillCandidate,
@@ -423,6 +457,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         summary["source_baseline_trials"] = str(output_dir / "baseline" / "raw.jsonl")
         summary["source_candidate_trials"] = str(output_dir / "candidate" / "raw.jsonl")
+        summary["baseline_trial_diagnostics"] = _trial_diagnostics(baseline_results)
+        summary["candidate_trial_diagnostics"] = _trial_diagnostics(candidate_results)
         summary_path.write_text(
             json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
