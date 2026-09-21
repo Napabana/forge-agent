@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from evals.coding_agent.runner import EvaluationHarness, RunnerFactory
 from evals.coding_agent.schema import EvalTask, EvaluationSuite, GraderSpec, TrialResult
@@ -190,6 +191,7 @@ def evaluate_candidate(
     evidence_kind: str = "deterministic_harness",
     real_model_executed: bool = False,
     candidate_process_graders: tuple[GraderSpec, ...] = (),
+    run_metadata: dict[str, Any] | None = None,
 ) -> EvaluationRecord:
     """Run baseline and candidate variants through the existing P2-0 harness."""
     root = Path(output_dir).resolve()
@@ -218,7 +220,10 @@ def evaluate_candidate(
         repetitions=repetitions,
         evidence_kind=evidence_kind,
         real_model_executed=real_model_executed,
-        run_metadata={"evolution_candidate": None},
+        run_metadata={
+            **dict(run_metadata or {}),
+            "evolution_candidate": None,
+        },
     ).run()
     candidate_results = EvaluationHarness(
         suite=candidate_suite,
@@ -229,6 +234,7 @@ def evaluate_candidate(
         evidence_kind=evidence_kind,
         real_model_executed=real_model_executed,
         run_metadata={
+            **dict(run_metadata or {}),
             "evolution_candidate_id": candidate.candidate_id,
             "evolution_candidate_version": candidate.candidate_version,
             "evolution_candidate_hash": candidate.content_hash,
