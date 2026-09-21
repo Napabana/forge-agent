@@ -265,6 +265,8 @@ snapshot 包含 tracked diff、staged diff、status 与 untracked file contents�
 
 当 A/B/C 都已经通过时，`--execute --resume` 会在构造 backend 前直接退出，避免重复消耗额度。
 
+另外，若 Provider/框架以异常形式中止而不是返回普通 `RunResult`，Batch Runner 会先记录当前 working-tree fingerprint 和失败状态再停止；不会自动改 prompt 或自动重试。这样下一次 `--resume` 仍能从已记录 checkpoint 判断是否可以安全继续。
+
 `--only A|B|C` 也已支持；若直接执行 B/C，其前置任务需要通过离线 verifier。
 
 ## Artifact
