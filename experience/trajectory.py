@@ -20,6 +20,7 @@ _MAX_TRACE_EVENTS = 20_000
 _INSPECT_TOOLS = {"file_read", "file_view", "grep", "search", "repo_map", "repo_search"}
 _EDIT_TOOLS = {"file_write", "file_edit", "apply_patch"}
 _TEST_TOOLS = {"test", "pytest"}
+MINING_STRATEGY_VERSION = "recovery_motif_v2"
 
 
 @dataclass(frozen=True)
