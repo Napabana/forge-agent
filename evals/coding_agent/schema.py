@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-_SUPPORTED_GRADERS = {"command", "file", "repository_state", "run_trace", "skill_selection"}
+_SUPPORTED_GRADERS = {"command", "file", "repository_state", "run_trace", "skill_selection", "recovery_motif"}
 
 
 def _validate_id(value: str, *, field_name: str) -> None:
@@ -74,6 +74,30 @@ class GraderSpec:
             unknown = sorted(set(self.params) - supported)
             if unknown:
                 raise ValueError(f"run_trace grader {self.grader_id!r} has unsupported params: {unknown}")
+        elif self.kind == "recovery_motif":
+            required = {
+                "failure_category",
+                "recovery_strategy",
+                "skill_name",
+                "next_operation",
+            }
+            unknown = sorted(set(self.params) - required)
+            missing = sorted(required - set(self.params))
+            if unknown:
+                raise ValueError(
+                    f"recovery_motif grader {self.grader_id!r} has unsupported params: {unknown}"
+                )
+            if missing:
+                raise ValueError(
+                    f"recovery_motif grader {self.grader_id!r} is missing params: {missing}"
+                )
+            if not all(
+                isinstance(self.params[key], str) and self.params[key].strip()
+                for key in required
+            ):
+                raise ValueError(
+                    f"recovery_motif grader {self.grader_id!r} params must be non-empty strings"
+                )
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "GraderSpec":
