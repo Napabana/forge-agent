@@ -159,3 +159,132 @@ def test_requires_explicit_mine_only(tmp_path: Path):
         assert "only offline --mine-only is supported" in str(exc)
     else:
         raise AssertionError("driver must require explicit --mine-only")
+
+
+def _write_recovery_trace(
+    path: Path,
+    *,
+    task_id: str,
+    run_id: str,
+    before_failure_tool: str,
+    after_recovery_tool: str,
+) -> None:
+    rows = [
+        {
+            "event_type": "task_start",
+            "task_id": task_id,
+            "payload": {"run_id": run_id, "task": {"task_id": task_id}},
+        },
+        {
+            "event_type": "tool_execution_started",
+            "task_id": task_id,
+            "payload": {"tool_name": before_failure_tool},
+        },
+        {
+            "event_type": "failure_classified",
+            "task_id": task_id,
+            "payload": {"category": "test_failure"},
+        },
+        {
+            "event_type": "recovery_selected",
+            "task_id": task_id,
+            "payload": {"strategy": "inspect"},
+        },
+        {
+            "event_type": "tool_execution_started",
+            "task_id": task_id,
+            "payload": {"tool_name": "file_read"},
+        },
+        {
+            "event_type": "tool_execution_started",
+            "task_id": task_id,
+            "payload": {"tool_name": after_recovery_tool},
+        },
+        {
+            "event_type": "task_complete",
+            "task_id": task_id,
+            "payload": {"steps": 4},
+        },
+        {
+            "event_type": "acceptance",
+            "task_id": task_id,
+            "payload": {"acceptance_status": "passed"},
+        },
+        {
+            "event_type": "run_terminated",
+            "task_id": task_id,
+            "payload": {
+                "run_id": run_id,
+                "status": "success",
+                "termination_reason": "completion_satisfied",
+            },
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_driver_groups_matching_recovery_motif_across_different_workflows(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    left = tmp_path / "left.jsonl"
+    right = tmp_path / "right.jsonl"
+    _write_recovery_trace(
+        left,
+        task_id="left",
+        run_id="run-left",
+        before_failure_tool="pytest",
+        after_recovery_tool="file_write",
+    )
+    _write_recovery_trace(
+        right,
+        task_id="right",
+        run_id="run-right",
+        before_failure_tool="shell",
+        after_recovery_tool="file_edit",
+    )
+    summary = tmp_path / "batch_summary.json"
+    summary.write_text(
+        json.dumps({
+            "eligible_traces_for_p2_5": [str(left), str(right)]
+        }),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+
+    assert driver.main([
+        "--repo",
+        str(repo),
+        "--batch-summary",
+        str(summary),
+        "--mine-only",
+        "--no-store",
+        "--output-dir",
+        str(output),
+    ]) == 0
+
+    report = json.loads(
+        (output / "mining_report.json").read_text(encoding="utf-8")
+    )
+    matching = [
+        pattern
+        for pattern in report["patterns"]
+        if pattern["signature"]
+        == [
+            "failure:test_failure",
+            "recovery:inspect",
+            "INSPECT",
+        ]
+    ]
+    assert len(matching) == 1
+    assert matching[0]["evidence_count"] == 2
+    candidate = next(
+        item
+        for item in report["candidates"]
+        if item["pattern_id"] == matching[0]["pattern_id"]
+    )
+    assert candidate["promotion_evidence_ready"] is True
