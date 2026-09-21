@@ -77,7 +77,7 @@ def _outcome_graders(task: EvalTask):
     return tuple(
         grader
         for grader in task.graders
-        if grader.kind not in {"run_trace", "skill_selection"}
+        if grader.kind not in {"run_trace", "skill_selection", "recovery_motif"}
     )
 
 
@@ -248,7 +248,7 @@ class EvaluationHarness:
                 (
                     grader
                     for grader in task.graders
-                    if grader.kind in {"run_trace", "skill_selection"}
+                    if grader.kind in {"run_trace", "skill_selection", "recovery_motif"}
                 ),
                 GraderContext(repo=repo, run_result=run_result, metrics=metrics),
             )
