@@ -17,6 +17,7 @@ Shell 命令执行工具。四层防护：
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from typing import Any, Callable
 
@@ -270,7 +271,7 @@ def _is_readonly(cmd: str) -> bool:
 
 def _find_is_readonly(command: str) -> bool:
     """Allow common find queries while rejecting actions that can write or execute."""
-    unsafe_actions = (
+    unsafe_actions = {
         "-delete",
         "-exec",
         "-execdir",
@@ -280,12 +281,13 @@ def _find_is_readonly(command: str) -> bool:
         "-fprint0",
         "-fprintf",
         "-fls",
-    )
-    return not any(
-        re.search(rf"(?<!\\S){re.escape(action)}(?:\\s|$)", command)
-        for action in unsafe_actions
-    )
-
+    }
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        # Malformed quoting is not provably read-only.
+        return False
+    return not any(token in unsafe_actions for token in tokens)
 
 def _references_internal_agent_path(cmd: str) -> bool:
     """Prevent generic shell access from bypassing Agent Skills disclosure."""
