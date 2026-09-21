@@ -641,3 +641,18 @@ pytest -q
 - 新增 `tests/test_real_skill_evolution_driver.py`，覆盖 batch-summary 输入、matching workflow evidence=2、single-evidence not-ready、ineligible trace 不 mining、CandidateStore 幂等、显式 mine-only gate。
 - 新增日志：`docs/changes/2026-09-21/P2-5真实Trace-Mining-Driver.md`。
 - 下一步：用户本地先跑专项测试，再对真实 batch summary 执行一次 0-API `--mine-only`；只有实际 mining 结果出现合理且 evidence-ready 的 candidate，才进入 real-model baseline/candidate evaluation。
+
+
+### 最后交接（2026-09-21，P2-5 v2：Recovery Motif Mining）
+
+- 用户已对 3 条真实 accepted + eligible Trace 执行首轮 `--mine-only`：得到 3 个 recovery patterns / 3 个 candidates，但每个 evidence_count 均为 1，因此默认 `PromotionGateConfig.min_evidence_count=2` 正确阻止了 real-model evaluation。
+- 根因确认在旧 `ExperienceMiner` recovery grouping 过严：旧 key 将所有 failure/recovery 信息与整条 normalized workflow 拼接，真实 run 只要多一次 inspect、失败次数不同或 recovery escalation 不同就无法聚合；failure/recovery 还在前缀与 workflow 中重复编码。
+- `experience/trajectory.py` 已升级为 `MINING_STRATEGY_VERSION = "recovery_motif_v2"`：successful workflow 仍按完整 workflow 精确分组；recovery workflow 改为 bounded motif：`failure category -> recovery strategy -> first semantic action`。
+- 同一 source trace 对同一 motif 最多贡献 1 份 evidence；同一次 failure 后的多个 recovery escalation（如 inspect 后 replan）分别形成 motif；完整 workflow/source run/task/trace hash 仍保留作 provenance，不进入 recovery grouping key。
+- `experience/candidate.py` 的 recovery candidate 改为明确输出 failure trigger、recovery strategy、source evidence count、禁止原样重试约束、strategy-specific guidance 与 next semantic action，不再只渲染泛化整条 workflow。
+- `scripts/run_skill_evolution.py` 的 `mining_report.json` 新增 `mining_strategy=recovery_motif_v2`，仍严格 `provider_calls=0 / evaluation_executed=false`。
+- `tests/test_skill_evolution.py` 新增跨不同 full workflow 聚合 motif、同 trace 重复 motif 不重复计 evidence、recovery escalation 与 candidate typed guidance 测试；`tests/test_real_skill_evolution_driver.py` 新增 driver 端到端 recovery motif evidence=2 / gate-ready 覆盖。
+- `PromotionGateConfig.min_evidence_count=2` 没有降低；本轮没有调用真实 Provider。
+- 当前执行环境尝试 clone GitHub 运行完整专项 pytest 仍失败于 DNS：`Could not resolve host: github.com`，因此需要用户本地完成专项回归。
+- 新增日志：`docs/changes/2026-09-21/P2-5-Recovery-Motif-Mining-v2.md`。
+- 下一步：用户 pull 最新 dev，跑 `tests/test_skill_evolution.py + tests/test_real_skill_evolution_driver.py`，然后对同一真实 batch summary 再执行一次 0-API `--mine-only --no-store`；只有真实 motif 达到 evidence_count>=2 且内容有意义时，才进入 real-model candidate evaluation。
