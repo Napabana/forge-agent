@@ -612,3 +612,17 @@ pytest -q
 - 可直接归因到轨迹的治理效果：`file_edit` 替代重复 `file_write`；没有 xxd/od/CRLF/trailing-newline 修复链；没有 permission_denied/no_progress/replan；MCP guidance 只调用一次；post-edit full test 后立即收口。
 - 仍有可优化项：Step 1-2/9 仍使用 shell 做 repo inspection/status/diff，而系统 Prompt 已要求优先专用 tools；本轮不继续扩大范围，后续可在正式 benchmark 中观察 tool-choice adherence。
 - 噪声治理状态从 `IMPLEMENTED / LOCAL VALIDATION PENDING` 更新为 `VERIFIED / REAL-MODEL R3 PASS`。
+
+
+### 最后交接（2026-09-21，P2-5 前置：无人值守真实任务 Batch Runner）
+
+- 本轮新增 `scripts/run_pr_test_practice_batch.py`：针对独立 `pr-test:forge-p2-mcp-demo` working tree 串行执行 Task A/B/C；三个任务共用同一 working tree，前一任务必须达到 `SUCCESS + acceptance=passed + P2-5 trajectory eligible` 才进入下一任务。
+- Batch Runner 直接复用 `ExecutionRunner / RunRequest / AcceptanceContract / RunEventRenderer`；独立 verifier 由 Runner 持有，不写入 Agent History，不修改 Trace 或事后伪造 acceptance。
+- 每个成功 run 完成后还通过 `experience.trajectory.load_trajectory` 复核当前 P2-5 positive-mining eligibility；因此 summary 中的 eligible trace 与 P2-5 当前 `success + acceptance passed` contract 同源。
+- dry-run 是默认安全模式；只有显式 `--execute` 才进入 backend 构造。内存 override 固定 `planning=always / recovery=structured / skills=false / MCP disabled / max_steps=30`，未修改 `config/default.yaml`。
+- 新增 resume checkpoint：保存 repo path/base branch/base HEAD/working-tree fingerprint 与每个 Task 的 status/acceptance/trace/steps/tokens/elapsed；`--resume` 只跳过真正 accepted + eligible 的任务，未知人工修改在 Provider 构造前 fail-closed；A/B/C 全部通过时 execute+resume 不构造 backend。
+- 新增 `tests/test_pr_test_practice_batch.py`，覆盖 dry-run provider 隔离、resume skip、all-passed zero-provider resume、checkpoint drift 拒绝与 hidden probe 编译。
+- 本窗口严格未调用真实 DeepSeek/OpenAI/Anthropic/KRILL Provider。离线验证：脚本/测试 `py_compile` 通过；专项 no-provider stub 环境 `5 passed in 0.12s`；synthetic calculator repo 上 A/B/C 三个 hidden verifier 均实际返回 True。
+- 当前容器无法直接 clone GitHub（DNS 解析失败），因此没有在这里运行完整 forge-agent checkout 的仓库级 pytest，也没有执行真实 pr-test Agent tasks；不能把 deterministic validation 写成 real-model success。
+- 本轮更新日志：`docs/changes/2026-09-21/P2-5真实任务Batch-Runner.md`。
+- 下一步由用户在本地 pull 最新 `dev`，准备 clean `pr-test-agent-practice`，先 dry-run；只有用户手动执行 `--execute` 时才开始真实 Provider 调用。真实 A/B/C accepted traces 产生后再进入 P2-5。
