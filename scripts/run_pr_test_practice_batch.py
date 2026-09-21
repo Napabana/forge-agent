@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_ROOT = ROOT / "evals" / "results"
 EXPECTED_BRANCH = "forge-p2-mcp-demo"
 TASK_IDS = ("A", "B", "C")
+DEFAULT_MAX_STEPS = 60
 
 TASK_A_PROMPT = r"""
 Task A — Calculator Core Architecture
@@ -474,6 +475,7 @@ def _print_plan(
     state: dict[str, Any] | None,
     only: str | None,
     execute: bool,
+    max_steps: int,
 ) -> list[str]:
     selected = _selected_tasks(state, only)
     mode = "EXECUTE" if execute else "DRY RUN (API calls = 0)"
@@ -482,7 +484,7 @@ def _print_plan(
     print(f"Config     : {config_path or 'config/default.yaml'}")
     print(f"Provider   : {config.llm.provider}")
     print(f"Model      : {config.llm.model}")
-    print("Overrides  : planning=always, recovery=structured, skills=false, mcp=disabled, max_steps=30")
+    print(f"Overrides  : planning=always, recovery=structured, skills=false, mcp=disabled, max_steps={max_steps}")
     print(f"Artifacts  : {artifact_dir}")
     print("\nTasks:")
     records = (state or {}).get("tasks", {})
@@ -521,7 +523,7 @@ def _make_state(
     }
 
 
-def _build_execution_runner(repo: Path, config: Any, trace_dir: Path):
+def _build_execution_runner(repo: Path, config: Any, trace_dir: Path, *, max_steps: int):
     """Execution-only composition. Dry-run never calls this function."""
     from agent.core import AgentConfig
     from agent.runner import ExecutionRunner
@@ -530,7 +532,7 @@ def _build_execution_runner(repo: Path, config: Any, trace_dir: Path):
     from harness import PermissionManager
     from llm.router import create_backend_from_config
 
-    config.agent.max_steps = 30
+    config.agent.max_steps = max_steps
     config.agent.planning_mode = "always"
     config.agent.recovery_mode = "structured"
     config.agent.skills_enabled = False
@@ -560,7 +562,7 @@ def _build_execution_runner(repo: Path, config: Any, trace_dir: Path):
     )
     permission = PermissionManager(workspace=str(repo), registry=registry)
     agent_config = AgentConfig(
-        max_steps=30,
+        max_steps=max_steps,
         budget_tokens=config.agent.budget_tokens,
         history_max_messages=config.context.history_window * 2,
         planning_mode="always",
@@ -620,6 +622,7 @@ def _run_task(
     runner: Any,
     permission: Any,
     renderer: Any,
+    max_steps: int,
 ) -> tuple[Any, float, bool, str]:
     from agent.runner import AcceptanceContract, RunRequest
     from agent.task import Task
@@ -632,7 +635,7 @@ def _run_task(
         test_cmd=f"{sys.executable} -m pytest -q",
         require_changes=True,
         require_tests=True,
-        max_steps=30,
+        max_steps=max_steps,
         budget_tokens=runner.config.budget_tokens,
     )
     acceptance = AcceptanceContract(
@@ -713,6 +716,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true", help="resume the latest or --artifact-dir batch state")
     parser.add_argument("--only", choices=TASK_IDS, help="run only one task; dependencies are verified offline first")
     parser.add_argument("--expected-branch", default=EXPECTED_BRANCH)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=DEFAULT_MAX_STEPS,
+        help=f"maximum Agent steps per task (default: {DEFAULT_MAX_STEPS})",
+    )
     parser.add_argument("--artifact-root", default=str(DEFAULT_ARTIFACT_ROOT))
     parser.add_argument("--artifact-dir", default=None, help="explicit batch artifact directory")
     return parser
@@ -722,6 +731,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.execute and args.dry_run:
         raise SystemExit("--execute and --dry-run are mutually exclusive")
+    if args.max_steps < 1:
+        raise SystemExit("--max-steps must be >= 1")
     execute = bool(args.execute)
 
     repo = Path(args.repo).resolve()
@@ -745,6 +756,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         state=state,
         only=args.only,
         execute=execute,
+        max_steps=args.max_steps,
     )
 
     if not execute:
@@ -767,7 +779,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     trace_dir = artifact_dir / "traces"
     trace_dir.mkdir(parents=True, exist_ok=True)
-    runner, permission = _build_execution_runner(repo, config, trace_dir)
+    runner, permission = _build_execution_runner(
+        repo, config, trace_dir, max_steps=args.max_steps
+    )
     renderer = RunEventRenderer(preview_lines=5, compact=False, show_task=True, show_reasoning=False)
     exit_code = 0
     try:
@@ -792,6 +806,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     runner=runner,
                     permission=permission,
                     renderer=renderer,
+                    max_steps=args.max_steps,
                 )
             except BaseException as exc:
                 state["tasks"][task_id] = {
