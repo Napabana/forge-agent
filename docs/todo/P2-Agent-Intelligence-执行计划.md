@@ -540,6 +540,9 @@ skill enabled
 - 该 run 用于证明真实 MCP capability 主链，不用于性能结论；CRLF/trailing-newline 探索与一次 provider timeout 显著污染 step/token/time。
 - 本轮未提供 sandbox trace，不把 shell host-filesystem isolation 记作 real-model MCP evidence。
 
+- MCP E2E 后噪声治理已完成并经本地全量 pytest + real-model r3 验证：r3 为 SUCCESS / 11 steps / 73,197 tokens / 75.1s / post-edit 16 passed；真实轨迹直接采用 `file_edit`，无重复 file_write、CRLF/EOF-byte 调试、permission/no-progress/replan。
+- 相比上一轮同 fixture 成功 run 的 29 steps / 295,016 tokens / 779.2s，本次单次运行分别下降 62.07% / 75.19% / 90.36%；仅作为单次 before/after evidence，不作为稳定性能或统计结论。
+
 ## 参考设计
 
 ### Model Context Protocol 官方架构

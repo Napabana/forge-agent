@@ -2,7 +2,7 @@
 
 日期：2026-09-21
 
-状态：**IMPLEMENTED / LOCAL VALIDATION PENDING**
+状态：**VERIFIED / REAL-MODEL R3 PASS**
 
 ## 背景
 
@@ -207,7 +207,7 @@ python -m pytest -q \
 python -m pytest -q
 ```
 
-当前 ChatGPT 执行环境无法解析 github.com，因此没有在此处实际运行 pytest；状态保持 **LOCAL VALIDATION PENDING**。
+用户已在本地完成全量 pytest，并确认全部通过。此前测试过程中暴露的 Shell fake-fixture、find action 分类和正则转义回归均已修复；最终 real-model 复测基于 `dev@36d1150ea4958de6bd64e44c5c4713e0e9aa8ab6`。
 
 ## 8. 后续真实验收
 
@@ -223,3 +223,103 @@ python -m pytest -q
 - 最终 post-edit tests + FINISH。
 
 只有新的真实 run 之后，才能讨论 step/token/time 是否下降；本轮不做性能提升 claim。
+
+
+## 9. Real-model r3 验证结果
+
+使用与上一轮成功 run 相同的：
+
+```text
+model: deepseek-v4.1-flash
+config: config/eval-p2-mcp-pr-test.yaml
+target: clean pr-test:forge-p2-mcp-demo
+task: 同一 MCP policy-mode coding task
+```
+
+r3：
+
+```text
+Status  : SUCCESS
+Steps   : 11
+Tokens  : 73,197
+Time    : 75.1s
+Tests   : 16 passed
+```
+
+真实轨迹：
+
+```text
+Step 1-2  repository exploration
+Step 3    mcp__eval_docs__lookup_project_guidance
+          -> POLICY_MODE='strict'
+          -> canonical file src/app/config.py
+Step 4    plan_create
+Step 5-6  plan_step_update
+Step 7    file_edit legacy -> strict
+Step 8    full tests/ -> 16 passed
+Step 9    final status/diff verification
+Step 10   plan_step_update
+Step 11   FINISH -> SUCCESS
+```
+
+上一轮成功 run：
+
+```text
+29 steps
+295,016 tokens
+779.2s
+SUCCESS
+```
+
+同 fixture 单次对比：
+
+```text
+steps:  29 -> 11      (-18, -62.07%)
+tokens: 295,016 -> 73,197
+        (-221,819, -75.19%)
+time:   779.2s -> 75.1s
+        (-704.1s, -90.36%)
+```
+
+### 可观察到的行为变化
+
+本轮不是只看最终数字，还能在 trajectory 中直接看到对应治理项生效：
+
+- `file_edit` 被真实模型直接采用；
+- 没有重复 `file_write`；
+- 没有 `xxd / od / trailing newline / CRLF` 调试链；
+- 没有 permission denial；
+- 没有 NO_PROGRESS recovery / replan；
+- MCP guidance 只调用一次；
+- 修改后立即执行 full tests；
+- full tests 后只做一次最终 diff/status 检查并 FINISH。
+
+因此可以说：
+
+> 这轮噪声治理在同一真实 MCP fixture 的单次复测中显著收敛了轨迹，并且改进点与具体 tool trajectory 可对应。
+
+不能说：
+
+> 已证明 Forge 的 MCP token/latency 稳定提升 75%/90%。
+
+原因：
+
+- 只有一轮 before 与一轮 after；
+- 模型本身存在随机性；
+- 上一轮包含一次 provider timeout，本轮没有；
+- 尚未做多 repetition benchmark / distribution comparison。
+
+### 剩余噪声
+
+r3 仍在 Step 1-2 和 Step 9 使用 shell 做 repo exploration / status / diff，而不是完全使用专用工具。这个问题已经通过 Prompt 做 soft guidance，但尚未成为强制 tool policy。
+
+当前不继续扩大本轮 scope。后续若进入正式 benchmark，可以把：
+
+```text
+dedicated-tool adherence
+shell fallback count
+format-inspection count
+duplicate edit count
+```
+
+作为 trajectory quality metrics 记录。

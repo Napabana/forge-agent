@@ -599,3 +599,16 @@ pytest -q
 - 本轮只完成实现与 deterministic tests 补充；当前执行环境无法联网拉取仓库，因此没有在这里真实运行 pytest。用户本地验证前不得写“tests passed”。
 - 推荐定向测试：`tests/test_day3.py tests/test_cli_isolate.py tests/test_harness.py tests/test_structured_planning.py tests/test_structured_recovery.py tests/test_repo_map_prompt_layout.py tests/test_mcp_integration.py`，随后再跑全量 `python -m pytest -q`。
 - 该轮目标是收敛 MCP real-model run 中的非 Provider 噪声，不产生任何 token/latency improvement claim；需要重新跑 clean pr-test E2E 后才能比较轨迹。
+
+
+### 验证补充（2026-09-21，MCP E2E 后噪声治理：VERIFIED）
+
+- 用户本地已确认本轮修改后的全量 pytest 全部通过；此前逐项回归暴露并修复了 Shell fake-fixture、`find` action 分类与正则转义问题，最终 `dev@36d1150ea4958de6bd64e44c5c4713e0e9aa8ab6` 进入 real-model 复测。
+- 使用与上一轮相同 task、相同 `deepseek-v4.1-flash`、相同 `config/eval-p2-mcp-pr-test.yaml` 和 clean `pr-test:forge-p2-mcp-demo` 进行 r3。
+- r3 结果：`SUCCESS`，11 steps，73,197 tokens，75.1s；修改后 full `tests/` 为 16 passed。
+- 轨迹：Step 1-2 repo exploration → Step 3 单次 MCP guidance 成功返回 strict/canonical path → Step 4 plan_create → Step 5-6 plan step updates → Step 7 `file_edit` 精确修改 config → Step 8 full tests 16 passed → Step 9 status/diff 验证 → Step 10 plan step update → Step 11 FINISH。
+- 与上一轮同 fixture 成功 run（29 steps / 295,016 tokens / 779.2s）相比，本次单次运行 steps -18（-62.07%）、tokens -221,819（-75.19%）、wall time -704.1s（-90.36%）。
+- 这些差值只能表述为“同一 fixture 的单次 r3 相比 r2 显著更低”，不能推广为稳定性能提升或统计结论；上一轮还包含一次 provider timeout，而本轮没有。
+- 可直接归因到轨迹的治理效果：`file_edit` 替代重复 `file_write`；没有 xxd/od/CRLF/trailing-newline 修复链；没有 permission_denied/no_progress/replan；MCP guidance 只调用一次；post-edit full test 后立即收口。
+- 仍有可优化项：Step 1-2/9 仍使用 shell 做 repo inspection/status/diff，而系统 Prompt 已要求优先专用 tools；本轮不继续扩大范围，后续可在正式 benchmark 中观察 tool-choice adherence。
+- 噪声治理状态从 `IMPLEMENTED / LOCAL VALIDATION PENDING` 更新为 `VERIFIED / REAL-MODEL R3 PASS`。
