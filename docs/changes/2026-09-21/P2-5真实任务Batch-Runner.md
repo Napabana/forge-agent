@@ -2,7 +2,7 @@
 
 日期：2026-09-21
 
-状态：**IMPLEMENTED / DETERMINISTIC VALIDATION PASSED / REAL PROVIDER NOT EXECUTED**
+状态：**IMPLEMENTED / REAL PROVIDER PARTIAL VERIFIED / STEP-BUDGET TUNED**
 
 ## 目标
 
@@ -140,7 +140,7 @@ A/B/C 共用同一个目标 working tree，不创建三个 isolate worktree。
 
 仅在 Batch Runner 的内存配置中覆盖：
 
-- `max_steps = 30`
+- `max_steps = 60`（Batch Runner 默认值，可通过 `--max-steps` 覆盖）
 - `planning_mode = "always"`
 - `recovery_mode = "structured"`
 - `skills_enabled = False`
@@ -324,7 +324,7 @@ C True
 Forge Agent pr-test practice batch — DRY RUN (API calls = 0)
 Provider   : openai
 Model      : deepseek-v4.1-flash
-Overrides  : planning=always, recovery=structured, skills=false, mcp=disabled, max_steps=30
+Overrides  : planning=always, recovery=structured, skills=false, mcp=disabled, max_steps=60
 ...
 Order      : A -> B -> C
 ```
@@ -332,6 +332,35 @@ Order      : A -> B -> C
 限制：
 
 当前执行容器直接 clone GitHub 时 DNS 解析失败，因此没有在容器中对完整 `forge-agent` checkout 运行仓库级 pytest，也没有对真实 `pr-test-agent-practice` 执行 Task A/B/C。不能把上述 deterministic validation 表述成真实模型任务成功。
+
+## 真实 Provider 运行反馈（2026-09-21）
+
+用户随后在本地对同一 batch artifact 执行了真实 `deepseek-v4.1-flash / KRILL` 运行，得到以下直接证据：
+
+- Task A 首轮在 `max_steps=30` 时达到 step limit，状态 `incomplete`，未进入 acceptance。
+- 保留 checkpoint 后执行 `--resume`，Task A 在 21 steps 内补齐缺失的 `src/calc_core/__init__.py`，focused tests 12 passed，full regression 28 passed，最终：
+  - `status=success`
+  - `acceptance=passed`
+  - `P2-5 eligible=success_with_acceptance_pass`
+- Task B 在同一 working tree 上继续执行，主体实现和测试已写入；到 step 22 后进入 collection-error 诊断/修复，最终再次在 step 30 命中 `max_steps`，状态 `incomplete`。
+- 这两次真实运行说明 `30` 对 `planning=always + recovery=structured` 的中等复杂度 coding task 过紧：A 实际跨两次运行累计需要约 51 个 Agent steps；B 在 30 步时仍处于有效修复阶段而非无进展循环。
+
+因此 Batch Runner 将默认 step budget 从 30 调整为 60，并新增 CLI 参数：
+
+```text
+--max-steps N
+```
+
+该值统一传入：
+
+```text
+CLI
+  -> config.agent.max_steps
+  -> AgentConfig.max_steps
+  -> Task.max_steps
+```
+
+另外，真实运行暴露出前台可观测性问题：失败的 test observation 同时具有 pytest output 与 error，但旧 `RunEventRenderer` 只显示 `error or output`，导致终端只看到 `pytest exited with code 2`。现已改为失败时先展示 output preview，再单独展示 error，便于无人值守运行时直接看到 collection traceback。
 
 ## 下一步
 
