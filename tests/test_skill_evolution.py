@@ -374,6 +374,9 @@ def test_recovery_candidate_describes_trigger_strategy_and_next_action():
     ))[0]
     candidate = DeterministicCandidateGenerator().generate(pattern)
     assert "# Recovery Motif" in candidate.instructions
+    assert "classifies test_failure" in candidate.description
+    assert "selects inspect" in candidate.description
+    assert "next semantic action is INSPECT" in candidate.description
     assert "Observed failure category: `test_failure`." in candidate.instructions
     assert "Observed recovery strategy: `inspect`." in candidate.instructions
     assert "Inspect the failure evidence" in candidate.instructions
