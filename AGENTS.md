@@ -548,3 +548,15 @@ pytest -q
 - 与 Stage 1 旧 run（18 steps / 122,597 tokens / 98.6s）相比，本次单样本为 15 / 89,485 / 89.0s。只能作为同 fixture 的 small-sample observation，不能据此宣称总体 success-rate、pass@1 或稳定 token/latency 改善。
 - Planning v2 / Recovery v2 至此同时具备 deterministic regression DONE 与 real-model E2E DONE 证据。
 - 验证日志：`docs/changes/2026-09-20/P2-Stage1-Planning-Recovery-v2真实模型E2E-DONE.md`。
+
+
+### 修复补充（2026-09-21，P2-4 MCP real-model r1：Provider failure + Eval workspace isolation）
+
+- 用户提交真实模型 MCP Eval artifact：`evals/results/p2-4-mcp-real-e2e-r1/`。该 trial 确实执行（不是 not_executed），配置为 `planning_recovery_skills_mcp`、`deepseek-v4.1-flash`、MCP server `eval_docs`。
+- Trace 已证明 MCP stdio server 正常启动并协商 capability：protocol `2026-07-28`，tools/resources/prompts 均 supported，共发现 5 个 MCP tools。
+- trial 最终不是 MCP failure，而是第 4 次 model turn 经 connection/timeout retry 后收到 Provider/Cloudflare 522；RunResult 正确收口为 `termination_reason=provider_error`，acceptance skipped。该 r1 不得计作 MCP capability failure。
+- r1 同时暴露 Eval isolation bug：`find_files` / `search_text` 未绑定 target workspace，默认从 Forge Agent 进程 cwd 搜索。模型因此看到了 `evals/fixtures/coding_agent/mcp_suite.json` 中的 reference expectation `strict`，trajectory 被 benchmark leakage 污染。虽然 `mcp-guidance-used` grader 要求真实调用 MCP、能够阻止该 run 误判 PASS，但 r1 仍不能作为干净 MCP real-model evidence。
+- 修复：`SearchTextTool / FindFilesTool / FindSymbolTool` 新增可选 workspace；production registry 与 file tools 一样注入 target repo/worktree workspace。无 path 时默认 search target workspace；显式绝对/相对 path 逃逸 workspace 时返回 `invalid_arguments`。
+- 新增 registry regression：process cwd 中放置外部 fixture，三个 search tools 默认只能看到 workspace 内容，并拒绝 absolute/relative escape。
+- 配置加载同时收紧：显式传入 `--config` 但文件不存在时不再 silent fallback 到默认空配置，而是抛出 `FileNotFoundError`；路径含反斜杠时提示 Linux/WSL 使用 `/`。
+- 本轮补丁需要用户本地跑定向测试和全量回归后，再用新 output dir 执行 MCP real-model r2。不得复用/覆盖 r1，也不得把 r1 的 0 success 当作 MCP outcome。

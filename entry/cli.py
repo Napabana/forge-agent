@@ -94,7 +94,7 @@ def _build_registry(
     """根据配置组装工具注册表。
 
     default_cwd：shell/test/git 工具的默认工作目录；LLM 显式 cwd 仍可覆盖。
-    workspace：文件工具的独立路径边界，不从 default_cwd 隐式推导。
+    workspace：文件/搜索工具的独立路径边界，不从 default_cwd 隐式推导。
     confirm_callback 仅保留 registry_builder 兼容；生产确认统一由外层 ToolExecutor 执行。
     """
     from tools.base import ToolRegistry
@@ -117,9 +117,9 @@ def _build_registry(
         .register(FileReadTool(workspace=fs_workspace))
         .register(FileViewTool(workspace=fs_workspace))
         .register(FileWriteTool(workspace=fs_workspace))
-        .register(SearchTextTool())
-        .register(FindFilesTool())
-        .register(FindSymbolTool())
+        .register(SearchTextTool(workspace=fs_workspace))
+        .register(FindFilesTool(workspace=fs_workspace))
+        .register(FindSymbolTool(workspace=fs_workspace))
         .register(PytestTool(runtime=runtime, default_cwd=process_cwd))
         .register(GitStatusTool(runtime=runtime, default_cwd=process_cwd))
         .register(GitDiffTool(runtime=runtime, default_cwd=process_cwd))

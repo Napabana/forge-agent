@@ -175,10 +175,15 @@ agent:
         config = load_config(config_file)
         assert config.llm.api_key == "sk-from-env"
 
-    def test_missing_file_returns_defaults(self, tmp_path):
-        config = load_config(tmp_path / "nonexistent.yaml")
-        assert isinstance(config, AppConfig)
-        assert config.llm.provider == "anthropic"
+    def test_missing_explicit_file_raises(self, tmp_path):
+        missing = tmp_path / "nonexistent.yaml"
+        with pytest.raises(FileNotFoundError, match="Config file not found"):
+            load_config(missing)
+
+    def test_windows_separator_hint_for_missing_explicit_file(self, tmp_path):
+        missing = str(tmp_path / "config") + "\\\\eval.yaml"
+        with pytest.raises(FileNotFoundError, match="Linux/WSL"):
+            load_config(missing)
 
     def test_none_path_returns_defaults(self, tmp_path, monkeypatch):
         # 确保当前目录没有 default.yaml

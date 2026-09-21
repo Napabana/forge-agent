@@ -14,11 +14,12 @@ tools/search_tool.py
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
 
-from tools.base import BaseTool, ToolEffect, ToolResult
+from tools.base import BaseTool, ToolEffect, ToolErrorType, ToolResult
 
 
 MAX_RESULTS = 50        # 单次搜索最多返回的结果数
@@ -41,6 +42,9 @@ class SearchTextTool(BaseTool):
         file_pattern (str): 只搜索匹配的文件名（如 "*.py"，默认所有文件）
         case_sensitive (bool): 是否区分大小写（默认 True）
     """
+
+    def __init__(self, workspace: str | Path | None = None) -> None:
+        self._workspace = Path(workspace).resolve() if workspace else None
 
     @property
     def effect(self) -> ToolEffect:
@@ -85,7 +89,12 @@ class SearchTextTool(BaseTool):
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
         raw_pattern = params.get("pattern", "")
-        search_path = Path(params.get("path", "."))
+        search_path = _resolve_search_path(
+            params.get("path", ".") or ".",
+            self._workspace,
+        )
+        if isinstance(search_path, ToolResult):
+            return search_path
         file_pattern = params.get("file_pattern", "*")
         case_sensitive = params.get("case_sensitive", True)
 
@@ -143,6 +152,9 @@ class FindFilesTool(BaseTool):
         path (str):    搜索根目录（默认当前目录）
     """
 
+    def __init__(self, workspace: str | Path | None = None) -> None:
+        self._workspace = Path(workspace).resolve() if workspace else None
+
     @property
     def effect(self) -> ToolEffect:
         return ToolEffect.READ_ONLY
@@ -178,7 +190,12 @@ class FindFilesTool(BaseTool):
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
         pattern = params.get("pattern", "")
-        search_path = Path(params.get("path", "."))
+        search_path = _resolve_search_path(
+            params.get("path", ".") or ".",
+            self._workspace,
+        )
+        if isinstance(search_path, ToolResult):
+            return search_path
 
         if not search_path.exists():
             return ToolResult(
@@ -217,6 +234,9 @@ class FindSymbolTool(BaseTool):
         path (str):   搜索根目录（默认当前目录）
     """
 
+    def __init__(self, workspace: str | Path | None = None) -> None:
+        self._workspace = Path(workspace).resolve() if workspace else None
+
     @property
     def effect(self) -> ToolEffect:
         return ToolEffect.READ_ONLY
@@ -252,7 +272,12 @@ class FindSymbolTool(BaseTool):
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
         symbol = params.get("symbol", "")
-        search_path = Path(params.get("path", "."))
+        search_path = _resolve_search_path(
+            params.get("path", ".") or ".",
+            self._workspace,
+        )
+        if isinstance(search_path, ToolResult):
+            return search_path
 
         if not symbol:
             return ToolResult(success=False, output="", error="symbol is required")
@@ -295,6 +320,34 @@ class FindSymbolTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 内部辅助
 # ---------------------------------------------------------------------------
+
+def _resolve_search_path(
+    raw_path: str | Path,
+    workspace: Path | None,
+) -> Path | ToolResult:
+    """Resolve search roots relative to the target workspace and reject escapes."""
+    path = Path(raw_path or ".")
+    try:
+        if workspace is None:
+            return path
+
+        target = (path if path.is_absolute() else workspace / path).resolve()
+        if os.path.commonpath([str(workspace), str(target)]) != str(workspace):
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Path escapes workspace: {raw_path}",
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
+        return target
+    except (OSError, ValueError) as exc:
+        return ToolResult(
+            success=False,
+            output="",
+            error=f"Invalid path {raw_path!r}: {exc}",
+            error_type=ToolErrorType.INVALID_ARGUMENTS,
+        )
+
 
 def _iter_files(root: Path, glob_pattern: str):
     """

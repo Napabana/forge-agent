@@ -165,8 +165,60 @@ def test_build_registry_keeps_process_cwd_independent_from_file_workspace(tmp_pa
 
     for name in ("shell", "test", "git_status", "git_diff", "git_add", "git_commit"):
         assert registry._tools[name]._default_cwd == str(cwd)
-    for name in ("file_read", "file_view", "file_write"):
+    for name in (
+        "file_read", "file_view", "file_write",
+        "search_text", "find_files", "find_symbol",
+    ):
         assert registry._tools[name]._workspace == workspace.resolve()
+
+
+def test_build_registry_search_tools_default_to_workspace_and_reject_escape(
+    tmp_path, monkeypatch,
+):
+    """Search defaults must stay inside target repo instead of process cwd."""
+    from config.schema import AppConfig
+    from entry.cli import _build_registry
+
+    workspace = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    (workspace / "inside.py").write_text(
+        "def policy_mode():\n    return 'inside-marker'\n",
+        encoding="utf-8",
+    )
+    (outside / "leak.py").write_text(
+        "def leaked_symbol():\n    return 'outside-marker'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(outside)
+
+    registry = _build_registry(AppConfig(), workspace=str(workspace))
+
+    text_result = registry.execute_tool("search_text", {"pattern": "inside-marker"})
+    assert text_result.success
+    assert "inside.py" in text_result.output
+    assert "outside-marker" not in text_result.output
+
+    files_result = registry.execute_tool("find_files", {"pattern": "*.py"})
+    assert files_result.success
+    assert "inside.py" in files_result.output
+    assert "leak.py" not in files_result.output
+
+    symbol_result = registry.execute_tool("find_symbol", {"symbol": "policy_mode"})
+    assert symbol_result.success
+    assert "inside.py" in symbol_result.output
+
+    for name, params in (
+        ("search_text", {"pattern": "outside-marker", "path": str(outside)}),
+        ("find_files", {"pattern": "*.py", "path": "../outside"}),
+        ("find_symbol", {"symbol": "leaked_symbol", "path": str(outside)}),
+    ):
+        denied = registry.execute_tool(name, params)
+        assert not denied.success
+        assert denied.error_type.value == "invalid_arguments"
+        assert "escapes workspace" in denied.error.lower()
+
 
 def test_run_registry_hides_git_mutation_tools(tmp_path):
     from config.schema import AppConfig

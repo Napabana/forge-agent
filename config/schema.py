@@ -184,6 +184,7 @@ def _refresh_budget_bridges(config: AppConfig) -> None:
 
 def load_config(path: str | Path | None = None) -> AppConfig:
     _load_dotenv()
+    explicit_path = path is not None
     if path is None:
         candidates = [Path("config/default.yaml"), Path(__file__).parent / "default.yaml"]
         for p in candidates:
@@ -195,6 +196,16 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     # config_path = Path(path)
     config_path = Path(path).expanduser()
     if not config_path.exists():
+        if explicit_path:
+            raw_path = str(path)
+            separator_hint = (
+                " On Linux/WSL, use '/' rather than '\\' as the path separator."
+                if "\\" in raw_path
+                else ""
+            )
+            raise FileNotFoundError(
+                f"Config file not found: {config_path}.{separator_hint}"
+            )
         return _parse({})
     raw = _expand_env(config_path.read_text(encoding="utf-8"))
     data: dict[str, Any] = yaml.safe_load(raw) or {}
