@@ -22,9 +22,11 @@ from experience.schema import (
     EvaluationRecord,
     EvaluationRole,
     ExperiencePattern,
+    NormalizedTrajectory,
     PatternType,
     PromotionStatus,
     SkillCandidate,
+    TrajectoryRef,
 )
 from experience.store import CandidateStore
 from experience.trajectory import ExperienceMiner, load_trajectory
@@ -216,7 +218,32 @@ def test_missing_canonical_terminal_provenance_is_rejected(
         load_trajectory(trace)
 
 
-def test_recovery_pattern_uses_typed_failure_and_recovery_events():
+def _normalized_recovery(
+    *,
+    run_id: str,
+    workflow: tuple[str, ...],
+    failures: tuple[str, ...],
+    recoveries: tuple[str, ...],
+) -> NormalizedTrajectory:
+    return NormalizedTrajectory(
+        ref=TrajectoryRef(
+            run_id=run_id,
+            task_id=f"task-{run_id}",
+            trace_ref=f"/tmp/{run_id}.jsonl",
+            trace_sha256=(run_id[-1] if run_id[-1] in "abcdef0123456789" else "a") * 64,
+            run_status="success",
+            acceptance_status="passed",
+            termination_reason="completion_satisfied",
+        ),
+        workflow=workflow,
+        failure_categories=failures,
+        recovery_strategies=recoveries,
+        eligible=True,
+        eligibility_reason="success_with_acceptance_pass",
+    )
+
+
+def test_recovery_pattern_uses_bounded_typed_motifs():
     trajectory = _load("recovery.jsonl")
     assert trajectory.eligible is True
     assert trajectory.failure_categories == ("test_failure",)
@@ -225,10 +252,132 @@ def test_recovery_pattern_uses_typed_failure_and_recovery_events():
         "replan",
     )
     assert "REPLAN" in trajectory.workflow
-    pattern = ExperienceMiner().mine((trajectory,))[0]
-    assert pattern.pattern_type is PatternType.RECOVERY_WORKFLOW
-    assert "failure:test_failure" in pattern.signature
-    assert "recovery:replan" in pattern.signature
+
+    patterns = ExperienceMiner().mine((trajectory,))
+    signatures = {pattern.signature for pattern in patterns}
+    assert (
+        "failure:test_failure",
+        "recovery:inspect",
+        "INSPECT",
+    ) in signatures
+    assert (
+        "failure:test_failure",
+        "recovery:replan",
+        "REPLAN",
+    ) not in signatures
+    assert all(
+        pattern.pattern_type is PatternType.RECOVERY_WORKFLOW
+        for pattern in patterns
+    )
+    assert all(pattern.evidence_count == 1 for pattern in patterns)
+
+
+def test_recovery_motifs_group_across_different_full_workflows():
+    first = _normalized_recovery(
+        run_id="run-a",
+        workflow=(
+            "PLAN",
+            "TEST",
+            "FAIL:test_failure",
+            "RECOVER:inspect",
+            "INSPECT",
+            "EDIT",
+            "TEST",
+            "FINISH",
+        ),
+        failures=("test_failure",),
+        recoveries=("inspect",),
+    )
+    second = _normalized_recovery(
+        run_id="run-b",
+        workflow=(
+            "SHELL",
+            "INSPECT",
+            "FAIL:test_failure",
+            "RECOVER:inspect",
+            "INSPECT",
+            "REPLAN",
+            "EDIT",
+            "TEST",
+            "FINISH",
+        ),
+        failures=("test_failure",),
+        recoveries=("inspect",),
+    )
+
+    patterns = ExperienceMiner().mine((first, second))
+    matching = [
+        pattern
+        for pattern in patterns
+        if pattern.signature
+        == (
+            "failure:test_failure",
+            "recovery:inspect",
+            "INSPECT",
+        )
+    ]
+    assert len(matching) == 1
+    assert matching[0].evidence_count == 2
+    assert matching[0].failure_categories == ("test_failure",)
+    assert matching[0].recovery_strategies == ("inspect",)
+
+
+def test_same_trace_repeated_recovery_motif_counts_as_one_evidence():
+    repeated = _normalized_recovery(
+        run_id="run-c",
+        workflow=(
+            "TEST",
+            "FAIL:test_failure",
+            "RECOVER:inspect",
+            "INSPECT",
+            "TEST",
+            "FAIL:test_failure",
+            "RECOVER:inspect",
+            "INSPECT",
+            "EDIT",
+            "TEST",
+            "FINISH",
+        ),
+        failures=("test_failure", "test_failure"),
+        recoveries=("inspect", "inspect"),
+    )
+    patterns = ExperienceMiner().mine((repeated,))
+    matching = [
+        pattern
+        for pattern in patterns
+        if pattern.signature
+        == (
+            "failure:test_failure",
+            "recovery:inspect",
+            "INSPECT",
+        )
+    ]
+    assert len(matching) == 1
+    assert matching[0].evidence_count == 1
+
+
+def test_recovery_candidate_describes_trigger_strategy_and_next_action():
+    pattern = ExperienceMiner().mine((
+        _normalized_recovery(
+            run_id="run-d",
+            workflow=(
+                "TEST",
+                "FAIL:test_failure",
+                "RECOVER:inspect",
+                "INSPECT",
+                "EDIT",
+                "FINISH",
+            ),
+            failures=("test_failure",),
+            recoveries=("inspect",),
+        ),
+    ))[0]
+    candidate = DeterministicCandidateGenerator().generate(pattern)
+    assert "# Recovery Motif" in candidate.instructions
+    assert "Observed failure category: `test_failure`." in candidate.instructions
+    assert "Observed recovery strategy: `inspect`." in candidate.instructions
+    assert "Inspect the failure evidence" in candidate.instructions
+    assert "Inspect the smallest relevant repository evidence" in candidate.instructions
 
 
 def test_unrelated_workflows_are_not_merged():
