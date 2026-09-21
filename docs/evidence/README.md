@@ -160,32 +160,55 @@ reason = provider_credentials_not_available_in_ci
 
 机器校验锚点：**P2-3 Agent Skills: deterministic regression passed; real-model A/B not executed**
 
-### P2-4 MCP Client / Tool Adapter — Deterministic Regression
+### P2-4 MCP Client / Tool Adapter — Deterministic Regression + Real-model E2E
 
-证据：`mcp_integration/manager.py`、`mcp_integration/adapter.py`、`mcp_integration/registry.py`、`agent/runner.py`、`agent/orchestrate.py`、`tests/test_mcp_integration.py`、`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter.md`。
+证据：`mcp_integration/manager.py`、`mcp_integration/adapter.py`、`mcp_integration/registry.py`、`agent/runner.py`、`agent/orchestrate.py`、`tests/test_mcp_integration.py`、`docs/changes/2026-09-19/P2-4-MCP-Client-Tool-Adapter.md`，以及 2026-09-21 的独立 `pr-test:forge-p2-mcp-demo` real-model E2E 记录。
 
-已实现 Forge Host → official MCP Python SDK v2 client → remote Tool 的 capability integration；remote Tool 被适配成普通 Forge Tool，调用仍必须经过 ToolRegistry / ToolExecutor / Hook / Permission / cooperative cancel / Trace。stdio 与 Streamable HTTP 复用同一 manager lifecycle；Chat/direct 长会话复用连接，isolate/worktree 每次 run 独立连接，CLI/API/GitHub/Eval 均显式 cleanup。Trace 记录 server capability negotiation 与 tool correlation，但不记录 URL/env/secret；独立 MCP-specific eval case 要求 process trace 真正调用固定 guidance tool。
+已实现 Forge Host → official MCP Python SDK v2 client → remote Tool 的 capability integration；remote Tool 被适配成普通 Forge Tool，调用仍必须经过 ToolRegistry / ToolExecutor / Hook / Permission / cooperative cancel / Planning effect gate / Trace。stdio 与 Streamable HTTP 复用同一 manager lifecycle；Chat/direct 长会话复用连接，isolate/worktree 每次 run 独立连接，CLI/API/GitHub/Eval 均显式 cleanup。Trace 记录 server capability negotiation 与 tool correlation，但不记录 URL/env/secret。
 
-安全边界：remote ToolAnnotations 默认不可信；只有 server 显式配置 `trust_read_only_annotations=true` 且 tool 声明 read-only 时才映射为 `READ_ONLY`，否则保守映射为 mutation-capable 并进入 CONFIRM。Trace 不记录 MCP env/secret。
+安全边界：remote ToolAnnotations 默认不可信；只有 server 显式配置 `trust_read_only_annotations=true` 且 tool 声明 read-only 时才映射为 `READ_ONLY`，否则保守映射为 mutation-capable 并进入 CONFIRM。
 
-用户已在本地完成修复并 push，P2-4 按项目交接约定收口为 DONE。当前可核验修复提交 `f842902e1753bdc69b0217d5aa89033bacd2ae82` 的日志记录定向测试 3 passed、Chat/GitHub Issue 相关测试 25 passed 与 `git diff --check` 通过；用户未提供最终全量 pytest 的 passed 数量、完整 stdout 或耗时，因此不补造数字。
+本地 deterministic regression 已按项目交接完成。真实模型补充验收使用独立 `Napabana/pr-test:forge-p2-mcp-demo`：噪声治理后的 r3 为 `SUCCESS / 11 steps / 73,197 tokens / 75.1s`，post-edit full suite 为 `16 passed`。同 fixture 的上一轮成功 run 为 `29 steps / 295,016 tokens / 779.2s`。轨迹中可直接观察到 single MCP guidance call、`file_edit`、full tests 后收口，以及没有 permission/no-progress/replan 噪声链。
 
-边界：没有执行 real-model `planning_recovery_skills vs planning_recovery_skills_mcp` A/B，因此不能宣称 MCP 提升 coding success/pass@1/token/latency，也不能把 local fixture regression 外推为任意外部 MCP 服务的生产可靠性。
+边界：这不是 `planning_recovery_skills vs planning_recovery_skills_mcp` 的多次 A/B benchmark。上一轮还包含 provider timeout，且两次都是单次运行。因此只能表述为“同一 fixture 的单次 before/after 轨迹差异”，不能写成稳定 success/pass@1/token/latency improvement，也不能外推到任意 MCP server 的生产可靠性。
 
-机器校验锚点：**P2-4 MCP: local fix/validation completed and pushed; real-model A/B not executed**
+机器校验锚点：**P2-4 MCP: deterministic regression closed; independent real-model MCP E2E passed; no stable A/B effect claim**
 
 
-### P2-5 Trajectory-driven Skill Evolution — Deterministic Regression
+### P2-5 Trajectory-driven Skill Evolution — Deterministic Regression + Real-model Final Gate
 
-证据：`experience/schema.py`、`experience/trajectory.py`、`experience/candidate.py`、`experience/store.py`、`experience/evaluation.py`、`experience/promotion.py`、`tests/test_skill_evolution.py`、`evals/fixtures/skill_evolution/`、`docs/changes/2026-09-19/P2-5-Trajectory-driven-Skill-Evolution.md`。
+证据：`experience/schema.py`、`experience/trajectory.py`、`experience/candidate.py`、`experience/store.py`、`experience/evaluation.py`、`experience/promotion.py`、`scripts/run_skill_evolution.py`、`scripts/run_real_skill_evolution_eval.py`、`tests/test_skill_evolution.py`、`tests/test_real_skill_evolution_driver.py`、`tests/test_real_skill_evolution_eval.py`、`evals/fixtures/skill_evolution/`、`docs/changes/2026-09-21/P2-Agent-Intelligence-总收口.md`。
 
-已实现 post-run、trajectory-driven、eval-gated Skill improvement pipeline：复用 Trace v2 / TrialResult 作为 canonical artifact，deterministic 提取 verified workflow 与 typed failure→recovery pattern，生成与正式 SkillCatalog 物理隔离的 candidate Skill，再复用 P2-0 Evaluation Harness 做 target / should-trigger / should-not-trigger / non-regression 对照，并由 deterministic PromotionGate 产生 PASS / REJECT / INSUFFICIENT_EVIDENCE / EVALUATION_FAILED。只有持久化 PASS decision 后显式 `promote()` 才能进入现有 project SkillCatalog；用户手工 Skill 不会被静默覆盖。
+已实现 post-run、trajectory-driven、eval-gated Skill improvement pipeline：复用 Trace v2 / TrialResult 作为 canonical artifact，只允许 `RunStatus.SUCCESS + independent acceptance=passed` 的 trajectory 进入 positive mining；successful workflow 与 recovery workflow 分开处理。真实数据暴露旧 full-workflow recovery grouping 过严后，recovery mining 升级为 `recovery_motif_v2`：
 
-用户已在本地完成 P2-5 专项、P2-0/P2-1/P2-2/P2-3、Trace/Runner/Failure Harness、Evidence Pack 与全量 pytest，并明确确认全部通过。最终通过轮次未提供具体 passed 数量、完整 stdout 或耗时，因此不补造数字。独立 fixture 证明的是机制与 regression contract 可复现，不代表现实 trajectory 已产生持续智能提升。
+```text
+failure category
+→ recovery strategy
+→ first semantic action
+```
 
-边界：没有执行 real-model candidate A/B，没有证明 success rate、pass@1、trigger accuracy、token/step efficiency 或长期 self-improvement 提升；没有在线学习、模型参数训练、当前 run 自改 prompt、自动 promotion、global Skill 自动覆盖。
+同一 source trace 对同一 motif 最多贡献一份 evidence；不使用 embedding / LLM similarity / task name 做合并。Candidate 使用标准 P2-3 Skill 格式，但与正式 SkillCatalog 物理隔离；PromotionGate deterministic 检查 source evidence、target / should-trigger / should-not-trigger / non-regression、process evidence、step/token overhead 与 stale hash/version。只有持久化 PASS decision 后显式 `promote()` 才能进入 project SkillCatalog。
 
-机器校验锚点：**P2-5 Skill Evolution: deterministic regression passed; real-model improvement not executed**
+真实 source evidence：独立 `pr-test` practice batch 产生 3 条 `success + acceptance=passed + trajectory eligible` Trace，accepted batch 合计 84 steps / 1,227,602 tokens / 1439.1s。重新 mining 得到 7 个 recovery motifs，其中 3 个达到默认 `min_evidence_count=2`。人工对照现有 deterministic policy 后，只选择 `no_progress → change_approach → INSPECT` 进入 final gate。
+
+real-model final gate 保留 TARGET / SHOULD_TRIGGER / SHOULD_NOT_TRIGGER / NON_REGRESSION 四角色，baseline/candidate 共 8 个 Agent trials。随后使用 `--replay-existing` 在 0 Provider calls 下重建 outcome/process 语义并确认：
+
+- 四个 baseline/candidate 功能 outcome 全部成功；
+- target / should-trigger 各有 2 次 failure classification + 2 次 recovery selection；
+- Candidate metadata 被 discover，但 `skill_selected_count=0`、`skill_loaded_count=0`；
+- should-not-trigger / non-regression 未误加载；
+- 所有 case `evaluation_failed=false`；
+- PromotionGate 最终 `REJECT`，没有 promotion。
+
+因此 real-model evidence 证明的是：**trajectory → Candidate → baseline/candidate eval → deterministic PromotionGate → REJECT** 的真实闭环与拒绝路径成立。它没有证明 Candidate 带来 success rate、pass@1、trigger accuracy、token/step efficiency 或长期 self-improvement 提升。
+
+真实 E2E 还暴露 progressive-disclosure 问题：旧 Candidate description 曾提前包含 next semantic action。future renderer 已升级为 `progressive_disclosure_v2`，metadata 只保留 failure/recovery trigger，具体 next action 只存在完整 `SKILL.md`，必须 load 后才能看到。旧 real-model artifacts 保持 immutable，不能拿新 renderer 的 Candidate identity/hash 冒充旧 A/B 结果。
+
+用户最终在本地确认 P2-5 收口后的相关回归全部通过；未提供最后一轮具体 passed 数量与耗时，因此不补造数字。
+
+边界：没有在线学习、模型参数训练、当前 run 自改 prompt、自动 promotion、global Skill 自动覆盖；被 REJECT 的 Candidate 不能描述成已经部署的“自进化 Skill”。
+
+机器校验锚点：**P2-5 Skill Evolution: deterministic regression closed; 3 real accepted source traces + 8 real-model final-gate trials; candidate REJECTED / not promoted**
 
 ## 面试可说 / 不可说
 
@@ -195,9 +218,9 @@ reason = provider_credentials_not_available_in_ci
 | Tool lifecycle | “统一 validate/pre-hook/permission/tool/post-hook 顺序，并把 policy/tool/infra 失败分层。” | `harness/executor.py`, `tests/test_tool_lifecycle_p0_2.py` | “工具调用无失败”“所有异常都自动恢复” |
 | cooperative cancellation | “在 Provider、tool lifecycle 和 step 边界做 cooperative cancel，并保留 Trace 终止语义。” | `agent/core.py`, `harness/executor.py`, failure tests | “可以立即强杀任意同步工具或 Provider 请求” |
 | Structured Planning | “在单一 Agent loop 内实现 typed Plan/Step/Revision，支持 off/auto/always、计划生命周期 Trace，并在 context compaction 后持续注入 current plan。” | `agent/planning.py`, `agent/core.py`, `tests/test_structured_planning.py` | “Planning 已证明提升成功率/pass@1/降低 token” |
-| Agent Skills | “实现 filesystem Skill catalog 与 progressive disclosure：metadata 常驻、完整 Skill/reference 按需加载，SkillRuntime 跨 compaction 保留；Skill 不绕过 ToolExecutor 执行脚本。” | `skills/catalog.py`, `skills/runtime.py`, `tests/test_agent_skills.py` | “已证明 Skills 提升成功率/trigger accuracy”“Skill script 可直接绕过权限执行” |
-| Trajectory-driven Skill Evolution | “基于落盘 Trace/Eval artifact 做 deterministic experience mining，将 candidate Skill 与正式 catalog 隔离，并通过现有 Evaluation Harness + deterministic PromotionGate 后显式 promotion。” | `experience/*`, `tests/test_skill_evolution.py`；本地 deterministic regression 已通过 | “Agent 会自主进化”“自动学习越来越聪明”“已证明成功率提升” |
-| MCP capability integration | “将 official MCP Python SDK v2 作为 external capability source 接入现有 ToolRegistry/ToolExecutor；remote Tool 继续受 Hook、Permission、Cancel、Planning effect gate 与 Trace 约束，并显式管理 server connection lifecycle。” | `mcp_integration/*`, `agent/runner.py`, `tests/test_mcp_integration.py` | “MCP regression 已通过”“接任意 MCP server 都安全”“MCP 已提升 coding 成功率/pass@1” |
+| Agent Skills | “实现 filesystem Skill catalog 与 progressive disclosure：metadata 常驻、完整 Skill/reference 按需加载，SkillRuntime 跨 compaction 保留；Skill 不绕过 ToolExecutor 执行脚本。” | `skills/catalog.py`, `skills/runtime.py`, `tests/test_agent_skills.py`；P2-5 real E2E 还验证了 metadata/full-instruction 边界 | “已证明 Skills 提升成功率/trigger accuracy”“Skill script 可直接绕过权限执行” |
+| Trajectory-driven Skill Evolution | “基于 accepted Trace 做 deterministic recovery-motif mining，生成隔离 Candidate，并通过 real-model baseline/candidate final gate + deterministic PromotionGate 做受控晋升判断；本次真实 Candidate 最终被 REJECT，没有 promotion。” | `experience/*`, `scripts/run_skill_evolution.py`, `scripts/run_real_skill_evolution_eval.py`；3 条真实 source traces + 8 个 real-model final-gate trials | “Agent 会自主进化”“自动学习越来越聪明”“已证明成功率提升”“被拒 Candidate 已部署” |
+| MCP capability integration | “将 official MCP Python SDK v2 作为 external capability source 接入现有 ToolRegistry/ToolExecutor；remote Tool 继续受 Hook、Permission、Cancel、Planning effect gate 与 Trace 约束，并显式管理 server connection lifecycle。” | `mcp_integration/*`, `tests/test_mcp_integration.py`；独立 pr-test real-model MCP E2E r3 SUCCESS / 11 steps / 16 passed | “接任意 MCP server 都安全”“单次 r3 证明稳定 token/latency 提升”“MCP 已提升总体 coding success/pass@1” |
 | Failure-aware Recovery | “在单一 Agent loop 内实现 typed FailureContext/RecoveryDecision、bounded recovery 与 plan revision gate；Provider retry、cancel、infra 保持独立语义。” | `agent/recovery.py`, `agent/core.py`, `tests/test_structured_recovery.py` | “已证明提升成功率”“生产级 fault tolerance”“恢复成功率 X%” |
 | Error Recovery / Failure Harness | “对 transient provider retry、工具失败 Observation、循环/完成性失败和基础设施异常做了确定性故障回归。” | `tests/test_failure_harness*.py` | “Fault tolerance 达到生产级”“故障恢复成功率 X%” |
 | Trace v2 | “用 append-only JSONL 记录 run/step/tool/acceptance/delivery correlation，并在落盘边界递归脱敏。” | `agent/event_log.py`, `agent/trace_v2.py`, trace tests | “Trace 可以确定性重放 Agent 执行” |
@@ -219,9 +242,9 @@ reason = provider_credentials_not_available_in_ci
 | 多 Provider abstraction | REWORD | “抽象统一 `LLMBackend`，路由 Anthropic、OpenAI 与 OpenAI-compatible provider/protocol。” | `llm/base.py`, `llm/router.py`；不要说所有 provider 都做过同等 E2E |
 | Tool Calling | KEEP | “统一 Tool schema/validation、Hook、Permission、execution 与 Observation 生命周期。” | executor/lifecycle tests |
 | Structured Planning | KEEP | “实现 typed ExecutionPlan/PlanStep/PlanRevision，并将 current plan 作为 runtime context 注入单一 Agent loop，支持 off/auto/always 与 Trace lifecycle。” | deterministic regression 已通过；没有 real-model A/B，不能写效果提升 |
-| Agent Skills | KEEP | “实现 project/global filesystem Skill catalog 与 progressive disclosure，按需加载 Skill/reference，并将当前 Skill state 作为 runtime context 保留。” | deterministic regression 已通过；没有 real-model A/B，不能写 trigger/成功率百分比 |
-| Trajectory-driven Skill Evolution | KEEP | “基于 Trace / Eval artifact 实现 trajectory-driven Skill candidate mining，通过 deterministic promotion gate 检查 target/non-regression/trigger/overhead，显式 promotion 后才进入正式 SkillCatalog。” | deterministic regression 已通过；没有 real-model A/B，不能写效果提升或‘自主进化’ |
-| MCP Client / Tool Adapter | KEEP | “基于 official MCP Python SDK v2 将外部 MCP Tool 适配进既有 ToolRegistry/ToolExecutor，并统一复用 Permission、Hook、cooperative cancel、Planning effect gate 与 Trace。” | 本地修复/验证已完成并 push；当前无 real-model A/B，不能写效果提升或生产级外部服务可靠性 |
+| Agent Skills | KEEP | “实现 project/global filesystem Skill catalog 与 progressive disclosure，按需加载 Skill/reference，并将当前 Skill state 作为 runtime context 保留。” | deterministic regression 已通过；P2-5 E2E 暴露并修复 Candidate metadata 泄漏 next action 的边界；仍不能写 Skills 提升成功率百分比 |
+| Trajectory-driven Skill Evolution | KEEP | “基于 accepted Trace 提取 recovery motif，生成隔离 Candidate，并通过 baseline/candidate Evaluation Harness 与 deterministic PromotionGate 做受控晋升判断。” | 已有 3 条真实 source traces + 8 个 real-model final-gate trials；本次 Candidate 被 REJECT/未 promotion，不能写‘自主进化’或效果提升 |
+| MCP Client / Tool Adapter | KEEP | “基于 official MCP Python SDK v2 将外部 MCP Tool 适配进既有 ToolRegistry/ToolExecutor，并统一复用 Permission、Hook、cooperative cancel、Planning effect gate 与 Trace。” | deterministic regression + 独立 pr-test real-model E2E 已完成；单次 r3 只能作 case evidence，不能写稳定性能提升或生产级外部服务可靠性 |
 | Failure-aware recovery | KEEP | “实现 typed FailureContext/RecoveryDecision 与 bounded RecoveryPolicy，并把 repeated failure 与 P2-1 plan revision gate 联动。” | deterministic regression 已通过；没有 real-model A/B，不能写效果百分比 |
 | Error recovery | REWORD | “实现 transient provider retry、typed failure Observation、loop/completion guard，并用 Failure Harness 做确定性故障回归。” | Failure Harness；不要说生产级容错率 |
 | Loop detection | KEEP | “对重复 Action/Observation 指纹与无进展循环做检测和终止/恢复控制。” | `agent/loop_detector.py`, loop tests | 只能写 contract，不写效果百分比 |
