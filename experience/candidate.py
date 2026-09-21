@@ -24,23 +24,47 @@ _STEP_TEXT = {
 }
 
 
+_RECOVERY_STRATEGY_TEXT = {
+    "inspect": "Inspect the failure evidence and surrounding repository state before changing code or retrying.",
+    "change_approach": "Change approach instead of repeating the action that produced no semantic progress.",
+    "replan": "Revise the structured plan using the failure evidence before continuing.",
+    "rerun_test": "Re-run the relevant verification only after the required corrective step is complete.",
+}
+
+
 class DeterministicCandidateGenerator:
     """Render typed patterns into standard P2-3 SKILL.md-compatible instructions."""
 
     def generate(self, pattern: ExperiencePattern, *, skill_name: str | None = None) -> SkillCandidate:
         name = skill_name or f"experience-{pattern.pattern_type.value.replace('_', '-')}-{pattern.pattern_id[-8:]}"
         if pattern.pattern_type is PatternType.RECOVERY_WORKFLOW:
-            description = "Use when a coding task hits a structured failure that requires bounded recovery and verification."
+            description = "Use when a coding task hits a structured failure matching this repeatedly observed recovery motif."
+            failure = pattern.failure_categories[0] if pattern.failure_categories else "unknown"
+            recovery = pattern.recovery_strategies[0] if pattern.recovery_strategies else "unknown"
             lines = [
-                "# Recovery Workflow",
+                "# Recovery Motif",
                 "",
-                "Use only when the current task matches the observed structured failure/recovery pattern.",
+                "Use only when the current structured failure classification matches this observed motif.",
+                f"Observed failure category: `{failure}`.",
+                f"Observed recovery strategy: `{recovery}`.",
+                f"Source evidence: {pattern.evidence_count} accepted trajectory/trajectories.",
+                "",
+                "Recovery:",
+                "1. Do not retry the failed action unchanged.",
+                "2. " + _RECOVERY_STRATEGY_TEXT.get(
+                    recovery,
+                    f"Apply the recorded `{recovery}` recovery strategy before continuing.",
+                ),
             ]
-            if pattern.failure_categories:
-                lines.append(f"Observed failure categories: {', '.join(pattern.failure_categories)}.")
-            if pattern.recovery_strategies:
-                lines.append(f"Observed recovery strategies: {', '.join(pattern.recovery_strategies)}.")
-            lines.extend(["", "Workflow:"])
+            numbered = 2
+            for token in pattern.signature:
+                if token.startswith(("failure:", "recovery:", "FAIL:", "RECOVER:")):
+                    continue
+                text = _STEP_TEXT.get(token)
+                if text is None:
+                    continue
+                numbered += 1
+                lines.append(f"{numbered}. {text}")
         else:
             description = "Use for coding tasks that match this repeatedly observed verified repository workflow."
             lines = [
@@ -50,18 +74,15 @@ class DeterministicCandidateGenerator:
                 "",
                 "Workflow:",
             ]
-
-        numbered = 0
-        for token in pattern.signature:
-            if token.startswith("failure:") or token.startswith("recovery:") or token.startswith("FAIL:") or token.startswith("RECOVER:"):
-                continue
-            text = _STEP_TEXT.get(token)
-            if text is None:
-                continue
-            numbered += 1
-            lines.append(f"{numbered}. {text}")
-        if numbered == 0:
-            lines.append("1. Follow only the typed failure/recovery sequence recorded by the candidate provenance.")
+            numbered = 0
+            for token in pattern.signature:
+                text = _STEP_TEXT.get(token)
+                if text is None:
+                    continue
+                numbered += 1
+                lines.append(f"{numbered}. {text}")
+            if numbered == 0:
+                lines.append("1. Follow only the typed workflow recorded by the candidate provenance.")
         lines.extend([
             "",
             "Do not treat a successful edit as completion by itself.",
