@@ -540,7 +540,7 @@ def test_runtime_infrastructure_first_failure_then_finish_is_unresolved_fatal(tm
     registry = ToolRegistry().register(FailingTool("shell", error))
     result = make_runner(
         tmp_path,
-        ScriptedFailureBackend([call("shell"), finish()]),
+        ScriptedFailureBackend([call("shell", {"cmd": "ls"}), finish()]),
         registry,
         config=AgentConfig(fatal_tool_error_repeats=2),
     ).run(RunRequest(make_task(tmp_path)))
@@ -553,7 +553,11 @@ def test_runtime_infrastructure_first_failure_then_finish_is_unresolved_fatal(tm
 
 def test_repeated_fatal_runtime_infrastructure_aborts_before_finish(tmp_path):
     error = "Failed to start container: Duplicate mount point: /workspace"
-    backend = ScriptedFailureBackend([call("shell"), call("shell"), finish()])
+    backend = ScriptedFailureBackend([
+        call("shell", {"cmd": "ls"}),
+        call("shell", {"cmd": "ls"}),
+        finish(),
+    ])
     registry = ToolRegistry().register(FailingTool("shell", error))
     result = make_runner(
         tmp_path,

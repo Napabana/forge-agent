@@ -48,7 +48,7 @@ _READONLY_PREFIXES: tuple[str, ...] = (
     "cat", "head", "tail", "less", "more",
     "echo", "printf",
     "pwd", "whoami", "which", "type",
-    "locate",
+    "find", "locate",
     "grep", "egrep", "fgrep", "rg", "ag",
     "wc", "sort", "uniq", "cut",
     "diff", "diff3",
@@ -249,20 +249,42 @@ def _check_blocked(cmd: str) -> str | None:
 
 def _is_readonly(cmd: str) -> bool:
     """
-    判断命令是否在只读白名单里。
-    包含 > 写重定向的命令不算只读（即使命令名在白名单里）。
+    判断命令是否属于可证明只读的简单命令。
+
+    find 需要额外按参数判断：查询类 predicate 是只读的，而
+    -delete/-exec/-ok/-fprint 等 action 可能修改仓库或写文件。
     """
-    # 包含写重定向（> 但不是 >>）时不算只读
-    # 用正则精确匹配：>[^>] 是写重定向，>> 是追加（相对安全）
-    import re as _re
-    if _re.search(r'(?<![>])>(?![>])', cmd):
+    # 任何 shell 重定向都不在 simple read-only 子集里。
+    if re.search(r"(?<![>])>(?![>])|<", cmd):
         return False
+
     stripped = cmd.strip().lower()
+    if stripped == "find" or stripped.startswith("find "):
+        return _find_is_readonly(stripped)
+
     for prefix in _READONLY_PREFIXES:
         if stripped == prefix or stripped.startswith(prefix + " "):
             return True
     return False
 
+
+def _find_is_readonly(command: str) -> bool:
+    """Allow common find queries while rejecting actions that can write or execute."""
+    unsafe_actions = (
+        "-delete",
+        "-exec",
+        "-execdir",
+        "-ok",
+        "-okdir",
+        "-fprint",
+        "-fprint0",
+        "-fprintf",
+        "-fls",
+    )
+    return not any(
+        re.search(rf"(?<!\\S){re.escape(action)}(?:\\s|$)", command)
+        for action in unsafe_actions
+    )
 
 def _references_internal_agent_path(cmd: str) -> bool:
     """Prevent generic shell access from bypassing Agent Skills disclosure."""

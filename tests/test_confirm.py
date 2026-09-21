@@ -78,10 +78,15 @@ class TestNeedsConfirm:
     def test_dangerous_commands_need_confirm(self, cmd):
         assert _needs_confirm(cmd), f"Expected {cmd!r} to need confirmation"
 
-    def test_unknown_safe_command_no_confirm(self):
-        # 未知命令但不含危险关键词，不需要确认
-        assert not _needs_confirm("python parse_data.py")
-        assert not _needs_confirm("node server.js")
+    def test_interpreter_or_unknown_command_needs_confirm(self):
+        # 解释器/未知命令可以任意写文件，无法证明只读时必须 fail-safe。
+        assert _needs_confirm("python parse_data.py")
+        assert _needs_confirm("node server.js")
+
+    def test_find_query_is_readonly_but_mutating_actions_confirm(self):
+        assert not _needs_confirm("find . -name '*.py'")
+        assert _needs_confirm("find . -delete")
+        assert _needs_confirm("find . -exec rm {} \\;")
 
 
 # ===========================================================================
