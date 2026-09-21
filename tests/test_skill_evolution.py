@@ -356,7 +356,7 @@ def test_same_trace_repeated_recovery_motif_counts_as_one_evidence():
     assert matching[0].evidence_count == 1
 
 
-def test_recovery_candidate_describes_trigger_strategy_and_next_action():
+def test_recovery_candidate_metadata_preserves_progressive_disclosure():
     pattern = ExperienceMiner().mine((
         _normalized_recovery(
             run_id="run-d",
@@ -376,7 +376,8 @@ def test_recovery_candidate_describes_trigger_strategy_and_next_action():
     assert "# Recovery Motif" in candidate.instructions
     assert "classifies test_failure" in candidate.description
     assert "selects inspect" in candidate.description
-    assert "next semantic action is INSPECT" in candidate.description
+    assert "next semantic action is INSPECT" not in candidate.description
+    assert "load this Skill before choosing the next semantic action" in candidate.description
     assert "Observed failure category: `test_failure`." in candidate.instructions
     assert "Observed recovery strategy: `inspect`." in candidate.instructions
     assert "Inspect the failure evidence" in candidate.instructions
