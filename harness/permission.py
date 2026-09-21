@@ -134,7 +134,7 @@ class PermissionManager:
     def check(self, block: ToolUseBlock) -> PermissionDecision:
         """
         校验一次工具调用。
-        shell 工具：黑名单 DENY；危险关键词 CONFIRM；否则 ALLOW。
+        shell 工具：黑名单 DENY；可证明只读则 ALLOW；其余保守 CONFIRM。
         文件写工具：路径越界 DENY。
         MCP 工具：只有可信 server 明确只读的 adapter 才 ALLOW，其余 CONFIRM。
         其它：ALLOW。

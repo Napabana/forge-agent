@@ -334,6 +334,8 @@ def _is_repository_readonly(cmd: str) -> bool:
             return False
 
     return True
+
+
 def _needs_confirm(cmd: str) -> bool:
     """Require confirmation whenever a command is not provably repository-read-only.
 
