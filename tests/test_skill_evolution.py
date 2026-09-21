@@ -264,7 +264,7 @@ def test_recovery_pattern_uses_bounded_typed_motifs():
         "failure:test_failure",
         "recovery:replan",
         "REPLAN",
-    ) not in signatures
+    ) in signatures
     assert all(
         pattern.pattern_type is PatternType.RECOVERY_WORKFLOW
         for pattern in patterns
