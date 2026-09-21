@@ -88,11 +88,11 @@ mining_report.json + candidate SKILL.md
 当前 `ExperienceMiner` 的真实 contract 是：
 
 - successful workflow：按完整 typed `workflow` signature 精确分组；
-- recovery workflow：按 failure/recovery typed signature + workflow 精确分组；
+- recovery workflow：v2 改为 `failure category + recovery strategy + first semantic action` 的 bounded typed motif 分组；
 - ineligible trajectory 不进入 pattern；
 - 同一 source evidence 由既有 schema 去重。
 
-因此 A/B/C 是否形成一个 pattern，只由它们真实落盘的 typed trajectory 决定，driver 不做自然语言猜测。
+因此 A/B/C 是否共享 recovery evidence，只由真实落盘的 typed failure/recovery/semantic-action motif 决定；driver 不做自然语言猜测。完整 workflow 仍保留在 report provenance 中。
 
 ## Candidate / evidence gate
 
@@ -199,3 +199,8 @@ candidates/
 4. 只有存在合理且 evidence-ready 的 candidate，才设计下一条显式 real-model baseline/candidate evaluation 命令。
 
 在第 4 步之前不再消耗真实 Provider API。
+
+
+## Mining strategy v2
+
+真实首轮 mining 暴露 full recovery signature 过严后，recovery mining 已升级为 `recovery_motif_v2`；详见 `docs/changes/2026-09-21/P2-5-Recovery-Motif-Mining-v2.md`。
