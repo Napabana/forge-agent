@@ -223,6 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "candidate_id": persisted.candidate_id,
             "candidate_version": persisted.candidate_version,
             "skill_name": persisted.skill_name,
+            "description": persisted.description,
             "content_hash": persisted.content_hash,
             "pattern_id": persisted.pattern_id,
             "pattern_type": persisted.pattern_type.value,
@@ -271,6 +272,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  evidence  : {pattern.evidence_count}")
         print(f"  signature : {' -> '.join(pattern.signature)}")
         print(f"  candidate : {row['skill_name']} ({row['candidate_id']})")
+        print(f"  trigger   : {row['description']}")
         print(
             "  gate-ready: "
             + (
