@@ -286,6 +286,7 @@ def _find_is_readonly(command: str) -> bool:
         for action in unsafe_actions
     )
 
+
 def _references_internal_agent_path(cmd: str) -> bool:
     """Prevent generic shell access from bypassing Agent Skills disclosure."""
     normalized = cmd.replace("\\", "/").lower()
