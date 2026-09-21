@@ -6,7 +6,9 @@ Forge Agent 是一个面向软件工程任务的本地 Coding Agent。项目的�
 
 > 使用方法见 [`USAGE.md`](USAGE.md)。项目实现、测试和 benchmark 的证据边界见 [`docs/evidence/README.md`](docs/evidence/README.md)。
 
-P2 Agent Intelligence 已完成 Structured Planning、Failure-aware Recovery、Agent Skills、MCP capability integration、统一 Coding Agent Evaluation Harness，以及 post-run 的 trajectory-driven Skill Evolution。它们均复用现有执行/Trace/权限边界；真实效果是否提升必须通过单独 real-model evaluation 证明。
+P2 Agent Intelligence 已完成 Structured Planning、Failure-aware Recovery、Agent Skills、MCP capability integration、统一 Coding Agent Evaluation Harness，以及 post-run 的 trajectory-driven Skill Evolution。六项能力均复用现有执行/Trace/权限边界，并已完成 deterministic regression；其中 MCP 与 P2-5 还完成了独立 real-model E2E。真实实验只作为对应 fixture / 小样本证据，不推广为稳定 pass@1、token 或 latency 提升结论。
+
+P2-5 的真实闭环已经跑通：3 条真实 accepted trajectories 经 `recovery_motif_v2` 挖掘得到可重复 recovery motifs，选取 `no_progress → change_approach → INSPECT` Candidate 进入 4-role baseline/candidate final gate；8 个 real-model Agent trials 的功能 outcome 全部通过，但 Candidate 在 target / should-trigger 中未被选择或加载，因此 PromotionGate 最终 `REJECT`，没有 promotion。这个结果用于证明 **trajectory → candidate → evaluation → deterministic gate** 的闭环与拒绝路径真实工作，而不是证明“Agent 已经自动变强”。
 
 ## 1. 整体架构
 
@@ -269,13 +271,25 @@ Harness 同时记录 outcome 与 process：required grader/acceptance 决定任�
 
 ### 4.6 Trajectory-driven Skill Evolution
 
-核心文件：`experience/trajectory.py`、`experience/candidate.py`、`experience/evaluation.py`、`experience/promotion.py`、`experience/store.py`。
+核心文件：`experience/trajectory.py`、`experience/candidate.py`、`experience/evaluation.py`、`experience/promotion.py`、`experience/store.py`。真实数据入口位于 `scripts/run_skill_evolution.py`，real-model final gate 位于 `scripts/run_real_skill_evolution_eval.py`。
 
-P2-5 是 post-run offline subsystem，不进入当前任务的 `Agent.run()`。它只从成功且 independent acceptance 已通过的 trajectory 提取 positive workflow，并可消费 P2-2 的 typed failure/recovery event 形成 recovery pattern。
+P2-5 是 post-run offline subsystem，不进入当前任务的 `Agent.run()`。只有 `RunStatus.SUCCESS + independent acceptance=passed` 的 trajectory 才进入 positive mining。successful workflow 保留完整 typed workflow；recovery trajectory 使用 `recovery_motif_v2` 提取有界模式：
 
-Candidate Skill 保存在 repository-bounded `.forge-agent/experience/`，默认不进入正式 `SkillCatalog`。Candidate 必须先经过 P2-0 baseline vs candidate evaluation，再由 deterministic `PromotionGate` 给出 `PASS / REJECT / INSUFFICIENT_EVIDENCE / EVALUATION_FAILED`。即使 Gate PASS，也只有显式 `PromotionManager.promote()` 才会写入 project Skill；用户手工 Skill没有 Forge evolution provenance 时不会被静默覆盖。
+```text
+failure category
+→ recovery strategy
+→ first semantic action
+```
 
-这套机制是 **trajectory-driven + eval-gated improvement**，不是在线 RL、模型参数训练、当前 run 自改 prompt，也不是“Agent 自动越跑越聪明”。
+同一 source trace 对同一 motif 最多贡献一份 evidence，完整 run/task/trace hash 仍保留作 provenance。Candidate 使用标准 P2-3 `SKILL.md` 格式，但保存在 repository-bounded `.forge-agent/experience/`，默认不进入正式 `SkillCatalog`。
+
+Candidate 必须经过 P2-0 baseline vs candidate evaluation，再由 deterministic `PromotionGate` 检查 source evidence、target / should-trigger / should-not-trigger / non-regression、process evidence 与 step/token overhead。Gate 输出 `PASS / REJECT / INSUFFICIENT_EVIDENCE / EVALUATION_FAILED`；即使 PASS，也只有显式 `PromotionManager.promote()` 才会写入 project Skill，用户手工 Skill 没有 Forge evolution provenance 时不会被静默覆盖。
+
+真实验收中，3 条 accepted trajectories 产生 7 个 recovery motifs，其中 3 个达到默认 evidence threshold=2。最终只选择与现有 RecoveryPolicy 重复度最低的 `no_progress → change_approach → INSPECT` 进入 8 个 real-model paired trials。replay 后四个 baseline/candidate 功能 outcome 均成功，target / should-trigger 也真实产生 failure/recovery event，但 Candidate 仅被 discover、没有被 select/load，因此 PromotionGate 保持 `REJECT`，没有 promotion。这说明 Gate 可以拒绝“有重复轨迹证据但未证明增量价值”的 Candidate。
+
+这次 E2E 还暴露了 progressive-disclosure 边界：旧 Candidate metadata 曾提前包含 next semantic action。future renderer 已改为 `progressive_disclosure_v2`，metadata 只保留 failure/recovery trigger，具体下一动作只存在完整 `SKILL.md` 中，必须 `skill_load` 后才能看到。
+
+这套机制是 **trajectory-driven + eval-gated improvement**，不是在线 RL、模型参数训练、当前 run 自改 prompt，也不是“Agent 自动越跑越聪明”。单次 real-model final gate 也不构成稳定性能提升证据。
 
 ## 5. 模型层：统一 Backend 与能力元数据
 
