@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "suite_id": "p2-4-mcp-capability-smoke",
+  "variant": "planning_recovery_skills_mcp",
+  "repetitions": 1,
+  "task_count": 1,
+  "execution_status": "executed",
+  "evidence_kind": "real_model",
+  "real_model_executed": true,
+  "run_metadata": {
+    "provider": "openai",
+    "protocol": "chat_completions",
+    "model": "deepseek-v4.1-flash",
+    "planning_mode": "always",
+    "recovery_mode": "structured",
+    "recovery_max_attempts": 4,
+    "skills_enabled": true,
+    "skills_global_dir": "/mnt/e/2806/forgeAgent/forge-agent/evals/fixtures/coding_agent/skills",
+    "mcp_enabled": true,
+    "mcp_server_ids": [
+      "eval_docs"
+    ]
+  },
+  "claim_boundary": "Observed real-model trials are a small sample until repeated and frozen."
+}
