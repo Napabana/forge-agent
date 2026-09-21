@@ -41,6 +41,7 @@ def test_batch_summary_mines_matching_real_trace_shape_without_api(tmp_path: Pat
     assert report["provider_calls"] == 0
     assert report["evaluation_executed"] is False
     assert report["mining_strategy"] == "recovery_motif_v2"
+    assert report["candidate_renderer"] == "progressive_disclosure_v2"
     assert report["trajectory_count"] == 2
     assert report["eligible_trajectory_count"] == 2
     assert report["pattern_count"] == 1
