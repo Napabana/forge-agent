@@ -120,7 +120,7 @@ def _resolve_candidate(
             "skill_name": candidate.skill_name,
             "next_operation": operations[0],
         },
-        required=True,
+        required=False,
     )
     return candidate, pattern, process_grader
 
@@ -200,7 +200,8 @@ def _dry_run_payload(
             "id": process_grader.grader_id,
             "kind": process_grader.kind,
             "params": dict(process_grader.params),
-            "required": process_grader.required,
+            "trial_blocking": process_grader.required,
+            "promotion_required": True,
         },
         "suite_id": suite.suite_id,
         "roles": [evaluation_role(task).value for task in suite.tasks],
