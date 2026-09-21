@@ -4,7 +4,7 @@ Forge Agent 是一个面向软件工程任务的本地 Coding Agent。项目的�
 
 当前 `dev` 的主线架构已经收口：CLI `run`、交互式 `chat`、HTTP API 与 GitHub Issue 入口共享 `ExecutionRunner → Agent → ToolExecutor → EventLog/Trace` 的生产路径；隔离任务在此基础上接入 SQLite WAL TaskEngine、Git Worktree 和可选 Docker Runtime；Chat 额外接入持久化 Session 与两阶段 Context Compaction；GitHub Issue 自动 PR 则在 Agent 结束后增加独立 Acceptance 与确定性交付门禁。
 
-> 使用方法见 [`USAGE.md`](USAGE.md)。项目实现、测试和 benchmark 的证据边界见 [`docs/evidence/README.md`](docs/evidence/README.md)。
+> 使用方法见 [`USAGE.md`](USAGE.md)。项目实现、测试和 benchmark 的证据边界见 [`docs/evidence/README.md`](docs/evidence/README.md)。P2-0～P2-5 的阶段总收口见 [`docs/changes/2026-09-21/P2-Agent-Intelligence-总收口.md`](docs/changes/2026-09-21/P2-Agent-Intelligence-总收口.md)。
 
 P2 Agent Intelligence 已完成 Structured Planning、Failure-aware Recovery、Agent Skills、MCP capability integration、统一 Coding Agent Evaluation Harness，以及 post-run 的 trajectory-driven Skill Evolution。六项能力均复用现有执行/Trace/权限边界，并已完成 deterministic regression；其中 MCP 与 P2-5 还完成了独立 real-model E2E。真实实验只作为对应 fixture / 小样本证据，不推广为稳定 pass@1、token 或 latency 提升结论。
 
