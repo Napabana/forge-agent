@@ -202,7 +202,161 @@ def test_real_final_gate_defaults_to_zero_api_dry_run(
         "recovery:change_approach",
         "INSPECT",
     ]
-    assert payload["process_grader"]["required"] is True
+    assert payload["process_grader"]["trial_blocking"] is False
+    assert payload["process_grader"]["promotion_required"] is True
     assert payload["planning_mode"] == "off"
     assert payload["recovery_mode"] == "structured"
     assert output.exists() is False
+
+
+def _trial_payload(
+    *,
+    task_id: str,
+    variant: str,
+    candidate_skill: str | None = None,
+    fail_process: bool = False,
+) -> dict:
+    graders = [
+        {
+            "grader_id": "behavior",
+            "kind": "command",
+            "passed": True,
+            "required": True,
+            "detail": "ok",
+            "evidence": {},
+        }
+    ]
+    success = True
+    if candidate_skill is not None:
+        graders.append(
+            {
+                "grader_id": "evolution-skill-trigger",
+                "kind": "skill_selection",
+                "passed": not fail_process,
+                "required": False,
+                "detail": "selection",
+                "evidence": {
+                    "selected_skills": (
+                        [] if fail_process else [candidate_skill]
+                    )
+                },
+            }
+        )
+        if fail_process:
+            graders.append(
+                {
+                    "grader_id": "evolution-recovery-motif",
+                    "kind": "recovery_motif",
+                    "passed": False,
+                    "required": True,
+                    "detail": "historical blocking process grader",
+                    "evidence": {},
+                }
+            )
+            # Historical final-gate artifacts used combined outcome+process success.
+            success = False
+    return {
+        "suite_id": "p2-5-recovery-motif-real-gate",
+        "task_id": task_id,
+        "trial_id": f"{task_id}--{variant}--r001",
+        "variant": variant,
+        "repetition": 1,
+        "execution_status": "executed",
+        "evidence_kind": "real_model",
+        "real_model_executed": True,
+        "run_status": "success",
+        "termination_reason": "completion_satisfied",
+        "acceptance_status": "passed",
+        "success": success,
+        "metrics": {
+            "steps": 5,
+            "total_tokens": 1000,
+            "provider_usage": {},
+            "wall_time_seconds": 1.0,
+        },
+        "grader_results": graders,
+        "trace_ref": None,
+        "patch_ref": None,
+        "final_state_ref": None,
+        "error": None,
+    }
+
+
+def test_replay_existing_separates_outcome_from_historical_process_failure(
+    tmp_path: Path,
+    capsys,
+):
+    report, pattern_id = _write_mining_report(tmp_path)
+    output = tmp_path / "real-eval"
+    baseline_dir = output / "baseline"
+    candidate_dir = output / "candidate"
+    baseline_dir.mkdir(parents=True)
+    candidate_dir.mkdir(parents=True)
+
+    candidate_raw = json.loads(
+        (tmp_path / "candidate" / "candidate.json").read_text(encoding="utf-8")
+    )
+    skill_name = candidate_raw["skill_name"]
+    task_ids = [
+        "target-normalize-label",
+        "should-trigger-timeout-policy",
+        "should-not-trigger-config",
+        "non-regression-triple",
+    ]
+    baseline_rows = [
+        _trial_payload(task_id=task_id, variant="evolution_baseline")
+        for task_id in task_ids
+    ]
+    candidate_rows = [
+        _trial_payload(
+            task_id=task_id,
+            variant="evolution_candidate",
+            candidate_skill=(
+                skill_name
+                if task_id
+                in {"target-normalize-label", "should-trigger-timeout-policy"}
+                else None
+            ),
+            fail_process=(
+                task_id
+                in {"target-normalize-label", "should-trigger-timeout-policy"}
+            ),
+        )
+        for task_id in task_ids
+    ]
+    (baseline_dir / "raw.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in baseline_rows) + "\n",
+        encoding="utf-8",
+    )
+    (candidate_dir / "raw.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in candidate_rows) + "\n",
+        encoding="utf-8",
+    )
+
+    code = final_gate.main(
+        [
+            "--mining-report",
+            str(report),
+            "--pattern-id",
+            pattern_id,
+            "--output-dir",
+            str(output),
+            "--replay-existing",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "replay_existing"
+    assert payload["provider_calls"] == 0
+    assert payload["promotion_status"] == "reject"
+    by_task = {item["task_id"]: item for item in payload["cases"]}
+    assert by_task["target-normalize-label"]["candidate_success"] is True
+    assert by_task["should-trigger-timeout-policy"]["candidate_success"] is True
+    assert by_task["target-normalize-label"]["candidate_process_passed"] is False
+    assert by_task["should-trigger-timeout-policy"]["candidate_process_passed"] is False
+    reasons = payload["promotion_reasons"]
+    assert not any("candidate outcome failed" in reason for reason in reasons)
+    assert not any("regressed a baseline-success case" in reason for reason in reasons)
+    assert any("candidate was not loaded when required" in reason for reason in reasons)
+    assert any("candidate process grader failed" in reason for reason in reasons)
