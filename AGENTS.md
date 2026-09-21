@@ -703,3 +703,14 @@ pytest -q
 - replay 额外输出 failure/recovery 与 Skill discovered/selected/loaded counts、grader details，用来判断 target/should-trigger 是“没有触发 recovery”还是“触发后没有 load Skill”。
 - 另发现 Candidate metadata 当前包含 observed next semantic action（INSPECT），而 Skill metadata 在未加载时即可见，可能让模型直接吸收核心经验、降低 `skill_load` 必要性；先作为真实验收发现记录，不修改首轮 Candidate、不为了 PASS 重跑 API。
 - 下一步：用户 pull 最新 dev、跑专项回归，然后对已有 `p2-5-pattern4-final-gate` 执行 `--replay-existing`，仅做 0-API 重分析。
+
+
+### 最后交接（2026-09-21，P2-5 真实闭环最终收口）
+
+- 0-API replay 已确认：四个 baseline/candidate 功能 outcome 全部成功；target/should-trigger 各有 2 次 failure classification + 2 次 recovery selection，Candidate metadata 均被发现 1 次，但 `skill_selected_count=0`、`skill_loaded_count=0`；should-not-trigger/non-regression 也未误加载。
+- 修正 outcome/process 语义后，PromotionGate REJECT 理由只剩 target/should-trigger 未加载 Candidate + process motif 未通过；无功能 regression、无 evaluation infrastructure failure。
+- 结论：P2-5 真实闭环验收通过；具体 Candidate `candidate-80bb153c9f364a1c` 正确被拒绝，不 promotion，不再重跑 Provider。
+- 真实验收还暴露 progressive-disclosure 问题：旧 recovery Candidate description 提前包含 next semantic action（INSPECT），模型在 metadata-only 阶段即可看到核心经验。
+- future Candidate renderer 已改为 `progressive_disclosure_v2`：metadata 只包含 failure/recovery trigger，并明确要求在选择下一语义动作前 load Skill；具体 next action 只存在完整 SKILL.md 中。mining report 新增 `candidate_renderer` 字段。
+- 旧 real-model artifacts 保持 immutable；新 renderer 产生的新 candidate identity/hash 不能冒充旧 Candidate 的 A/B 结果。
+- 下一步只需用户本地跑相关 pytest 回归；P2-5 不再需要 API 调用。
