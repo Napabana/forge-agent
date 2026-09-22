@@ -1,14 +1,103 @@
 # Forge Agent Real-model Benchmark V1
 
 日期：2026-09-22  
-基线 HEAD：3962241d67566c752418eb0f24778e51b5fd6636  
-Benchmark ID：forge-agent-real-model-benchmark-v1  
-Suite：evals/fixtures/coding_agent/benchmark_v1.json  
-Canonical suite SHA-256：ad69fc2fd905b501db9ae5f4c6d37363d4b67f6b1cdecace90ddc64173f4c7ec
+状态：**REAL-REPOSITORY PROTOCOL IMPLEMENTED / LOCAL VALIDATION PENDING**  
+Benchmark ID：`forge-agent-real-model-benchmark-v1`
 
-## 1. 目标与归因边界
+## 1. 本轮事实源
 
-本轮只评估同一模型、同一 Provider、同一任务、同一 Repo Map、同一 native Tool registry、同一 Context / execution budget 下，两种 Agent architecture 的差异：
+Forge Agent：
+
+~~~text
+repository: Napabana/forge-agent
+branch: dev
+本轮开始 HEAD: 3962241d67566c752418eb0f24778e51b5fd6636
+~~~
+
+真实实验仓库：
+
+~~~text
+repository: Napabana/pr-test
+原 main: f5ad77c739e21efcd65e6e6524f320e3325a96f7
+forge-p2-mcp-demo: 23019998f2e801e79dea59fd23fc49c58fc20038
+~~~
+
+`forge-p2-mcp-demo` 相对原 `main`：
+
+~~~text
+ahead_by = 6
+behind_by = 0
+merge_base = 原 main
+~~~
+
+因此 2026-09-22 已将 `pr-test/main` 无冲突 fast-forward 到：
+
+~~~text
+23019998f2e801e79dea59fd23fc49c58fc20038
+~~~
+
+Benchmark V1 从这一 commit 冻结，不使用后续 main 漂移。
+
+## 2. 纠正 synthetic draft
+
+本轮最初曾基于 P2-0 Harness 的旧模型生成一版：
+
+~~~text
+task.files
+→ 临时 tiny Git repo
+→ Agent
+~~~
+
+这只能作为 synthetic Harness fixture，**不属于 Real-model Benchmark V1**。
+
+发现问题时尚未执行任何 real-model trial，因此没有实验污染。
+
+当前正式协议已经改为：
+
+~~~text
+pr-test @ frozen commit
+        ↓
+clone exact snapshot
+        ↓
+remove original .git history
+        ↓
+apply task-specific setup overlay
+        ↓
+git init + clean task baseline commit
+        ↓
+Agent trial
+        ↓
+independent deterministic acceptance
+~~~
+
+删除原 Git history 的原因是：部分 bug-fix task 的正确实现来自 source commit，如果保留历史，Agent 可以通过 `git show HEAD^` 看到 setup 前的正确答案，破坏 benchmark。
+
+## 3. Source identity
+
+正式 suite：
+
+~~~text
+evals/fixtures/coding_agent/benchmark_v1.json
+~~~
+
+source：
+
+~~~yaml
+repository: Napabana/pr-test
+commit: 23019998f2e801e79dea59fd23fc49c58fc20038
+~~~
+
+canonical suite SHA-256：
+
+~~~text
+f0117c4ca39271401ba878c99afd30643b1dd7af28e0c0cdca9214f128b97f14
+~~~
+
+canonical hash 基于规范化 JSON，因此不受 key order、indent 或 CRLF/LF 影响。
+
+## 4. A/B 归因边界
+
+主实验只比较：
 
 ~~~text
 baseline_react
@@ -26,67 +115,122 @@ planning_recovery_skills
   MCP=false
 ~~~
 
-主实验不引入 MCP，不修改生产 Agent prompt，不增加 Full P2 的 step/token budget，不使用 LLM-as-judge。
+保持相同：
 
-Primary metric 固定为 Independent Acceptance Pass Rate：
+- source repository；
+- source commit；
+- 12 个 task；
+- task description；
+- task setup；
+- deterministic acceptance；
+- model / Provider；
+- native Tool registry；
+- Repo Map mode；
+- max_steps；
+- Context budget；
+- repetitions；
+- test command；
+- report protocol。
 
-~~~text
-Run / Acceptance contract success
-+
-all required deterministic outcome graders pass
+Full P2 不额外获得 steps/token budget。
+
+MCP 不进入主实验。
+
+## 5. Harness real-repository support
+
+新增 suite-level source：
+
+~~~json
+{
+  "source": {
+    "repository": "Napabana/pr-test",
+    "commit": "23019998f2e801e79dea59fd23fc49c58fc20038"
+  }
+}
 ~~~
 
-报告只写 observed successes / observed success rate，不把 24 次 trial/variant 外推成稳定总体 pass@1。
+新增 CLI：
 
-## 2. Stage 1 Audit
+~~~text
+--source-repo <local pr-test clone>
+~~~
 
-基于 dev@3962241d67566c752418eb0f24778e51b5fd6636：
+`evals/coding_agent/runner.py` 对 external-source suite：
 
-- evals/coding_agent/__main__.py 已有 architecture variant 映射。baseline_react 对应 planning/recovery/skills 全关；planning_recovery_skills 对应 always/structured/true；两者 MCP 均关闭。
-- evals/coding_agent/runner.py 已有 isolated trial repo、reference solution self-check、独立 AcceptanceContract、trial artifact、output no-overwrite 和 default not-executed 路径。
-- evals/coding_agent/graders.py 已支持 command / file / repository_state / run_trace / skill_selection / recovery_motif，并可提取 steps、tokens、test attempts、completion rejection、plan revision、recovery、Skill 等指标。
-- evals/coding_agent/report.py 适合单 variant small-sample aggregate，但不负责本次跨 variant frozen benchmark。
-- evals/fixtures/coding_agent/suite.json 是既有 P2-0 8-task suite，本轮不覆盖。
-- agent/planning.py、agent/recovery.py、skills/runtime.py 已提供本轮需要的能力。
+1. 校验本地 clone 中存在完整 frozen commit；
+2. clone exact commit 到 trial repo；
+3. 删除 clone 的 `.git`；
+4. task.files 作为 setup overlay；
+5. 重新 `git init`；
+6. 将 setup 后状态提交为唯一 baseline commit；
+7. Agent 只能看到 task 初始状态，看不到 source history；
+8. trial patch 用 `git diff HEAD` 只记录 Agent 修改。
 
-因此本轮只修改 Eval / fixture / report / regression / docs，不修改生产 Agent 行为。
+既有 P2-0 synthetic suite 仍使用原来的 `task.files → repo` 语义，不要求 external source。
 
-## 3. Frozen 12-task suite
+## 6. Frozen 12 tasks
 
-| Task ID | 类型 | Required outcome | Recovery | Skill |
+| Task ID | 主要类型 | 目标 | Recovery | Skill |
 | --- | --- | --- | --- | --- |
-| email-normalization-bug | 单文件 bug | email trim + case-insensitive | 否 | should-trigger bug-fix |
-| clamp-feature | 单文件 feature/control | clamp 三段行为 | 否 | should-not-trigger |
-| canonical-retry-config | repository navigation | canonical retry=4，无 caller hardcode | 否 | should-trigger navigation |
-| multifile-display-name | 多文件 feature | normalize helper + caller wiring | 否 | neutral |
-| slug-regression-recovery | test failure/recovery | slug whitespace behavior + retest | 是 | should-trigger bug/test |
-| completion-guard-increment | completion guard | increment + required tests | 否 | should-trigger test |
-| runtime-config-navigation | navigation/regression | runtime setting override reflected | 是 | should-trigger |
-| generated-copy-change-approach | source-of-truth navigation | runtime source=v2，generated unchanged | 否 | should-trigger navigation |
-| tag-parser-recovery | test failure/second repair | lowercase + skip empty + dedupe | 是 | should-trigger bug/test |
-| registry-text-encoder | 多文件 feature/replan candidate | encoder + registry + regression test | 否 | should-trigger test/navigation |
-| warning-color-feature | 单文件 feature/control | exact mapping | 否 | should-not-trigger |
-| id-contract-migration | 多文件 contract migration/replan candidate | string ID + numeric caller preserved | 否 | should-trigger test/navigation |
+| subtract-regression-recovery | 单文件 bug | 修复 subtract 回归 | 是，先复现 | should-trigger |
+| batch-boundary-recovery | policy bug | 修复 max_batch_size 边界 | 是，先复现 | should-trigger |
+| divide-float-regression-recovery | 单文件 bug | 恢复浮点除法和除零语义 | 是，先复现 | should-trigger |
+| square-operation-feature | 单文件 feature | operations.square | 否 | should-not-trigger |
+| registry-contains-feature | 单文件 feature | registry.contains | 否 | should-not-trigger |
+| runtime-policy-mode-live | repository navigation | runtime 动态读取 config source-of-truth | 否 | should-trigger |
+| power-operation-integration | 多文件 feature | operations/service/public API/facade/tests | replan candidate | should-trigger |
+| registry-case-insensitive | registry contract | case/whitespace-insensitive lookup | 否 | should-trigger |
+| policy-deny-list | policy feature | deny-list 优先于 allow-list | replan candidate | should-trigger |
+| batch-stop-on-error | policy + service | stop_on_error 且默认行为不回归 | change-approach / replan candidate | should-trigger |
+| custom-registry-preserve-overrides | registry + service | 保留 custom override，同时补齐 defaults | replan candidate | should-trigger |
+| multiply-completion-guard | 单文件 bug + completion | 修复 multiply 且必须测试后完成 | completion guard | should-trigger |
 
-约束：
+覆盖：
 
-- task prompt 只描述用户可见目标，不包含 reference implementation；
-- functional outcome 由 deterministic grader 与独立 Acceptance 判断；
-- skill_selection 等 process grader 默认不决定主要功能成功；
-- recovery / replan 是否真实发生由 Trace 统计，不通过改 Agent 强制制造；
-- should-not-trigger task 只用于测量 false-trigger；
-- 一旦开始真实运行，suite 语义内容和 canonical SHA-256 一起冻结，不能根据结果修改 fixture。Canonical hash 对 JSON key 顺序、缩进和 CRLF/LF 不敏感，避免 Windows/WSL checkout 差异被误判成 suite 漂移。
+- single-file bug fix；
+- single-file feature；
+- multi-file modification；
+- repository navigation；
+- test failure → repair；
+- change-approach candidate；
+- completion guard；
+- replan candidate；
+- Skill should-trigger；
+- Skill should-not-trigger。
 
-## 4. Frozen protocol
+## 7. Task setup / hidden reference 边界
+
+对 external-source suite：
+
+~~~text
+task.files
+=
+task-specific initial-state overlay
+~~~
+
+不是完整仓库文件集合。
+
+`reference_files` 仅供 controller 在 real-model 调用前执行离线 reference validation。
+
+Agent prompt 只得到 `task.description`，不会注入：
+
+- reference_files；
+- grader command；
+- expected patch；
+-最终实现。
+
+当前 LocalRuntime 的 shell 不是完整 filesystem sandbox；因此本 Benchmark 的“hidden”含义是 controller-side、不注入 prompt / target repo，而不是对恶意 benchmark-hacking Agent 提供强对抗隔离。正式报告中不把它描述成 cryptographically secret hidden tests。
+
+## 8. Scale
 
 ~~~text
 12 tasks
-x 2 repetitions
-x 2 variants
+× 2 repetitions
+× 2 variants
 = 48 real-model Agent trials
 ~~~
 
-Suite defaults：
+defaults：
 
 ~~~yaml
 max_steps: 20
@@ -95,63 +239,148 @@ repo_map_mode: incremental
 MCP: false
 ~~~
 
-当前 config/default.yaml / config/schema.py 解析出的模型配置：
+注意：
 
-~~~yaml
-provider: openai
-protocol: auto
-model: deepseek-v4.1-flash
+`budget_tokens=40000` 是 Agent 每轮 Context TokenBudget，不是整条 run 的累计 Provider usage cap。
+
+## 9. Primary metric
+
+唯一主指标：
+
+# Independent Acceptance Pass Rate
+
+trial success：
+
+~~~text
+RunResult success
++
+Acceptance passed / not_requested
++
+all required deterministic outcome graders passed
 ~~~
 
-CLI 会把 provider / protocol / model、canonical suite SHA-256、max_steps、budget_tokens、Repo Map mode、planning/recovery/skills/MCP 状态写入 metadata.json 的 run_metadata。最终汇总器会拒绝两组 artifact 的公平性字段发生漂移。
+报告：
 
-## 5. Metrics
+~~~text
+Baseline observed successes / 24
+Full P2 observed successes / 24
+observed success rate
+absolute delta in percentage points
+~~~
 
-Primary：
+不称为稳定总体 pass@1。
 
-- observed successes；
-- observed success rate；
-- Full P2 - Baseline absolute delta（percentage points）。
+## 10. Secondary metrics
 
-Secondary：
+效率优先统计 successful trials：
 
-- successful-trial mean/median steps；
-- successful-trial mean/median total tokens；
-- successful-trial mean/median wall time；
-- all-trial metrics 仅供审计；
-- recovery-tagged task success rate；
-- Skill should-trigger selected / loaded rate；
+- mean / median steps；
+- mean / median total Provider tokens；
+- mean / median wall time。
+
+全量 trial 指标另外保留用于审计。
+
+subgroups：
+
+- recovery-tagged success；
+- Skill should-trigger selected/loaded rate；
 - Skill should-not-trigger false-trigger rate；
-- completion rejection / plan revision / recovery selected / test attempts；
-- per-task comparison；
-- paired Full-P2 wins / losses / ties。
+- completion rejection；
+- plan revision；
+- recovery selected；
+- test attempts；
+- per-task baseline/full comparison；
+- paired wins / losses / ties。
 
-失败 trial 可能提前结束，因此效率比较以 successful-only 为主。
+## 11. Report fairness gate
 
-## 6. Offline validation contract
+`scripts/report_coding_agent_benchmark_v1.py` 在聚合前强制检查 baseline/full：
 
-真实 Provider 调用前固定验证：
+~~~text
+provider
+protocol
+model
+suite_sha256
+source_repository
+source_commit
+max_steps
+budget_tokens
+repo_map_mode
+mcp_enabled
+mcp_server_ids
+~~~
 
-1. suite schema；
-2. 12/12 reference solution deterministic self-check；
-3. coverage tags；
-4. 两个 architecture variant mapping；
-5. repetitions=2，24 planned trials/variant；
-6. dry-run not_executed artifact；
-7. metadata suite SHA / model / budgets；
-8. aggregator synthetic regression；
-9. fairness drift rejection；
-10. output no-overwrite；
-11. 0 Provider calls。
+另外验证 architecture mapping：
 
-当前冻结前离线自检结果：
+~~~text
+baseline_react:
+  planning=off
+  recovery=off
+  skills=false
 
-- 12/12 reference solutions 通过 deterministic outcome graders；
-- Benchmark aggregator synthetic A/B regression 通过；
-- canonical suite hash 复核为 `ad69fc2fd905b501db9ae5f4c6d37363d4b67f6b1cdecace90ddc64173f4c7ec`；
-- 当前 ChatGPT 执行容器无法解析 github.com，因此没有在容器中运行完整仓库 pytest；不能把下面的 pytest 记为已通过，需由用户本地执行。
+planning_recovery_skills:
+  planning=always
+  recovery=structured
+  skills=true
+~~~
 
-本地 regression：
+source commit、budget 或其他公平性字段发生漂移时直接拒绝生成正式 summary。
+
+## 12. Deterministic regression
+
+新增 / 更新：
+
+~~~text
+tests/test_coding_agent_benchmark_v1.py
+~~~
+
+覆盖：
+
+- frozen source identity；
+- task count / tag coverage；
+- variant mapping；
+- MCP 主实验关闭；
+- external-source exact commit checkout；
+- source history stripping；
+- external reference validation contract；
+- planned trial count；
+- successful-only aggregation；
+- fairness budget drift rejection；
+- source commit drift rejection；
+- output no-overwrite。
+
+## 13. 当前离线验证状态
+
+已完成：
+
+- GitHub 远端确认 `pr-test/main == 23019998...`；
+- suite JSON schema 静态检查；
+- 12 task / tag coverage 静态检查；
+- canonical hash 计算；
+- variant/source/fairness 实现审查；
+- 0 real Provider calls。
+
+当前 ChatGPT 执行容器无法解析 `github.com`，因此无法 clone 完整 `pr-test` 到本容器，也不能声称：
+
+~~~text
+12/12 reference validation PASS
+pytest PASS
+dry-run PASS
+~~~
+
+这三项必须由用户本地完成后才进入正式 frozen / real-model execution。
+
+## 14. 本地验证顺序
+
+先确保本地 `pr-test` clone 含 frozen commit：
+
+~~~bash
+cd /path/to/pr-test
+git fetch origin
+git rev-parse 23019998f2e801e79dea59fd23fc49c58fc20038
+~~~
+
+然后在 Forge Agent：
 
 ~~~bash
 python -m pytest -q \
@@ -159,13 +388,18 @@ python -m pytest -q \
   tests/test_coding_agent_benchmark_v1.py
 ~~~
 
-## 7. 0-API freeze commands
+再运行 0-API dry-run。示例假定：
+
+~~~text
+SOURCE_REPO=/path/to/pr-test
+~~~
 
 Baseline：
 
 ~~~bash
 python -m evals.coding_agent \
   --suite evals/fixtures/coding_agent/benchmark_v1.json \
+  --source-repo "$SOURCE_REPO" \
   --variant baseline_react \
   --repetitions 2 \
   --output-dir evals/results/benchmark_v1_baseline_dry
@@ -176,42 +410,19 @@ Full P2：
 ~~~bash
 python -m evals.coding_agent \
   --suite evals/fixtures/coding_agent/benchmark_v1.json \
+  --source-repo "$SOURCE_REPO" \
   --variant planning_recovery_skills \
   --repetitions 2 \
   --output-dir evals/results/benchmark_v1_full_p2_dry
 ~~~
 
-不加 --real-model 时，只做 reference validation 并生成 not_executed metadata，不创建 Provider backend。
+不加 `--real-model`，不得创建真实 Provider result。
 
-## 8. Real-model commands
+只有 pytest + 两个 dry-run 全部确认后，才给出最终 real-model commands。
 
-仅在 dry-run artifact 验证后由用户人工执行。
+## 15. Final aggregation
 
-Baseline：
-
-~~~bash
-python -m evals.coding_agent \
-  --suite evals/fixtures/coding_agent/benchmark_v1.json \
-  --variant baseline_react \
-  --repetitions 2 \
-  --output-dir evals/results/benchmark_v1_baseline_real \
-  --real-model
-~~~
-
-Full P2：
-
-~~~bash
-python -m evals.coding_agent \
-  --suite evals/fixtures/coding_agent/benchmark_v1.json \
-  --variant planning_recovery_skills \
-  --repetitions 2 \
-  --output-dir evals/results/benchmark_v1_full_p2_real \
-  --real-model
-~~~
-
-发生 timeout / connection error 时，先保留并分析已有 trial artifact，不自动重跑整套 benchmark。
-
-## 9. Offline final aggregation
+真实 A/B 完成后：
 
 ~~~bash
 python scripts/report_coding_agent_benchmark_v1.py \
@@ -220,21 +431,22 @@ python scripts/report_coding_agent_benchmark_v1.py \
   --output-dir evals/results/benchmark_v1_summary
 ~~~
 
-输出：
+报告过程严格离线，不重新调用 Provider。
 
-~~~text
-benchmark_v1_summary.json
-benchmark_v1_summary.md
-~~~
+## 16. Evidence boundary
 
-汇总器固定检查：12 tasks、2 repetitions、24 trials/variant、suite SHA、Provider/model、max_steps、budget、Repo Map、MCP 关闭，以及 architecture mapping。
+Benchmark V1 只能证明：
 
-## 10. Evidence boundary
+> 在固定 `pr-test@23019998...`、冻结的 12 个 task、同一 model/provider/budget 下，两种 Agent architecture 的 observed A/B 结果。
 
-真实 48 trial 完成前不能写任何成功率提升数字。
+不能外推为：
 
-真实结果完成后也只能表述为：在该冻结 12-task Benchmark V1、每种 architecture 24 次真实模型 trial 中观察到的结果。
+- 稳定总体 pass@1；
+- SWE-bench 成绩；
+- 模型训练收益；
+- MCP 收益；
+- 对任意真实仓库的泛化成功率。
 
-不能表述为稳定总体 pass@1、SWE-bench 水平、模型训练收益、MCP 收益或对其他任务分布的泛化保证。
+一旦真实运行开始，不根据结果改 suite / setup / grader / baseline / budget。
 
-如果之后根据 Benchmark V1 bad case 修改 Agent，该 case 可以进入 future failure regression set，但修改后的重跑不能冒充同一份未经见过的 Benchmark V1 泛化证据。
+之后根据 bad case 修改 Agent 时，相应 case 进入 future regression/failure set，不再冒充同一份未经见过的 Benchmark V1 泛化证据。
