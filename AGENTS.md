@@ -744,3 +744,21 @@ pytest -q
 - connector 不能读取用户本机 `git status` / stash，因此不对用户本地未提交修改做断言。
 - real-model suite 一旦由用户开始执行，不允许根据结果修改 fixture；后续 bad case 只能进入 future regression/failure set。
 - 本轮更新日志：`docs/changes/2026-09-22/Forge-Agent-Benchmark-V1.md`。
+
+
+### 最后交接（2026-09-22，Benchmark V1 改为 pr-test real-repository protocol）
+
+- 纠正上一条 Benchmark V1 交接：最初的 12-task synthetic tiny-repo 草案在任何 real-model trial 发生前被废弃，不作为 Real-model Benchmark V1 证据。
+- 用户将 `Napabana/pr-test:forge-p2-mcp-demo` 推到 `23019998f2e801e79dea59fd23fc49c58fc20038`；该分支相对原 main ahead 6 / behind 0。本轮已将 `pr-test/main` fast-forward 到同一 SHA。
+- 正式 Benchmark V1 source 固定为 `Napabana/pr-test@23019998f2e801e79dea59fd23fc49c58fc20038`，不跟随后续 main 漂移。
+- `evals/coding_agent/schema.py` 新增 suite-level `RepositorySource`；real-repository task 允许空 setup overlay，旧 synthetic suite 仍要求 task.files。
+- `evals/coding_agent/runner.py` 新增 frozen source materialization：从本地 source clone checkout exact commit，删除原 `.git` history，应用 task setup overlay，再重新 init/commit 为唯一 trial baseline；避免 bug setup 通过 Git 历史泄漏正确实现。trial patch 改为 `git diff HEAD`。
+- `evals/coding_agent/__main__.py` 新增 `--source-repo`；metadata 记录 source repository / commit / local path。real-repository suite 在 reference validation 与 real run 都要求本地 clone 中存在 frozen commit。
+- `evals/fixtures/coding_agent/benchmark_v1.json` 已重建为基于真实 `calc_core` / policy / batch / runtime 的 12 task；3 个 recovery、2 个 should-not-trigger control、navigation、multi-file integration、replan/change-approach candidate 与 completion guard 均覆盖。
+- 当前 canonical suite SHA-256：`f0117c4ca39271401ba878c99afd30643b1dd7af28e0c0cdca9214f128b97f14`。
+- `scripts/report_coding_agent_benchmark_v1.py` 额外强制 baseline/full 的 `source_repository` 与 `source_commit` 一致且匹配 suite；summary Markdown 显示 frozen source identity。
+- `tests/test_coding_agent_benchmark_v1.py` 新增 external-source exact commit、history stripping、reference validation、source drift rejection 等 deterministic regression。
+- 重要纠正：上一交接中 synthetic suite 的“12/12 reference solutions 通过”不适用于当前 real-repository V1。当前 ChatGPT 容器无法解析 github.com，无法在这里 clone pr-test，因此正式 V1 的 12/12 reference validation、pytest 和 0-API dry-run 均为 **PENDING USER LOCAL VALIDATION**，不得写成已通过。
+- `budget_tokens=40000` 是每轮 Context TokenBudget，不是整条 run 累计 Provider token cap；保持 baseline/full 相同。
+- 当前尚未执行任何 Benchmark V1 real-model trial；不得已有成功率/Token/Latency 结论。
+- 本轮更新日志：`docs/changes/2026-09-22/Forge-Agent-Benchmark-V1.md`。
