@@ -258,7 +258,7 @@
     },
     {
       "id": "registry-contains-feature",
-      "description": "Add contains(name) to OperationRegistry so callers can check whether an exact operation name is registered without raising. Preserve register/resolve behavior.",
+      "description": "In src/calc_core/registry.py, add contains(name) so callers can check whether an exact operation name is registered without raising. Preserve register/resolve behavior.",
       "files": {},
       "reference_files": {
         "src/calc_core/registry.py": "\"\"\"Registry mapping operation names to callables.\"\"\"\n\nfrom typing import Callable, Dict\n\nfrom .errors import UnknownOperationError\n\nOperation = Callable[..., object]\n\n\nclass OperationRegistry:\n    \"\"\"Store operations by name and resolve them back.\"\"\"\n\n    def __init__(self) -> None:\n        self._operations: Dict[str, Operation] = {}\n\n    def register(self, name: str, operation: Operation) -> None:\n        \"\"\"Register ``operation`` under ``name``.\"\"\"\n        self._operations[name] = operation\n\n    def contains(self, name: str) -> bool:\n        \"\"\"Return whether name is registered.\"\"\"\n        return name in self._operations\n\n    def resolve(self, name: str) -> Operation:\n        \"\"\"Return the operation registered under ``name``.\n\n        Raises UnknownOperationError if no such operation exists.\n        \"\"\"\n        try:\n            return self._operations[name]\n        except KeyError:\n            raise UnknownOperationError(name) from None"
