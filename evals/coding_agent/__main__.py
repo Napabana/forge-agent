@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import tempfile
@@ -152,11 +153,32 @@ def main() -> int:
     parser.add_argument("--reason", default="provider_credentials_not_available_in_execution_environment")
     args = parser.parse_args()
 
-    suite = EvaluationSuite.load(args.suite)
+    suite_path = Path(args.suite).resolve()
+    suite = EvaluationSuite.load(suite_path)
+    suite_sha256 = hashlib.sha256(suite_path.read_bytes()).hexdigest()
     planning_mode = _planning_mode_for_variant(args.variant)
     recovery_mode = _recovery_mode_for_variant(args.variant)
     skills_enabled = _skills_enabled_for_variant(args.variant)
     mcp_config = _mcp_config_for_variant(args.variant)
+    cfg = load_config(args.config)
+    run_metadata = {
+        "suite_path": str(suite_path),
+        "suite_sha256": suite_sha256,
+        "config_source": str(Path(args.config).resolve()) if args.config else "config/default.yaml",
+        "provider": cfg.llm.provider,
+        "protocol": cfg.llm.protocol,
+        "model": cfg.llm.model,
+        "max_steps": int(suite.defaults.get("max_steps", cfg.agent.max_steps)),
+        "budget_tokens": int(suite.defaults.get("budget_tokens", cfg.agent.budget_tokens)),
+        "repo_map_mode": "incremental",
+        "planning_mode": planning_mode,
+        "recovery_mode": recovery_mode,
+        "recovery_max_attempts": cfg.agent.recovery_max_attempts,
+        "skills_enabled": skills_enabled,
+        "skills_global_dir": str(_DEFAULT_SKILLS) if skills_enabled else cfg.agent.skills_global_dir,
+        "mcp_enabled": mcp_config.enabled,
+        "mcp_server_ids": [server.id for server in mcp_config.servers if server.enabled],
+    }
     with tempfile.TemporaryDirectory(prefix="forge-agent-eval-reference-") as temp_dir:
         reference = validate_suite_references(suite, temp_dir)
 
@@ -168,11 +190,11 @@ def main() -> int:
             repetitions=args.repetitions,
             task_ids=args.task,
             reason=args.reason,
+            run_metadata=run_metadata,
         )
         print(json.dumps({"reference_validation": reference, "report": report}, ensure_ascii=False, indent=2))
         return 0
 
-    cfg = load_config(args.config)
     if not cfg.llm.api_key:
         report = write_not_executed(
             suite,
@@ -181,6 +203,7 @@ def main() -> int:
             repetitions=args.repetitions,
             task_ids=args.task,
             reason="provider_credentials_not_available",
+            run_metadata=run_metadata,
         )
         print(json.dumps({"reference_validation": reference, "report": report}, ensure_ascii=False, indent=2))
         return 0
@@ -202,6 +225,7 @@ def main() -> int:
             repetitions=args.repetitions,
             task_ids=args.task,
             reason=f"provider_not_configured:{exc}",
+            run_metadata=run_metadata,
         )
         print(json.dumps({"reference_validation": reference, "report": report}, ensure_ascii=False, indent=2))
         return 0
@@ -223,20 +247,7 @@ def main() -> int:
         repetitions=args.repetitions,
         evidence_kind="real_model",
         real_model_executed=True,
-        run_metadata={
-            "provider": cfg.llm.provider,
-            "protocol": cfg.llm.protocol,
-            "model": cfg.llm.model,
-            "planning_mode": planning_mode,
-            "recovery_mode": recovery_mode,
-            "recovery_max_attempts": cfg.agent.recovery_max_attempts,
-            "skills_enabled": skills_enabled,
-            "skills_global_dir": (
-                str(_DEFAULT_SKILLS) if skills_enabled else cfg.agent.skills_global_dir
-            ),
-            "mcp_enabled": mcp_config.enabled,
-            "mcp_server_ids": [server.id for server in mcp_config.servers if server.enabled],
-        },
+        run_metadata=run_metadata,
     )
     results = harness.run(args.task)
     print(json.dumps({"trials": len(results), "output_dir": str(Path(args.output_dir).resolve())}, ensure_ascii=False, indent=2))
