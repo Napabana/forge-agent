@@ -527,3 +527,117 @@ wall time mean / median: 77.22s / 59.68s
 - 在是否继续 Full P2 前先决定：保留 V1 strict metric 并明确限制，或者将当前 baseline 标记为 pilot、另建新 suite identity 后重新开始正式 A/B；
 - 当前没有执行 Full P2 real-model trials。
 
+## 18. Formal Benchmark V1 R2（pilot 后重新冻结）
+
+用户明确同意在 pilot 后修正 benchmark 设计，并接受重新运行完整 48 trials。因此原 V1 24-trial baseline 不继续作为正式 A/B 的 baseline，而保留为 pilot evidence。
+
+旧 pilot suite 已原样归档：
+
+~~~text
+evals/fixtures/coding_agent/benchmark_v1_pilot.json
+
+suite_id:
+forge-agent-benchmark-v1
+
+canonical SHA-256:
+f0117c4ca39271401ba878c99afd30643b1dd7af28e0c0cdca9214f128b97f14
+
+defaults:
+max_steps=20
+budget_tokens=40000
+~~~
+
+正式 V1 revision 2：
+
+~~~text
+evals/fixtures/coding_agent/benchmark_v1.json
+
+suite_id:
+forge-agent-benchmark-v1-r2
+
+canonical SHA-256:
+f7ba1370fe1442773967ec4f65883be5cdc0a21f14ced28d1ea57ed1f384bd0a
+
+source:
+Napabana/pr-test@23019998f2e801e79dea59fd23fc49c58fc20038
+
+defaults:
+max_steps=30
+budget_tokens=60000
+~~~
+
+### R2 acceptance correction
+
+Pilot 暴露出的 implementation-shape coupling 已移除：
+
+- 不再要求特定 regression-test 函数名；
+- 不再要求任务 prompt 未指定的内部 helper；
+- 正式 R2 的 required acceptance 中没有 `file` grader；
+- API/功能通过 deterministic executable behavior grader 判断；
+- repository regression 通过 full pytest 判断；
+- prompt 明确要求新增回归测试的 6 个 task 使用通用 `test-change` command grader，只检查相对 trial baseline 是否真实修改 `tests/`，不限定测试文件、函数名或实现方式。
+
+以下 6 个 task 要求 test change：
+
+~~~text
+runtime-policy-mode-live
+power-operation-integration
+registry-case-insensitive
+policy-deny-list
+batch-stop-on-error
+custom-registry-preserve-overrides
+~~~
+
+### R2 budgets
+
+~~~text
+max_steps: 30
+budget_tokens: 60000
+~~~
+
+原因：
+
+- pilot 的 `power-operation-integration` 两次都在 step 20 达到 max_steps；
+- `budget_tokens` 是每轮 Context TokenBudget，不是整条 trial 的累计 Provider usage cap；
+- Full P2 会增加 Planning / Recovery / Skills context，因此给两种 variant 相同的 60k context cap，避免能力开关被过紧 context cap 干扰；
+- 两个 variant 的预算仍完全相同。
+
+### One-shot guarded runner
+
+新增：
+
+~~~text
+scripts/run_coding_agent_benchmark_v1.py
+~~~
+
+它按固定顺序执行：
+
+~~~text
+source commit check
+→ output no-overwrite check
+→ deterministic pytest
+→ baseline 0-API dry-run
+→ Full P2 0-API dry-run
+→ baseline 24 real trials
+→ baseline artifact infrastructure health gate
+→ Full P2 24 real trials
+→ Full P2 artifact infrastructure health gate
+→ offline final aggregation
+~~~
+
+health gate 只因 Provider / connection / runner infrastructure failure 停止；普通 task failure、Acceptance failure 或 max_steps failure 都保留为真实 benchmark outcome，不自动重跑。
+
+正式输出目录：
+
+~~~text
+evals/results/benchmark_v1_r2_baseline_dry
+evals/results/benchmark_v1_r2_full_p2_dry
+evals/results/benchmark_v1_r2_baseline_real
+evals/results/benchmark_v1_r2_full_p2_real
+evals/results/benchmark_v1_r2_summary
+~~~
+
+任何目录已存在时 runner 拒绝覆盖，防止选择性重跑。
+
+正式 R2 real-model trial 尚未由 ChatGPT 触发；必须由用户人工启动 one-shot runner。
+
