@@ -73,6 +73,8 @@ def _validate_artifact(
     suite_id: str,
     suite_sha256: str,
     task_ids: set[str],
+    source_repository: str,
+    source_commit: str,
 ) -> None:
     if metadata.get("execution_status") != "executed" or metadata.get("real_model_executed") is not True:
         raise ValueError(f"{label} is not an executed real-model artifact")
@@ -89,6 +91,10 @@ def _validate_artifact(
     run_meta = _run_metadata(metadata)
     if run_meta.get("suite_sha256") != suite_sha256:
         raise ValueError(f"{label} suite_sha256 does not match frozen suite")
+    if run_meta.get("source_repository") != source_repository:
+        raise ValueError(f"{label} source_repository does not match frozen suite")
+    if run_meta.get("source_commit") != source_commit:
+        raise ValueError(f"{label} source_commit does not match frozen suite")
     seen: set[tuple[str, int]] = set()
     for row in rows:
         if row.get("variant") != expected_variant:
@@ -117,6 +123,8 @@ def _validate_fairness(baseline_meta: dict[str, Any], full_meta: dict[str, Any])
         "protocol",
         "model",
         "suite_sha256",
+        "source_repository",
+        "source_commit",
         "max_steps",
         "budget_tokens",
         "repo_map_mode",
@@ -221,6 +229,13 @@ def build_summary(*, suite_path: Path, baseline_dir: Path, full_dir: Path) -> di
     if len(tasks) != EXPECTED_TASK_COUNT:
         raise ValueError(f"Benchmark V1 suite must contain {EXPECTED_TASK_COUNT} tasks")
     suite_id = str(suite.get("suite_id") or "")
+    source = suite.get("source") or {}
+    if not isinstance(source, dict):
+        raise ValueError("Benchmark V1 source must be an object")
+    source_repository = str(source.get("repository") or "")
+    source_commit = str(source.get("commit") or "")
+    if not source_repository or not source_commit:
+        raise ValueError("Benchmark V1 requires frozen source repository and commit")
     tags = {str(task["id"]): set(task.get("tags") or []) for task in tasks}
     task_ids = set(tags)
     baseline_meta, baseline_rows = _load_artifact(baseline_dir)
@@ -233,6 +248,8 @@ def build_summary(*, suite_path: Path, baseline_dir: Path, full_dir: Path) -> di
         suite_id=suite_id,
         suite_sha256=suite_sha256,
         task_ids=task_ids,
+        source_repository=source_repository,
+        source_commit=source_commit,
     )
     _validate_artifact(
         label="full_p2",
@@ -242,6 +259,8 @@ def build_summary(*, suite_path: Path, baseline_dir: Path, full_dir: Path) -> di
         suite_id=suite_id,
         suite_sha256=suite_sha256,
         task_ids=task_ids,
+        source_repository=source_repository,
+        source_commit=source_commit,
     )
     common = _validate_fairness(baseline_meta, full_meta)
     baseline = _variant_summary(baseline_rows, tags)
