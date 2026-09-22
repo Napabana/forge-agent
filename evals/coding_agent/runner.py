@@ -187,6 +187,8 @@ class EvaluationHarness:
             "variant": self.variant,
             "repetitions": self.repetitions,
             "task_count": len(tasks),
+            "tasks": [task.task_id for task in tasks],
+            "planned_trial_count": len(tasks) * self.repetitions,
             "execution_status": "executed",
             "evidence_kind": self.evidence_kind,
             "real_model_executed": self.real_model_executed,
@@ -328,6 +330,7 @@ def write_not_executed(
     repetitions: int = 1,
     task_ids: Iterable[str] = (),
     reason: str = "provider_credentials_not_available",
+    run_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if repetitions < 1:
         raise ValueError("repetitions must be >= 1")
@@ -350,6 +353,7 @@ def write_not_executed(
         "execution_status": "not_executed",
         "real_model_executed": False,
         "reason": reason,
+        "run_metadata": dict(run_metadata or {}),
         "claim_boundary": "No Agent capability result exists in this artifact.",
     }
     report = {
@@ -363,6 +367,7 @@ def write_not_executed(
         "planned_trial_count": planned,
         "variants": [variant],
         "reason": reason,
+        "run_metadata": dict(run_metadata or {}),
         "claim_boundary": (
             "The suite/reference validation and harness implementation may be inspected separately; "
             "this artifact contains no real-model success, token, step, or latency claim."
