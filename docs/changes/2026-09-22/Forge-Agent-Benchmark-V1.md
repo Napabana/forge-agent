@@ -480,3 +480,50 @@ Benchmark V1 只能证明：
 一旦真实运行开始，不根据结果改 suite / setup / grader / baseline / budget。
 
 之后根据 bad case 修改 Agent 时，相应 case 进入 future regression/failure set，不再冒充同一份未经见过的 Benchmark V1 泛化证据。
+
+## 17. Baseline real-model pilot audit（2026-09-22）
+
+用户已完成并 push：
+
+~~~text
+variant: baseline_react
+real-model trials: 24/24
+model: deepseek-v4.1-flash
+source: Napabana/pr-test@23019998f2e801e79dea59fd23fc49c58fc20038
+suite_sha256: f0117c4ca39271401ba878c99afd30643b1dd7af28e0c0cdca9214f128b97f14
+~~~
+
+严格按当前 frozen grader / Run-Acceptance contract：
+
+~~~text
+observed successes: 18/24
+observed success rate: 75.0%
+completion_satisfied: 22
+resource_exhausted(max_steps): 2
+provider / connection / timeout failures: 0
+~~~
+
+successful-trial only：
+
+~~~text
+steps mean / median: 8.78 / 7.5
+total tokens mean / median: 111286.8 / 72427.5
+wall time mean / median: 77.22s / 59.68s
+~~~
+
+六个 strict failures：
+
+1. `runtime-policy-mode-live` ×2：行为 grader PASS、full pytest PASS，但 required file grader 强制要求 reference 中的测试函数名 `test_policy_mode_reflects_runtime_config_changes`；Agent 实际加入等价 regression test `test_policy_mode_reads_current_config_value`，因此被判失败。
+2. `custom-registry-preserve-overrides` ×2：行为 grader PASS、full pytest PASS，但 required file grader 强制要求 `OperationRegistry.contains()` helper；Agent 使用 `resolve()+UnknownOperationError` 完成相同用户可见契约，因此被判失败。
+3. `power-operation-integration` ×2：核心 behavior 与 full pytest PASS，但 run 达到 `max_steps=20`，且 exact regression-test-name grader 未满足，因此按 Run/Acceptance contract 保持真实失败。
+
+这说明当前 Benchmark V1 acceptance 含 implementation-shape coupling：部分 required file grader 检查了 reference solution 的具体 helper / test naming，而不是只检查 prompt 要求的 observable outcome。
+
+因此：
+
+- 当前 24 次 baseline artifact 保留，绝不删除或重写；
+- 不把 18/24 单独解释为纯“任务功能完成率”；
+- 不根据结果偷偷修改同一个 frozen suite 后继续称为同一 Benchmark V1；
+- 在是否继续 Full P2 前先决定：保留 V1 strict metric 并明确限制，或者将当前 baseline 标记为 pilot、另建新 suite identity 后重新开始正式 A/B；
+- 当前没有执行 Full P2 real-model trials。
+
