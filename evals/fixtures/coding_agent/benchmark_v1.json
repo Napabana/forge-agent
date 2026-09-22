@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "suite_id": "forge-agent-benchmark-v1",
-  "description": "Frozen real-repository Coding Agent Benchmark V1. Every task starts from the same pr-test source commit; task.files are setup overlays, reference_files are used only for offline reference validation, and task success is determined by deterministic outcome graders plus the Run/Acceptance contract.",
+  "suite_id": "forge-agent-benchmark-v1-r2",
+  "description": "Formal real-repository Coding Agent Benchmark V1 revision 2. The original V1 suite is archived as benchmark_v1_pilot.json after a 24-trial baseline pilot exposed implementation-shape graders. R2 keeps the same 12 task intents and frozen pr-test source, uses behavior-oriented deterministic acceptance, and gives both architecture variants identical larger execution/context budgets.",
   "source": {
     "repository": "Napabana/pr-test",
     "commit": "23019998f2e801e79dea59fd23fc49c58fc20038"
   },
   "defaults": {
-    "max_steps": 20,
-    "budget_tokens": 40000
+    "max_steps": 30,
+    "budget_tokens": 60000
   },
   "tasks": [
     {
@@ -234,14 +234,6 @@
           }
         },
         {
-          "id": "shape",
-          "kind": "file",
-          "params": {
-            "path": "src/calc_core/operations.py",
-            "contains": "def square"
-          }
-        },
-        {
           "id": "skill-selection",
           "kind": "skill_selection",
           "params": {
@@ -280,14 +272,6 @@
               "-c",
               "import sys\nsys.path.insert(0, 'src')\nfrom calc_core import OperationRegistry, add\nr = OperationRegistry()\nassert r.contains('add') is False\nr.register('add', add)\nassert r.contains('add') is True\nassert r.contains('ADD') is False"
             ]
-          }
-        },
-        {
-          "id": "shape",
-          "kind": "file",
-          "params": {
-            "path": "src/calc_core/registry.py",
-            "contains": "def contains"
           }
         },
         {
@@ -336,11 +320,14 @@
           }
         },
         {
-          "id": "regression-test",
-          "kind": "file",
+          "id": "test-change",
+          "kind": "command",
           "params": {
-            "path": "tests/test_policy_runtime.py",
-            "contains": "test_policy_mode_reflects_runtime_config_changes"
+            "command": [
+              "{python}",
+              "-c",
+              "import subprocess\nroot = subprocess.check_output(['git','rev-list','--max-parents=0','HEAD'], text=True).strip()\nchanged = subprocess.check_output(['git','diff','--name-only',root,'--','tests'], text=True).splitlines()\nassert any(path.strip() for path in changed), 'task requires a regression-test change under tests/'"
+            ]
           }
         },
         {
@@ -403,27 +390,14 @@
           }
         },
         {
-          "id": "operation",
-          "kind": "file",
+          "id": "test-change",
+          "kind": "command",
           "params": {
-            "path": "src/calc_core/operations.py",
-            "contains": "def power"
-          }
-        },
-        {
-          "id": "service",
-          "kind": "file",
-          "params": {
-            "path": "src/calc_core/service.py",
-            "contains": "\"power\": operations.power"
-          }
-        },
-        {
-          "id": "regression-test",
-          "kind": "file",
-          "params": {
-            "path": "tests/test_calculator.py",
-            "contains": "test_power_operation"
+            "command": [
+              "{python}",
+              "-c",
+              "import subprocess\nroot = subprocess.check_output(['git','rev-list','--max-parents=0','HEAD'], text=True).strip()\nchanged = subprocess.check_output(['git','diff','--name-only',root,'--','tests'], text=True).splitlines()\nassert any(path.strip() for path in changed), 'task requires a regression-test change under tests/'"
+            ]
           }
         },
         {
@@ -482,6 +456,17 @@
           }
         },
         {
+          "id": "test-change",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import subprocess\nroot = subprocess.check_output(['git','rev-list','--max-parents=0','HEAD'], text=True).strip()\nchanged = subprocess.check_output(['git','diff','--name-only',root,'--','tests'], text=True).splitlines()\nassert any(path.strip() for path in changed), 'task requires a regression-test change under tests/'"
+            ]
+          }
+        },
+        {
           "id": "full-suite",
           "kind": "command",
           "params": {
@@ -535,6 +520,17 @@
               "{python}",
               "-c",
               "import sys\nsys.path.insert(0, 'src')\nfrom calc_core import CalculatorService, OperationDisabledError, OperationPolicy\np = OperationPolicy(enabled_operations=frozenset({'add','divide'}), disabled_operations=frozenset({'divide'}))\ns = CalculatorService(policy=p)\nassert s.execute('add', 2, 3) == 5\ntry:\n    s.execute('divide', 6, 2)\nexcept OperationDisabledError:\n    pass\nelse:\n    raise AssertionError('deny-list must win')\nassert CalculatorService().execute('divide', 6, 2) == 3"
+            ]
+          }
+        },
+        {
+          "id": "test-change",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import subprocess\nroot = subprocess.check_output(['git','rev-list','--max-parents=0','HEAD'], text=True).strip()\nchanged = subprocess.check_output(['git','diff','--name-only',root,'--','tests'], text=True).splitlines()\nassert any(path.strip() for path in changed), 'task requires a regression-test change under tests/'"
             ]
           }
         },
@@ -597,6 +593,17 @@
           }
         },
         {
+          "id": "test-change",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import subprocess\nroot = subprocess.check_output(['git','rev-list','--max-parents=0','HEAD'], text=True).strip()\nchanged = subprocess.check_output(['git','diff','--name-only',root,'--','tests'], text=True).splitlines()\nassert any(path.strip() for path in changed), 'task requires a regression-test change under tests/'"
+            ]
+          }
+        },
+        {
           "id": "full-suite",
           "kind": "command",
           "params": {
@@ -654,11 +661,14 @@
           }
         },
         {
-          "id": "registry-helper",
-          "kind": "file",
+          "id": "test-change",
+          "kind": "command",
           "params": {
-            "path": "src/calc_core/registry.py",
-            "contains": "def contains"
+            "command": [
+              "{python}",
+              "-c",
+              "import subprocess\nroot = subprocess.check_output(['git','rev-list','--max-parents=0','HEAD'], text=True).strip()\nchanged = subprocess.check_output(['git','diff','--name-only',root,'--','tests'], text=True).splitlines()\nassert any(path.strip() for path in changed), 'task requires a regression-test change under tests/'"
+            ]
           }
         },
         {
