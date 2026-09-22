@@ -37,7 +37,11 @@ REQUIRED_TAGS = {
 
 
 def _suite_sha256() -> str:
-    return hashlib.sha256(SUITE_PATH.read_bytes()).hexdigest()
+    value = json.loads(SUITE_PATH.read_text(encoding="utf-8"))
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _run_metadata(*, full: bool) -> dict[str, object]:
