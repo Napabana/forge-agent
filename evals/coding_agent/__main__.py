@@ -148,6 +148,11 @@ def main() -> int:
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--output-dir", default="evals/results/coding_agent_eval")
     parser.add_argument("--task", action="append", default=[])
+    parser.add_argument(
+        "--source-repo",
+        default=None,
+        help="Local clone used as the frozen source snapshot for real-repository suites",
+    )
     parser.add_argument("--real-model", action="store_true", help="Explicitly execute the configured real model")
     parser.add_argument("--config", default=None)
     parser.add_argument("--reason", default="provider_credentials_not_available_in_execution_environment")
@@ -155,6 +160,7 @@ def main() -> int:
 
     suite_path = Path(args.suite).resolve()
     suite = EvaluationSuite.load(suite_path)
+    source_repo_path = Path(args.source_repo).resolve() if args.source_repo else None
     suite_canonical = json.dumps(
         json.loads(suite_path.read_text(encoding="utf-8")),
         ensure_ascii=False,
@@ -170,6 +176,9 @@ def main() -> int:
     run_metadata = {
         "suite_path": str(suite_path),
         "suite_sha256": suite_sha256,
+        "source_repository": suite.source.repository if suite.source else None,
+        "source_commit": suite.source.commit if suite.source else None,
+        "source_repo_path": str(source_repo_path) if source_repo_path else None,
         "config_source": str(Path(args.config).resolve()) if args.config else "config/default.yaml",
         "provider": cfg.llm.provider,
         "protocol": cfg.llm.protocol,
@@ -186,7 +195,11 @@ def main() -> int:
         "mcp_server_ids": [server.id for server in mcp_config.servers if server.enabled],
     }
     with tempfile.TemporaryDirectory(prefix="forge-agent-eval-reference-") as temp_dir:
-        reference = validate_suite_references(suite, temp_dir)
+        reference = validate_suite_references(
+            suite,
+            temp_dir,
+            source_repo_path=source_repo_path,
+        )
 
     if not args.real_model:
         report = write_not_executed(
@@ -254,6 +267,7 @@ def main() -> int:
         evidence_kind="real_model",
         real_model_executed=True,
         run_metadata=run_metadata,
+        source_repo_path=source_repo_path,
     )
     results = harness.run(args.task)
     print(json.dumps({"trials": len(results), "output_dir": str(Path(args.output_dir).resolve())}, ensure_ascii=False, indent=2))
