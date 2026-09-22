@@ -727,3 +727,20 @@ pytest -q
 - 静态一致性检查已确认：README 有总收口链接和 8-trial final gate；USAGE 不再含旧 “offline Python API，不是 CLI”；Evidence 不再含旧 P2-5 no-real-model anchor；P2 plan 标记 DONE；总收口文档存在并记录 REJECT。
 - 用户在本轮文档收口前已确认最终相关 pytest “全过”；本轮后续提交均为 Markdown/AGENTS 文档修改，没有修改生产 Python 行为，因此未要求重复消耗 Provider。
 - 下一步建议转入简历/面试收口：从 docs/changes/2026-09-21/P2-Agent-Intelligence-总收口.md 提炼 1 页项目叙事、简历 bullet 与面试追问答案；不要继续为了增加关键词堆 P2 功能。
+
+
+### 最后交接（2026-09-22，Real-model Benchmark V1 冻结前收口）
+
+- 本轮目标：不新增 Agent capability，基于 P2-0 Harness 冻结 Real-model Benchmark V1，用同一模型比较 `baseline_react` 与 `planning_recovery_skills`。
+- 基准初始事实源：开始时远端 `dev` HEAD 为 `3962241d67566c752418eb0f24778e51b5fd6636`；本轮实现全部继续提交到 `dev`。
+- 新增 `evals/fixtures/coding_agent/benchmark_v1.json`：12 tasks，默认 `max_steps=20`、`budget_tokens=40000`，2 repetitions × 2 variants，计划 48 个 real-model trials。既有 `evals/fixtures/coding_agent/suite.json` 未修改。
+- canonical suite SHA-256：`ad69fc2fd905b501db9ae5f4c6d37363d4b67f6b1cdecace90ddc64173f4c7ec`。identity 基于规范化 JSON，避免 CRLF/LF 或缩进差异造成伪漂移。
+- `evals/coding_agent/__main__.py` / `runner.py` 只补 benchmark metadata：suite identity、provider/model、budget、Repo Map、variant capability mapping、planned trials；默认无 `--real-model` 仍为 not-executed，且在 backend construction 前返回。
+- 新增 `scripts/report_coding_agent_benchmark_v1.py`：严格离线读取 baseline/full artifacts，校验同 suite/model/budget/Repo Map/MCP 边界，输出 observed success、successful-only steps/tokens/time、recovery/Skill subgroup、per-task 与 paired wins/losses/ties；不创建 Provider backend。
+- 新增 `tests/test_coding_agent_benchmark_v1.py`：固定 task coverage、12/12 reference validation、variant mapping、24 planned trials/variant、metadata、successful-only aggregation 与 fairness drift rejection。
+- 冻结前离线验证真实完成：12/12 reference solutions 通过 deterministic outcome graders；aggregator synthetic regression 通过；canonical hash 复核一致。synthetic success 数字只用于测试聚合逻辑，不是 capability evidence。
+- 当前 ChatGPT 执行容器无法解析 `github.com`，因此没有在完整仓库 checkout 上执行 pytest；不能记录 pytest 已通过。用户本地下一步先运行 `tests/test_coding_agent_eval.py` + `tests/test_coding_agent_benchmark_v1.py`，再运行两个 0-API dry-run。
+- 本轮没有调用任何 DeepSeek/OpenAI/Anthropic 等真实 Provider，没有修改 `agent/core.py`、`agent/planning.py`、`agent/recovery.py`、Skill runtime、`config/default.yaml`、历史 `evals/results` 或既有 frozen suite。
+- connector 不能读取用户本机 `git status` / stash，因此不对用户本地未提交修改做断言。
+- real-model suite 一旦由用户开始执行，不允许根据结果修改 fixture；后续 bad case 只能进入 future regression/failure set。
+- 本轮更新日志：`docs/changes/2026-09-22/Forge-Agent-Benchmark-V1.md`。
