@@ -1,247 +1,32 @@
 {
   "schema_version": 1,
   "suite_id": "forge-agent-benchmark-v1",
-  "description": "Frozen 12-task real-model Coding Agent Benchmark V1 for baseline_react vs planning_recovery_skills. Task success is determined only by deterministic outcome graders plus the Run/Acceptance contract; process graders are non-blocking unless they restate an acceptance requirement.",
+  "description": "Frozen real-repository Coding Agent Benchmark V1. Every task starts from the same pr-test source commit; task.files are setup overlays, reference_files are used only for offline reference validation, and task success is determined by deterministic outcome graders plus the Run/Acceptance contract.",
+  "source": {
+    "repository": "Napabana/pr-test",
+    "commit": "23019998f2e801e79dea59fd23fc49c58fc20038"
+  },
   "defaults": {
     "max_steps": 20,
     "budget_tokens": 40000
   },
   "tasks": [
     {
-      "id": "email-normalization-bug",
-      "description": "Fix normalize_email(email) in account.py so user comparisons ignore surrounding whitespace and email letter case. Keep is_same_user(left, right) behavior routed through normalize_email.",
+      "id": "subtract-regression-recovery",
+      "description": "The subtraction operation has regressed. First run the repository tests to reproduce the failure, fix subtraction without changing the other arithmetic operations, then rerun the tests before finishing.",
       "files": {
-        "account.py": "def normalize_email(email):\n    return email.strip()\n\n\ndef is_same_user(left, right):\n    return normalize_email(left) == normalize_email(right)\n"
+        "src/calc_core/operations.py": "\"\"\"The five core calculator operations.\n\nThese functions preserve the behavior of the original top-level\n``calculator.py`` implementation:\n\n* ``divide(..., 0)`` raises ``ZeroDivisionError``.\n* ``clamp`` raises ``ValueError`` when ``lower > upper``.\n\"\"\"\n\n\ndef add(a: int, b: int) -> int:\n    \"\"\"Return the sum of two integers.\"\"\"\n    return a + b\n\n\ndef subtract(a: int, b: int) -> int:\n    \"\"\"Return the difference of two integers (a - b).\"\"\"\n    return a + b\n\n\ndef multiply(a: int, b: int) -> int:\n    \"\"\"Return the product of two integers.\"\"\"\n    return a * b\n\n\ndef divide(a: int, b: int) -> float:\n    \"\"\"Return the quotient of two integers (a / b).\n\n    Raises ZeroDivisionError if b is zero.\n    \"\"\"\n    if b == 0:\n        raise ZeroDivisionError(\"division by zero\")\n    return a / b\n\n\ndef clamp(value: int, lower: int, upper: int) -> int:\n    \"\"\"将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。\"\"\"\n    if lower > upper:\n        raise ValueError(\"lower must not exceed upper\")\n    return max(lower, min(value, upper))"
       },
       "reference_files": {
-        "account.py": "def normalize_email(email):\n    return email.strip().lower()\n\n\ndef is_same_user(left, right):\n    return normalize_email(left) == normalize_email(right)\n"
-      },
-      "require_changes": true,
-      "require_tests": false,
-      "tags": [
-        "single-file-bug",
-        "bug-fix",
-        "skill-should-trigger"
-      ],
-      "graders": [
-        {
-          "id": "behavior",
-          "kind": "command",
-          "params": {
-            "command": [
-              "{python}",
-              "-c",
-              "from account import normalize_email, is_same_user; assert normalize_email('  Alice@EXAMPLE.COM ') == 'alice@example.com'; assert is_same_user('A@B.COM', ' a@b.com ') is True"
-            ]
-          }
-        },
-        {
-          "id": "changed",
-          "kind": "repository_state",
-          "params": {
-            "changed": true
-          }
-        },
-        {
-          "id": "skill-selection",
-          "kind": "skill_selection",
-          "params": {
-            "expected_any": [
-              "bug-fix"
-            ],
-            "forbidden": [
-              "repository-navigation"
-            ]
-          },
-          "required": false
-        }
-      ]
-    },
-    {
-      "id": "clamp-feature",
-      "description": "Add clamp(value, lower, upper) to range_utils.py. It must return lower below the range, upper above the range, and value inside the range. Keep floor_at_zero(value) unchanged.",
-      "files": {
-        "range_utils.py": "def floor_at_zero(value):\n    return max(0, value)\n"
-      },
-      "reference_files": {
-        "range_utils.py": "def floor_at_zero(value):\n    return max(0, value)\n\n\ndef clamp(value, lower, upper):\n    return max(lower, min(value, upper))\n"
-      },
-      "require_changes": true,
-      "require_tests": false,
-      "tags": [
-        "single-file-feature",
-        "feature",
-        "skill-should-not-trigger"
-      ],
-      "graders": [
-        {
-          "id": "behavior",
-          "kind": "command",
-          "params": {
-            "command": [
-              "{python}",
-              "-c",
-              "from range_utils import floor_at_zero, clamp; assert floor_at_zero(-2) == 0; assert clamp(-3, 0, 10) == 0; assert clamp(4, 0, 10) == 4; assert clamp(15, 0, 10) == 10"
-            ]
-          }
-        },
-        {
-          "id": "shape",
-          "kind": "file",
-          "params": {
-            "path": "range_utils.py",
-            "contains": "def clamp"
-          }
-        },
-        {
-          "id": "skill-selection",
-          "kind": "skill_selection",
-          "params": {
-            "expected_any": [],
-            "forbidden": [
-              "bug-fix",
-              "test-and-verify",
-              "repository-navigation"
-            ]
-          },
-          "required": false
-        }
-      ]
-    },
-    {
-      "id": "canonical-retry-config",
-      "description": "The client retry limit should be 4. Update the canonical retry configuration used by the runtime rather than hardcoding a second retry value in client.py or retry.py.",
-      "files": {
-        "app/__init__.py": "",
-        "app/config.py": "RETRY_LIMIT = 2\n",
-        "app/retry.py": "from .config import RETRY_LIMIT\n\n\ndef attempts():\n    return RETRY_LIMIT\n",
-        "app/client.py": "from .retry import attempts\n\n\ndef request_budget():\n    return attempts()\n",
-        "README.md": "Retry settings live under app/.\n"
-      },
-      "reference_files": {
-        "app/config.py": "RETRY_LIMIT = 4\n"
-      },
-      "require_changes": true,
-      "require_tests": false,
-      "tags": [
-        "navigation",
-        "configuration",
-        "skill-should-trigger"
-      ],
-      "graders": [
-        {
-          "id": "behavior",
-          "kind": "command",
-          "params": {
-            "command": [
-              "{python}",
-              "-c",
-              "from app.client import request_budget; assert request_budget() == 4"
-            ]
-          }
-        },
-        {
-          "id": "canonical",
-          "kind": "file",
-          "params": {
-            "path": "app/config.py",
-            "contains": "RETRY_LIMIT = 4"
-          }
-        },
-        {
-          "id": "client-no-hardcode",
-          "kind": "file",
-          "params": {
-            "path": "app/client.py",
-            "not_contains": "return 4"
-          }
-        },
-        {
-          "id": "retry-no-hardcode",
-          "kind": "file",
-          "params": {
-            "path": "app/retry.py",
-            "not_contains": "return 4"
-          }
-        },
-        {
-          "id": "skill-selection",
-          "kind": "skill_selection",
-          "params": {
-            "expected_any": [
-              "repository-navigation"
-            ],
-            "forbidden": []
-          },
-          "required": false
-        }
-      ]
-    },
-    {
-      "id": "multifile-display-name",
-      "description": "Add normalize_name(name) to formatting.py so it trims surrounding whitespace, collapses repeated internal whitespace, and title-cases words. Update render_user(name) in users.py to pass the normalized name to label(name).",
-      "files": {
-        "formatting.py": "def label(name):\n    return f'User: {name}'\n",
-        "users.py": "from formatting import label\n\n\ndef render_user(name):\n    return label(name)\n"
-      },
-      "reference_files": {
-        "formatting.py": "def label(name):\n    return f'User: {name}'\n\n\ndef normalize_name(name):\n    return ' '.join(name.split()).title()\n",
-        "users.py": "from formatting import label, normalize_name\n\n\ndef render_user(name):\n    return label(normalize_name(name))\n"
-      },
-      "require_changes": true,
-      "require_tests": false,
-      "tags": [
-        "multi-file",
-        "feature",
-        "planning-candidate"
-      ],
-      "graders": [
-        {
-          "id": "behavior",
-          "kind": "command",
-          "params": {
-            "command": [
-              "{python}",
-              "-c",
-              "from users import render_user; assert render_user('  alice   smith  ') == 'User: Alice Smith'; assert render_user('BOB') == 'User: Bob'"
-            ]
-          }
-        },
-        {
-          "id": "formatter",
-          "kind": "file",
-          "params": {
-            "path": "formatting.py",
-            "contains": "def normalize_name"
-          }
-        },
-        {
-          "id": "caller",
-          "kind": "file",
-          "params": {
-            "path": "users.py",
-            "contains": "normalize_name"
-          }
-        }
-      ]
-    },
-    {
-      "id": "slug-regression-recovery",
-      "description": "Fix slugify(text) so the existing repository tests pass. Reproduce the failure before editing, then run the tests again after the fix before finishing.",
-      "files": {
-        "slug.py": "def slugify(text):\n    return text.strip().lower().replace(' ', '_')\n",
-        "tests/test_slug.py": "from slug import slugify\n\n\ndef test_slugify_words():\n    assert slugify('Hello World') == 'hello-world'\n\n\ndef test_slugify_repeated_whitespace():\n    assert slugify('  A   B  ') == 'a-b'\n"
-      },
-      "reference_files": {
-        "slug.py": "def slugify(text):\n    return '-'.join(text.strip().lower().split())\n"
+        "src/calc_core/operations.py": "\"\"\"The five core calculator operations.\n\nThese functions preserve the behavior of the original top-level\n``calculator.py`` implementation:\n\n* ``divide(..., 0)`` raises ``ZeroDivisionError``.\n* ``clamp`` raises ``ValueError`` when ``lower > upper``.\n\"\"\"\n\n\ndef add(a: int, b: int) -> int:\n    \"\"\"Return the sum of two integers.\"\"\"\n    return a + b\n\n\ndef subtract(a: int, b: int) -> int:\n    \"\"\"Return the difference of two integers (a - b).\"\"\"\n    return a - b\n\n\ndef multiply(a: int, b: int) -> int:\n    \"\"\"Return the product of two integers.\"\"\"\n    return a * b\n\n\ndef divide(a: int, b: int) -> float:\n    \"\"\"Return the quotient of two integers (a / b).\n\n    Raises ZeroDivisionError if b is zero.\n    \"\"\"\n    if b == 0:\n        raise ZeroDivisionError(\"division by zero\")\n    return a / b\n\n\ndef clamp(value: int, lower: int, upper: int) -> int:\n    \"\"\"将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。\"\"\"\n    if lower > upper:\n        raise ValueError(\"lower must not exceed upper\")\n    return max(lower, min(value, upper))"
       },
       "require_changes": true,
       "require_tests": true,
       "test_cmd": "pytest -q",
       "tags": [
+        "single-file-bug",
         "recovery",
         "tests",
-        "bug-fix",
         "skill-should-trigger"
       ],
       "graders": [
@@ -252,7 +37,19 @@
             "command": [
               "{python}",
               "-c",
-              "from slug import slugify; assert slugify('Hello World') == 'hello-world'; assert slugify('  A   B  ') == 'a-b'; assert slugify('One') == 'one'"
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core.operations import add, subtract\nassert add(2, 3) == 5\nassert subtract(9, 4) == 5\nassert subtract(-2, 3) == -5"
+            ]
+          }
+        },
+        {
+          "id": "full-suite",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-m",
+              "pytest",
+              "-q"
             ]
           }
         },
@@ -280,129 +77,21 @@
       ]
     },
     {
-      "id": "completion-guard-increment",
-      "description": "Implement increment(value) in counter.py so it returns value + 1, and run the repository tests before finishing.",
+      "id": "batch-boundary-recovery",
+      "description": "Batch-size policy handling has regressed at the configured boundary. First reproduce the failing repository test, fix the boundary behavior, and rerun the tests before finishing.",
       "files": {
-        "counter.py": "def increment(value):\n    return value\n",
-        "tests/test_counter.py": "from counter import increment\n\n\ndef test_increment():\n    assert increment(4) == 5\n"
+        "src/calc_core/policy.py": "\"\"\"Immutable runtime policy for the calculator service.\n\nThe policy describes which operations are enabled and how batches are\nvalidated. It is a frozen dataclass so a policy instance can be shared\nsafely: all state is instance state owned by the service, never\nmodule-level mutable state.\n\"\"\"\n\nfrom dataclasses import dataclass\nfrom typing import FrozenSet, Optional\n\n\n@dataclass(frozen=True)\nclass OperationPolicy:\n    \"\"\"Describe the runtime behavior of a :class:`CalculatorService`.\n\n    Attributes:\n        enabled_operations: frozenset of allowed operation names, or\n            ``None`` to allow every registered operation.\n        max_batch_size: maximum number of requests accepted by\n            ``execute_batch``, or ``None`` for no limit.\n        strict_validation: when ``True`` each batch request must contain\n            exactly the keys ``\"operation\"`` and ``\"args\"``.\n    \"\"\"\n\n    enabled_operations: Optional[FrozenSet[str]] = None\n    max_batch_size: Optional[int] = None\n    strict_validation: bool = False\n\n    def is_operation_enabled(self, operation_name: str) -> bool:\n        \"\"\"Return whether ``operation_name`` is allowed by this policy.\"\"\"\n        if self.enabled_operations is None:\n            return True\n        return operation_name in self.enabled_operations\n\n    def check_batch_size(self, size: int) -> bool:\n        \"\"\"Return whether a batch of ``size`` items is within the limit.\n\n        ``size == max_batch_size`` is allowed; only a larger batch is\n        rejected. ``None`` means no limit.\n        \"\"\"\n        if self.max_batch_size is None:\n            return True\n        return size < self.max_batch_size\n\n\nDEFAULT_POLICY = OperationPolicy()\n"
       },
       "reference_files": {
-        "counter.py": "def increment(value):\n    return value + 1\n"
+        "src/calc_core/policy.py": "\"\"\"Immutable runtime policy for the calculator service.\n\nThe policy describes which operations are enabled and how batches are\nvalidated. It is a frozen dataclass so a policy instance can be shared\nsafely: all state is instance state owned by the service, never\nmodule-level mutable state.\n\"\"\"\n\nfrom dataclasses import dataclass\nfrom typing import FrozenSet, Optional\n\n\n@dataclass(frozen=True)\nclass OperationPolicy:\n    \"\"\"Describe the runtime behavior of a :class:`CalculatorService`.\n\n    Attributes:\n        enabled_operations: frozenset of allowed operation names, or\n            ``None`` to allow every registered operation.\n        max_batch_size: maximum number of requests accepted by\n            ``execute_batch``, or ``None`` for no limit.\n        strict_validation: when ``True`` each batch request must contain\n            exactly the keys ``\"operation\"`` and ``\"args\"``.\n    \"\"\"\n\n    enabled_operations: Optional[FrozenSet[str]] = None\n    max_batch_size: Optional[int] = None\n    strict_validation: bool = False\n\n    def is_operation_enabled(self, operation_name: str) -> bool:\n        \"\"\"Return whether ``operation_name`` is allowed by this policy.\"\"\"\n        if self.enabled_operations is None:\n            return True\n        return operation_name in self.enabled_operations\n\n    def check_batch_size(self, size: int) -> bool:\n        \"\"\"Return whether a batch of ``size`` items is within the limit.\n\n        ``size == max_batch_size`` is allowed; only a larger batch is\n        rejected. ``None`` means no limit.\n        \"\"\"\n        if self.max_batch_size is None:\n            return True\n        return size <= self.max_batch_size\n\n\nDEFAULT_POLICY = OperationPolicy()\n"
       },
       "require_changes": true,
       "require_tests": true,
       "test_cmd": "pytest -q",
       "tags": [
-        "completion-guard",
-        "tests",
-        "single-file-feature",
-        "skill-should-trigger"
-      ],
-      "graders": [
-        {
-          "id": "behavior",
-          "kind": "command",
-          "params": {
-            "command": [
-              "{python}",
-              "-c",
-              "from counter import increment; assert increment(4) == 5; assert increment(-1) == 0"
-            ]
-          }
-        },
-        {
-          "id": "tests-used",
-          "kind": "run_trace",
-          "params": {
-            "run_status": "success",
-            "min_test_attempts": 1
-          }
-        },
-        {
-          "id": "skill-selection",
-          "kind": "skill_selection",
-          "params": {
-            "expected_any": [
-              "test-and-verify"
-            ],
-            "forbidden": []
-          },
-          "required": false
-        }
-      ]
-    },
-    {
-      "id": "runtime-config-navigation",
-      "description": "Fix transport.timeout() so it reflects runtime changes to settings.DEFAULT_TIMEOUT instead of keeping a stale imported value. Keep DEFAULT_TIMEOUT public and run the repository tests before finishing.",
-      "files": {
-        "settings.py": "DEFAULT_TIMEOUT = 5\n",
-        "transport.py": "from settings import DEFAULT_TIMEOUT\n\n\ndef timeout():\n    return DEFAULT_TIMEOUT\n",
-        "tests/test_transport.py": "import settings\nimport transport\n\n\ndef test_runtime_timeout_override():\n    original = settings.DEFAULT_TIMEOUT\n    try:\n        settings.DEFAULT_TIMEOUT = 9\n        assert transport.timeout() == 9\n    finally:\n        settings.DEFAULT_TIMEOUT = original\n"
-      },
-      "reference_files": {
-        "transport.py": "import settings\n\n\ndef timeout():\n    return settings.DEFAULT_TIMEOUT\n"
-      },
-      "require_changes": true,
-      "require_tests": true,
-      "test_cmd": "pytest -q",
-      "tags": [
-        "navigation",
+        "single-file-bug",
         "recovery",
-        "bug-fix",
-        "skill-should-trigger"
-      ],
-      "graders": [
-        {
-          "id": "behavior",
-          "kind": "command",
-          "params": {
-            "command": [
-              "{python}",
-              "-c",
-              "import settings, transport; settings.DEFAULT_TIMEOUT = 12; assert transport.timeout() == 12"
-            ]
-          }
-        },
-        {
-          "id": "public-setting",
-          "kind": "file",
-          "params": {
-            "path": "settings.py",
-            "contains": "DEFAULT_TIMEOUT"
-          }
-        },
-        {
-          "id": "skill-selection",
-          "kind": "skill_selection",
-          "params": {
-            "expected_any": [
-              "repository-navigation",
-              "bug-fix",
-              "test-and-verify"
-            ],
-            "forbidden": []
-          },
-          "required": false
-        }
-      ]
-    },
-    {
-      "id": "generated-copy-change-approach",
-      "description": "Rendered identifiers should use prefix 'v2'. One repository file is only a generated defaults snapshot; leave that generated snapshot unchanged and update the runtime source of truth instead.",
-      "files": {
-        "src/app/__init__.py": "",
-        "src/app/constants.py": "PREFIX = 'v1'\n",
-        "src/app/generated_defaults.py": "# generated snapshot; do not edit manually\nPREFIX = 'v1'\n",
-        "src/app/renderer.py": "from .constants import PREFIX\n\n\ndef render(value):\n    return f'{PREFIX}:{value}'\n",
-        "README.md": "Runtime constants and generated snapshots live under src/app.\n"
-      },
-      "reference_files": {
-        "src/app/constants.py": "PREFIX = 'v2'\n"
-      },
-      "require_changes": true,
-      "require_tests": false,
-      "tags": [
-        "navigation",
+        "tests",
         "change-approach",
         "skill-should-trigger"
       ],
@@ -414,76 +103,28 @@
             "command": [
               "{python}",
               "-c",
-              "import sys; sys.path.insert(0, 'src'); from app.renderer import render; assert render('42') == 'v2:42'"
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core import OperationPolicy\np = OperationPolicy(max_batch_size=2)\nassert p.check_batch_size(2) is True\nassert p.check_batch_size(3) is False"
             ]
           }
         },
         {
-          "id": "source-of-truth",
-          "kind": "file",
-          "params": {
-            "path": "src/app/constants.py",
-            "contains": "PREFIX = 'v2'"
-          }
-        },
-        {
-          "id": "generated-unchanged",
-          "kind": "file",
-          "params": {
-            "path": "src/app/generated_defaults.py",
-            "equals": "# generated snapshot; do not edit manually\nPREFIX = 'v1'\n"
-          }
-        },
-        {
-          "id": "skill-selection",
-          "kind": "skill_selection",
-          "params": {
-            "expected_any": [
-              "repository-navigation"
-            ],
-            "forbidden": []
-          },
-          "required": false
-        }
-      ]
-    },
-    {
-      "id": "tag-parser-recovery",
-      "description": "Fix parse_tags(value) so the existing repository tests pass, then run the complete repository test suite before finishing.",
-      "files": {
-        "tags.py": "def parse_tags(value):\n    return [part.strip() for part in value.split(',')]\n",
-        "tests/test_tags.py": "from tags import parse_tags\n\n\ndef test_tags_normalized():\n    assert parse_tags(' Alpha, beta ') == ['alpha', 'beta']\n\n\ndef test_tags_skip_empty_and_duplicates():\n    assert parse_tags('a,, A, b,') == ['a', 'b']\n"
-      },
-      "reference_files": {
-        "tags.py": "def parse_tags(value):\n    result = []\n    seen = set()\n    for part in value.split(','):\n        tag = part.strip().lower()\n        if tag and tag not in seen:\n            result.append(tag)\n            seen.add(tag)\n    return result\n"
-      },
-      "require_changes": true,
-      "require_tests": true,
-      "test_cmd": "pytest -q",
-      "tags": [
-        "recovery",
-        "change-approach",
-        "tests",
-        "skill-should-trigger"
-      ],
-      "graders": [
-        {
-          "id": "behavior",
+          "id": "full-suite",
           "kind": "command",
           "params": {
             "command": [
               "{python}",
-              "-c",
-              "from tags import parse_tags; assert parse_tags(' Alpha, beta ') == ['alpha', 'beta']; assert parse_tags('a,, A, b,') == ['a', 'b']; assert parse_tags('') == []"
+              "-m",
+              "pytest",
+              "-q"
             ]
           }
         },
         {
-          "id": "tests-observed",
+          "id": "reproduced-and-retested",
           "kind": "run_trace",
           "params": {
             "run_status": "success",
-            "min_test_attempts": 1
+            "min_test_attempts": 2
           },
           "required": false
         },
@@ -502,26 +143,20 @@
       ]
     },
     {
-      "id": "registry-text-encoder",
-      "description": "Add plain-text encoding support. Implement encode_text(value), expose it through the encoder registry under key 'text', add a regression test for the new registry behavior, and run the repository tests before finishing. Existing JSON behavior must remain unchanged.",
+      "id": "divide-float-regression-recovery",
+      "description": "Division has regressed for non-exact quotients. First reproduce the failing repository test, restore the documented division behavior including divide-by-zero handling, and rerun the tests.",
       "files": {
-        "encoders.py": "import json\n\n\ndef encode_json(value):\n    return json.dumps(value, sort_keys=True)\n",
-        "registry.py": "from encoders import encode_json\n\nENCODERS = {'json': encode_json}\n\n\ndef get_encoder(kind):\n    return ENCODERS[kind]\n",
-        "service.py": "from registry import get_encoder\n\n\ndef render(kind, value):\n    return get_encoder(kind)(value)\n",
-        "tests/test_registry.py": "from service import render\n\n\ndef test_json_encoder():\n    assert render('json', {'b': 1, 'a': 2}) == '{\"a\": 2, \"b\": 1}'\n"
+        "src/calc_core/operations.py": "\"\"\"The five core calculator operations.\n\nThese functions preserve the behavior of the original top-level\n``calculator.py`` implementation:\n\n* ``divide(..., 0)`` raises ``ZeroDivisionError``.\n* ``clamp`` raises ``ValueError`` when ``lower > upper``.\n\"\"\"\n\n\ndef add(a: int, b: int) -> int:\n    \"\"\"Return the sum of two integers.\"\"\"\n    return a + b\n\n\ndef subtract(a: int, b: int) -> int:\n    \"\"\"Return the difference of two integers (a - b).\"\"\"\n    return a - b\n\n\ndef multiply(a: int, b: int) -> int:\n    \"\"\"Return the product of two integers.\"\"\"\n    return a * b\n\n\ndef divide(a: int, b: int) -> float:\n    \"\"\"Return the quotient of two integers (a / b).\n\n    Raises ZeroDivisionError if b is zero.\n    \"\"\"\n    if b == 0:\n        raise ZeroDivisionError(\"division by zero\")\n    return a // b\n\n\ndef clamp(value: int, lower: int, upper: int) -> int:\n    \"\"\"将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。\"\"\"\n    if lower > upper:\n        raise ValueError(\"lower must not exceed upper\")\n    return max(lower, min(value, upper))"
       },
       "reference_files": {
-        "encoders.py": "import json\n\n\ndef encode_json(value):\n    return json.dumps(value, sort_keys=True)\n\n\ndef encode_text(value):\n    return str(value)\n",
-        "registry.py": "from encoders import encode_json, encode_text\n\nENCODERS = {'json': encode_json, 'text': encode_text}\n\n\ndef get_encoder(kind):\n    return ENCODERS[kind]\n",
-        "tests/test_registry.py": "from service import render\n\n\ndef test_json_encoder():\n    assert render('json', {'b': 1, 'a': 2}) == '{\"a\": 2, \"b\": 1}'\n\n\ndef test_text_encoder():\n    assert render('text', 42) == '42'\n"
+        "src/calc_core/operations.py": "\"\"\"The five core calculator operations.\n\nThese functions preserve the behavior of the original top-level\n``calculator.py`` implementation:\n\n* ``divide(..., 0)`` raises ``ZeroDivisionError``.\n* ``clamp`` raises ``ValueError`` when ``lower > upper``.\n\"\"\"\n\n\ndef add(a: int, b: int) -> int:\n    \"\"\"Return the sum of two integers.\"\"\"\n    return a + b\n\n\ndef subtract(a: int, b: int) -> int:\n    \"\"\"Return the difference of two integers (a - b).\"\"\"\n    return a - b\n\n\ndef multiply(a: int, b: int) -> int:\n    \"\"\"Return the product of two integers.\"\"\"\n    return a * b\n\n\ndef divide(a: int, b: int) -> float:\n    \"\"\"Return the quotient of two integers (a / b).\n\n    Raises ZeroDivisionError if b is zero.\n    \"\"\"\n    if b == 0:\n        raise ZeroDivisionError(\"division by zero\")\n    return a / b\n\n\ndef clamp(value: int, lower: int, upper: int) -> int:\n    \"\"\"将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。\"\"\"\n    if lower > upper:\n        raise ValueError(\"lower must not exceed upper\")\n    return max(lower, min(value, upper))"
       },
       "require_changes": true,
       "require_tests": true,
       "test_cmd": "pytest -q",
       "tags": [
-        "multi-file",
-        "feature",
-        "replan-candidate",
+        "single-file-bug",
+        "recovery",
         "tests",
         "skill-should-trigger"
       ],
@@ -533,41 +168,38 @@
             "command": [
               "{python}",
               "-c",
-              "from service import render; assert render('text', 42) == '42'; assert render('json', {'b': 1, 'a': 2}) == '{\"a\": 2, \"b\": 1}'"
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core.operations import divide\nassert divide(1, 2) == 0.5\ntry:\n    divide(1, 0)\nexcept ZeroDivisionError:\n    pass\nelse:\n    raise AssertionError('divide by zero must raise')"
             ]
           }
         },
         {
-          "id": "encoder",
-          "kind": "file",
+          "id": "full-suite",
+          "kind": "command",
           "params": {
-            "path": "encoders.py",
-            "contains": "def encode_text"
+            "command": [
+              "{python}",
+              "-m",
+              "pytest",
+              "-q"
+            ]
           }
         },
         {
-          "id": "registry",
-          "kind": "file",
+          "id": "reproduced-and-retested",
+          "kind": "run_trace",
           "params": {
-            "path": "registry.py",
-            "contains": "'text'"
-          }
-        },
-        {
-          "id": "regression-test",
-          "kind": "file",
-          "params": {
-            "path": "tests/test_registry.py",
-            "contains": "test_text_encoder"
-          }
+            "run_status": "success",
+            "min_test_attempts": 2
+          },
+          "required": false
         },
         {
           "id": "skill-selection",
           "kind": "skill_selection",
           "params": {
             "expected_any": [
-              "test-and-verify",
-              "repository-navigation"
+              "bug-fix",
+              "test-and-verify"
             ],
             "forbidden": []
           },
@@ -576,13 +208,11 @@
       ]
     },
     {
-      "id": "warning-color-feature",
-      "description": "Add the mapping 'warning': 'yellow' to DEFAULT_COLORS in palette.py without changing the existing mappings.",
-      "files": {
-        "palette.py": "DEFAULT_COLORS = {\n    'ok': 'green',\n    'error': 'red',\n}\n"
-      },
+      "id": "square-operation-feature",
+      "description": "Add square(value) to calc_core.operations. It should return value squared. Keep the existing operation behavior unchanged; this task does not require changing the service registry or compatibility facade.",
+      "files": {},
       "reference_files": {
-        "palette.py": "DEFAULT_COLORS = {\n    'ok': 'green',\n    'error': 'red',\n    'warning': 'yellow',\n}\n"
+        "src/calc_core/operations.py": "\"\"\"The five core calculator operations.\n\nThese functions preserve the behavior of the original top-level\n``calculator.py`` implementation:\n\n* ``divide(..., 0)`` raises ``ZeroDivisionError``.\n* ``clamp`` raises ``ValueError`` when ``lower > upper``.\n\"\"\"\n\n\ndef add(a: int, b: int) -> int:\n    \"\"\"Return the sum of two integers.\"\"\"\n    return a + b\n\n\ndef subtract(a: int, b: int) -> int:\n    \"\"\"Return the difference of two integers (a - b).\"\"\"\n    return a - b\n\n\ndef multiply(a: int, b: int) -> int:\n    \"\"\"Return the product of two integers.\"\"\"\n    return a * b\n\n\ndef divide(a: int, b: int) -> float:\n    \"\"\"Return the quotient of two integers (a / b).\n\n    Raises ZeroDivisionError if b is zero.\n    \"\"\"\n    if b == 0:\n        raise ZeroDivisionError(\"division by zero\")\n    return a / b\n\n\ndef clamp(value: int, lower: int, upper: int) -> int:\n    \"\"\"将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。\"\"\"\n    if lower > upper:\n        raise ValueError(\"lower must not exceed upper\")\n    return max(lower, min(value, upper))\n\ndef square(value: int) -> int:\n    \"\"\"Return value squared.\"\"\"\n    return value * value\n"
       },
       "require_changes": true,
       "require_tests": false,
@@ -599,8 +229,16 @@
             "command": [
               "{python}",
               "-c",
-              "from palette import DEFAULT_COLORS; assert DEFAULT_COLORS == {'ok': 'green', 'error': 'red', 'warning': 'yellow'}"
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core.operations import square\nassert square(5) == 25\nassert square(-4) == 16\nassert square(0) == 0"
             ]
+          }
+        },
+        {
+          "id": "shape",
+          "kind": "file",
+          "params": {
+            "path": "src/calc_core/operations.py",
+            "contains": "def square"
           }
         },
         {
@@ -619,23 +257,135 @@
       ]
     },
     {
-      "id": "id-contract-migration",
-      "description": "Change normalize_id(value) so normalized IDs are trimmed strings that preserve leading zeros. Update affected callers so public_id(value) returns that normalized string while next_numeric_id(value) still returns the next integer. Run the repository tests before finishing.",
-      "files": {
-        "id_utils.py": "def normalize_id(value):\n    return int(value)\n",
-        "api.py": "from id_utils import normalize_id\n\n\ndef public_id(value):\n    return normalize_id(value)\n",
-        "sequence.py": "from id_utils import normalize_id\n\n\ndef next_numeric_id(value):\n    return normalize_id(value) + 1\n",
-        "tests/test_ids.py": "from api import public_id\nfrom sequence import next_numeric_id\n\n\ndef test_public_id_preserves_leading_zeroes():\n    assert public_id(' 007 ') == '007'\n\n\ndef test_next_numeric_id_stays_numeric():\n    assert next_numeric_id(' 007 ') == 8\n"
-      },
+      "id": "registry-contains-feature",
+      "description": "Add contains(name) to OperationRegistry so callers can check whether an exact operation name is registered without raising. Preserve register/resolve behavior.",
+      "files": {},
       "reference_files": {
-        "id_utils.py": "def normalize_id(value):\n    return str(value).strip()\n",
-        "sequence.py": "from id_utils import normalize_id\n\n\ndef next_numeric_id(value):\n    return int(normalize_id(value)) + 1\n"
+        "src/calc_core/registry.py": "\"\"\"Registry mapping operation names to callables.\"\"\"\n\nfrom typing import Callable, Dict\n\nfrom .errors import UnknownOperationError\n\nOperation = Callable[..., object]\n\n\nclass OperationRegistry:\n    \"\"\"Store operations by name and resolve them back.\"\"\"\n\n    def __init__(self) -> None:\n        self._operations: Dict[str, Operation] = {}\n\n    def register(self, name: str, operation: Operation) -> None:\n        \"\"\"Register ``operation`` under ``name``.\"\"\"\n        self._operations[name] = operation\n\n    def contains(self, name: str) -> bool:\n        \"\"\"Return whether name is registered.\"\"\"\n        return name in self._operations\n\n    def resolve(self, name: str) -> Operation:\n        \"\"\"Return the operation registered under ``name``.\n\n        Raises UnknownOperationError if no such operation exists.\n        \"\"\"\n        try:\n            return self._operations[name]\n        except KeyError:\n            raise UnknownOperationError(name) from None"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "single-file-feature",
+        "feature",
+        "skill-should-not-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core import OperationRegistry, add\nr = OperationRegistry()\nassert r.contains('add') is False\nr.register('add', add)\nassert r.contains('add') is True\nassert r.contains('ADD') is False"
+            ]
+          }
+        },
+        {
+          "id": "shape",
+          "kind": "file",
+          "params": {
+            "path": "src/calc_core/registry.py",
+            "contains": "def contains"
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [],
+            "forbidden": [
+              "bug-fix",
+              "test-and-verify",
+              "repository-navigation"
+            ]
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "runtime-policy-mode-live",
+      "description": "app.runtime.policy_mode() must read the current app.config.POLICY_MODE value rather than a stale value captured when runtime.py was imported. Keep app.config as the single source of truth, add a regression test, and run the repository tests.",
+      "files": {},
+      "reference_files": {
+        "src/app/runtime.py": "from . import config\n\n\ndef policy_mode() -> str:\n    return config.POLICY_MODE\n",
+        "tests/test_policy_runtime.py": "from pathlib import Path\nimport sys\n\nsys.path.insert(0, str(Path(__file__).resolve().parents[1] / \"src\"))\n\nfrom app.runtime import policy_mode\n\n\ndef test_policy_mode_is_configured_string():\n    value = policy_mode()\n    assert isinstance(value, str)\n    assert value\n\n\ndef test_policy_mode_reflects_runtime_config_changes():\n    from app import config\n\n    original = config.POLICY_MODE\n    try:\n        config.POLICY_MODE = \"strict\"\n        assert policy_mode() == \"strict\"\n    finally:\n        config.POLICY_MODE = original\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "navigation",
+        "configuration",
+        "multi-file",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys\nsys.path.insert(0, 'src')\nfrom app import config\nfrom app.runtime import policy_mode\noriginal = config.POLICY_MODE\ntry:\n    config.POLICY_MODE = 'strict'\n    assert policy_mode() == 'strict'\n    config.POLICY_MODE = 'legacy'\n    assert policy_mode() == 'legacy'\nfinally:\n    config.POLICY_MODE = original"
+            ]
+          }
+        },
+        {
+          "id": "regression-test",
+          "kind": "file",
+          "params": {
+            "path": "tests/test_policy_runtime.py",
+            "contains": "test_policy_mode_reflects_runtime_config_changes"
+          }
+        },
+        {
+          "id": "full-suite",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-m",
+              "pytest",
+              "-q"
+            ]
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "repository-navigation",
+              "test-and-verify"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "power-operation-integration",
+      "description": "Add power(a, b) as a default calculator operation. It must be available through calc_core.operations, CalculatorService.execute('power', ...), the calc_core public API, and the top-level calculator compatibility facade. Add regression tests and run the full repository tests.",
+      "files": {},
+      "reference_files": {
+        "src/calc_core/operations.py": "\"\"\"The five core calculator operations.\n\nThese functions preserve the behavior of the original top-level\n``calculator.py`` implementation:\n\n* ``divide(..., 0)`` raises ``ZeroDivisionError``.\n* ``clamp`` raises ``ValueError`` when ``lower > upper``.\n\"\"\"\n\n\ndef add(a: int, b: int) -> int:\n    \"\"\"Return the sum of two integers.\"\"\"\n    return a + b\n\n\ndef subtract(a: int, b: int) -> int:\n    \"\"\"Return the difference of two integers (a - b).\"\"\"\n    return a - b\n\n\ndef multiply(a: int, b: int) -> int:\n    \"\"\"Return the product of two integers.\"\"\"\n    return a * b\n\n\ndef divide(a: int, b: int) -> float:\n    \"\"\"Return the quotient of two integers (a / b).\n\n    Raises ZeroDivisionError if b is zero.\n    \"\"\"\n    if b == 0:\n        raise ZeroDivisionError(\"division by zero\")\n    return a / b\n\n\ndef clamp(value: int, lower: int, upper: int) -> int:\n    \"\"\"将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。\"\"\"\n    if lower > upper:\n        raise ValueError(\"lower must not exceed upper\")\n    return max(lower, min(value, upper))\n\ndef power(a: int, b: int) -> int:\n    \"\"\"Return a raised to b.\"\"\"\n    return a ** b\n",
+        "src/calc_core/service.py": "\"\"\"High-level calculator service built on top of the registry.\"\"\"\n\nfrom typing import Iterable, Mapping, Optional\n\nfrom . import operations\nfrom .errors import (\n    BatchSizeExceededError,\n    InvalidRequestError,\n    OperationDisabledError,\n)\nfrom .policy import DEFAULT_POLICY, OperationPolicy\nfrom .registry import OperationRegistry\n\n\nclass CalculatorService:\n    \"\"\"Execute named arithmetic operations.\n\n    A freshly constructed service has all five default operations\n    registered: add, subtract, multiply, divide and clamp.\n\n    Behavior is governed by an optional :class:`OperationPolicy`. The\n    default policy preserves the original behavior: every registered\n    operation is enabled, batches are unlimited and validation is lenient.\n    \"\"\"\n\n    DEFAULT_OPERATIONS = {\n        \"add\": operations.add,\n        \"subtract\": operations.subtract,\n        \"multiply\": operations.multiply,\n        \"divide\": operations.divide,\n        \"clamp\": operations.clamp,\n        \"power\": operations.power,\n    }\n\n    def __init__(\n        self,\n        registry: Optional[OperationRegistry] = None,\n        policy: Optional[OperationPolicy] = None,\n    ) -> None:\n        self.registry = registry if registry is not None else OperationRegistry()\n        self.policy = policy if policy is not None else DEFAULT_POLICY\n        for name, operation in self.DEFAULT_OPERATIONS.items():\n            self.registry.register(name, operation)\n\n    def execute(self, operation_name: str, *args: object) -> object:\n        \"\"\"Execute the operation registered under ``operation_name``.\"\"\"\n        operation = self.registry.resolve(operation_name)\n        if not self.policy.is_operation_enabled(operation_name):\n            raise OperationDisabledError(operation_name)\n        return operation(*args)\n\n    def _validate_request(self, request: object) -> tuple:\n        \"\"\"Return ``(operation_name, args)`` or raise InvalidRequestError.\"\"\"\n        if not isinstance(request, Mapping):\n            raise InvalidRequestError(\n                \"request must be a mapping with 'operation' and 'args'\"\n            )\n        if \"operation\" not in request or \"args\" not in request:\n            raise InvalidRequestError(\n                \"request must contain 'operation' and 'args'\"\n            )\n        if self.policy.strict_validation:\n            extra = set(request.keys()) - {\"operation\", \"args\"}\n            if extra:\n                raise InvalidRequestError(\n                    \"request must contain exactly 'operation' and 'args'\"\n                )\n        operation_name = request[\"operation\"]\n        if not isinstance(operation_name, str) or not operation_name:\n            raise InvalidRequestError(\"request 'operation' must be a non-empty string\")\n        args = request[\"args\"]\n        if not isinstance(args, (list, tuple)):\n            raise InvalidRequestError(\"request 'args' must be a list or tuple\")\n        return operation_name, args\n\n    def execute_batch(self, requests: Iterable[object]) -> list:\n        \"\"\"Execute an ordered iterable of requests, one result per item.\n\n        Each result is either ``{\"ok\": True, \"value\": ...}`` or\n        ``{\"ok\": False, \"error\": {\"type\": ..., \"message\": ...}}``.\n        A failing request never aborts the remaining requests.\n\n        If the policy sets ``max_batch_size`` the batch is measured before\n        processing: a batch larger than the limit raises\n        :class:`BatchSizeExceededError` without producing results.\n        \"\"\"\n        items = list(requests)\n        if not self.policy.check_batch_size(len(items)):\n            raise BatchSizeExceededError(len(items), self.policy.max_batch_size)\n        results = []\n        for request in items:\n            try:\n                operation_name, args = self._validate_request(request)\n                value = self.execute(operation_name, *args)\n            except Exception as exc:\n                results.append(\n                    {\n                        \"ok\": False,\n                        \"error\": {\n                            \"type\": type(exc).__name__,\n                            \"message\": str(exc),\n                        },\n                    }\n                )\n            else:\n                results.append({\"ok\": True, \"value\": value})\n        return results\n",
+        "src/calc_core/__init__.py": "\"\"\"Public API for the calculator core package.\n\nRe-exports the five operations, the error types, the operation registry\nand the high-level service so ``from calc_core import ...`` works.\n\"\"\"\n\nfrom . import operations\nfrom .errors import (\n    BatchSizeExceededError,\n    CalculatorError,\n    InvalidRequestError,\n    OperationDisabledError,\n    UnknownOperationError,\n)\nfrom .operations import add, clamp, divide, multiply, power, subtract\nfrom .policy import OperationPolicy\nfrom .registry import OperationRegistry\nfrom .service import CalculatorService\n\n__all__ = [\n    \"BatchSizeExceededError\",\n    \"CalculatorError\",\n    \"CalculatorService\",\n    \"InvalidRequestError\",\n    \"OperationDisabledError\",\n    \"OperationPolicy\",\n    \"OperationRegistry\",\n    \"UnknownOperationError\",\n    \"add\",\n    \"clamp\",\n    \"divide\",\n    \"multiply\",\n    \"operations\",\n    \"power\",\n    \"subtract\",\n]",
+        "calculator.py": "\"\"\"Compatibility facade for the calculator core.\n\nThe operation implementations now live in ``src/calc_core/operations.py``.\nThese re-exports preserve the original public API exactly.\n\"\"\"\n\nfrom calc_core.operations import add, clamp, divide, multiply, power, subtract\n\n__all__ = [\"add\", \"subtract\", \"multiply\", \"divide\", \"clamp\", \"power\"]",
+        "tests/test_calculator.py": "import pytest\n\nfrom calculator import add, subtract, multiply, divide, clamp, power\n\n\ndef test_add_positive_numbers():\n    assert add(2, 3) == 5\n\n\ndef test_add_negative_numbers():\n    assert add(-2, -3) == -5\n\n\ndef test_subtract_positive_numbers():\n    assert subtract(5, 3) == 2\n\n\ndef test_subtract_negative_result():\n    assert subtract(3, 5) == -2\n\n\ndef test_multiply_positive_numbers():\n    assert multiply(4, 3) == 12\n\n\ndef test_multiply_negative_numbers():\n    assert multiply(-4, 3) == -12\n\n\ndef test_multiply_by_zero():\n    assert multiply(7, 0) == 0\n\n\ndef test_divide_exact():\n    assert divide(10, 2) == 5\n\n\ndef test_divide_float_result():\n    assert divide(7, 2) == 3.5\n\n\ndef test_divide_by_zero_raises():\n    with pytest.raises(ZeroDivisionError):\n        divide(5, 0)\n\n\ndef test_clamp_value_within_range():\n    \"\"\"值在区间内时原样返回。\"\"\"\n    assert clamp(5, 0, 10) == 5\n\n\ndef test_clamp_value_below_lower():\n    \"\"\"值小于下限时返回下限。\"\"\"\n    assert clamp(-3, 0, 10) == 0\n\n\ndef test_clamp_value_above_upper():\n    \"\"\"值大于上限时返回上限。\"\"\"\n    assert clamp(42, 0, 10) == 10\n\n\ndef test_clamp_equal_bounds():\n    \"\"\"下限等于上限时，任何值都返回该边界值。\"\"\"\n    assert clamp(7, 3, 3) == 3\n\n\ndef test_clamp_invalid_bounds_raises():\n    \"\"\"下限大于上限时抛出 ValueError。\"\"\"\n    with pytest.raises(ValueError, match=\"lower must not exceed upper\"):\n        clamp(5, 10, 0)\n\ndef test_power_operation():\n    assert power(2, 5) == 32\n    assert power(7, 0) == 1\n"
       },
       "require_changes": true,
       "require_tests": true,
       "test_cmd": "pytest -q",
       "tags": [
         "multi-file",
+        "feature",
         "replan-candidate",
         "tests",
         "skill-should-trigger"
@@ -648,28 +398,339 @@
             "command": [
               "{python}",
               "-c",
-              "from api import public_id; from sequence import next_numeric_id; assert public_id(' 007 ') == '007'; assert next_numeric_id(' 007 ') == 8"
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core import CalculatorService, power\nimport calculator\nassert power(2, 5) == 32\nassert CalculatorService().execute('power', 3, 3) == 27\nassert calculator.power(10, 0) == 1"
             ]
           }
         },
         {
-          "id": "contract",
+          "id": "operation",
           "kind": "file",
           "params": {
-            "path": "id_utils.py",
-            "contains": "str(value).strip()"
+            "path": "src/calc_core/operations.py",
+            "contains": "def power"
           }
         },
         {
-          "id": "caller-adapted",
+          "id": "service",
           "kind": "file",
           "params": {
-            "path": "sequence.py",
-            "contains": "int(normalize_id(value))"
+            "path": "src/calc_core/service.py",
+            "contains": "\"power\": operations.power"
           }
         },
         {
-          "id": "final-tests",
+          "id": "regression-test",
+          "kind": "file",
+          "params": {
+            "path": "tests/test_calculator.py",
+            "contains": "test_power_operation"
+          }
+        },
+        {
+          "id": "full-suite",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-m",
+              "pytest",
+              "-q"
+            ]
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "repository-navigation",
+              "test-and-verify"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "registry-case-insensitive",
+      "description": "Make operation registration and lookup case-insensitive and tolerant of surrounding whitespace. Existing canonical lowercase behavior and UnknownOperationError semantics must remain intact. Add a regression test and run the repository tests.",
+      "files": {},
+      "reference_files": {
+        "src/calc_core/registry.py": "\"\"\"Registry mapping operation names to callables.\"\"\"\n\nfrom typing import Callable, Dict\n\nfrom .errors import UnknownOperationError\n\nOperation = Callable[..., object]\n\n\nclass OperationRegistry:\n    \"\"\"Store operations by name and resolve them back.\"\"\"\n\n    def __init__(self) -> None:\n        self._operations: Dict[str, Operation] = {}\n\n    def register(self, name: str, operation: Operation) -> None:\n        \"\"\"Register ``operation`` under ``name``.\"\"\"\n        self._operations[name.strip().lower()] = operation\n\n    def resolve(self, name: str) -> Operation:\n        \"\"\"Return the operation registered under ``name``.\n\n        Raises UnknownOperationError if no such operation exists.\n        \"\"\"\n        try:\n            return self._operations[name.strip().lower()]\n        except KeyError:\n            raise UnknownOperationError(name) from None",
+        "tests/test_calc_core.py": "\"\"\"Focused tests for the new calc_core architecture.\"\"\"\n\nimport pytest\n\nfrom calc_core import (\n    CalculatorError,\n    CalculatorService,\n    OperationRegistry,\n    UnknownOperationError,\n    add,\n    clamp,\n    divide,\n    multiply,\n    subtract,\n)\nfrom calc_core import operations\n\n\n# --- operations module preserves behavior ---------------------------------\n\n\ndef test_operations_module_exposes_five_ops():\n    assert operations.add(2, 3) == 5\n    assert operations.subtract(5, 3) == 2\n    assert operations.multiply(4, 3) == 12\n    assert operations.divide(10, 2) == 5\n    assert operations.clamp(5, 0, 10) == 5\n\n\ndef test_operations_divide_by_zero_raises():\n    with pytest.raises(ZeroDivisionError, match=\"division by zero\"):\n        operations.divide(5, 0)\n\n\ndef test_operations_clamp_invalid_bounds_raises():\n    with pytest.raises(ValueError, match=\"lower must not exceed upper\"):\n        operations.clamp(5, 10, 0)\n\n\n# --- errors ----------------------------------------------------------------\n\n\ndef test_unknown_operation_error_is_calculator_error():\n    assert issubclass(UnknownOperationError, CalculatorError)\n\n\ndef test_unknown_operation_error_carries_name():\n    err = UnknownOperationError(\"nope\")\n    assert err.name == \"nope\"\n    assert \"nope\" in str(err)\n\n\n# --- registry --------------------------------------------------------------\n\n\ndef test_registry_register_and_resolve():\n    registry = OperationRegistry()\n    registry.register(\"add\", add)\n    assert registry.resolve(\"add\") is add\n\n\ndef test_registry_unknown_name_raises_unknown_operation_error():\n    registry = OperationRegistry()\n    with pytest.raises(UnknownOperationError):\n        registry.resolve(\"missing\")\n\n\n# --- service ---------------------------------------------------------------\n\n\ndef test_service_has_all_default_operations():\n    service = CalculatorService()\n    for name in (\"add\", \"subtract\", \"multiply\", \"divide\", \"clamp\"):\n        assert service.registry.resolve(name) is not None\n\n\ndef test_service_execute_dispatches_by_name():\n    service = CalculatorService()\n    assert service.execute(\"add\", 2, 3) == 5\n    assert service.execute(\"subtract\", 5, 3) == 2\n    assert service.execute(\"multiply\", 4, 3) == 12\n    assert service.execute(\"divide\", 7, 2) == 3.5\n    assert service.execute(\"clamp\", 42, 0, 10) == 10\n\n\ndef test_service_execute_unknown_operation_raises_unknown_operation_error():\n    service = CalculatorService()\n    with pytest.raises(UnknownOperationError):\n        service.execute(\"does_not_exist\", 1, 2)\n\n\ndef test_service_execute_preserves_divide_by_zero():\n    service = CalculatorService()\n    with pytest.raises(ZeroDivisionError):\n        service.execute(\"divide\", 5, 0)\n\n\n# --- facade ----------------------------------------------------------------\n\n\ndef test_facade_reexports_operations():\n    import calculator\n\n    assert calculator.add is operations.add\n    assert calculator.subtract is operations.subtract\n    assert calculator.multiply is operations.multiply\n    assert calculator.divide is operations.divide\n    assert calculator.clamp is operations.clamp\n\n\ndef test_registry_names_are_case_insensitive():\n    registry = OperationRegistry()\n    registry.register(\"Add\", add)\n    assert registry.resolve(\" add \") is add\n    assert CalculatorService(registry=registry).execute(\"ADD\", 2, 3) == 5\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "navigation",
+        "feature",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core import CalculatorService, OperationRegistry, UnknownOperationError, add\nr = OperationRegistry()\nr.register(' Add ', add)\nassert r.resolve('ADD') is add\nassert CalculatorService(registry=r).execute(' aDd ', 2, 3) == 5\ntry:\n    r.resolve('missing')\nexcept UnknownOperationError as exc:\n    assert exc.name == 'missing'\nelse:\n    raise AssertionError('missing operation must raise')"
+            ]
+          }
+        },
+        {
+          "id": "full-suite",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-m",
+              "pytest",
+              "-q"
+            ]
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "repository-navigation",
+              "test-and-verify"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "policy-deny-list",
+      "description": "Extend OperationPolicy with a disabled_operations deny-list. A denied operation must be disabled even if it is also present in enabled_operations; default policy behavior must remain backward compatible. Add regression tests and run the repository tests.",
+      "files": {},
+      "reference_files": {
+        "src/calc_core/policy.py": "\"\"\"Immutable runtime policy for the calculator service.\n\nThe policy describes which operations are enabled and how batches are\nvalidated. It is a frozen dataclass so a policy instance can be shared\nsafely: all state is instance state owned by the service, never\nmodule-level mutable state.\n\"\"\"\n\nfrom dataclasses import dataclass\nfrom typing import FrozenSet, Optional\n\n\n@dataclass(frozen=True)\nclass OperationPolicy:\n    \"\"\"Describe the runtime behavior of a :class:`CalculatorService`.\n\n    Attributes:\n        enabled_operations: frozenset of allowed operation names, or\n            ``None`` to allow every registered operation.\n        max_batch_size: maximum number of requests accepted by\n            ``execute_batch``, or ``None`` for no limit.\n        strict_validation: when ``True`` each batch request must contain\n            exactly the keys ``\"operation\"`` and ``\"args\"``.\n        disabled_operations: operation names denied even when otherwise enabled.\n    \"\"\"\n\n    enabled_operations: Optional[FrozenSet[str]] = None\n    max_batch_size: Optional[int] = None\n    strict_validation: bool = False\n    disabled_operations: FrozenSet[str] = frozenset()\n\n    def is_operation_enabled(self, operation_name: str) -> bool:\n        \"\"\"Return whether ``operation_name`` is allowed by this policy.\"\"\"\n        if operation_name in self.disabled_operations:\n            return False\n        if self.enabled_operations is None:\n            return True\n        return operation_name in self.enabled_operations\n\n    def check_batch_size(self, size: int) -> bool:\n        \"\"\"Return whether a batch of ``size`` items is within the limit.\n\n        ``size == max_batch_size`` is allowed; only a larger batch is\n        rejected. ``None`` means no limit.\n        \"\"\"\n        if self.max_batch_size is None:\n            return True\n        return size <= self.max_batch_size\n\n\nDEFAULT_POLICY = OperationPolicy()\n",
+        "tests/test_policy.py": "\"\"\"Focused tests for the runtime OperationPolicy (Task C).\"\"\"\n\nimport dataclasses\n\nimport pytest\n\nfrom calc_core import (\n    BatchSizeExceededError,\n    CalculatorError,\n    CalculatorService,\n    InvalidRequestError,\n    OperationDisabledError,\n    OperationPolicy,\n)\n\n\n# --- error hierarchy -------------------------------------------------------\n\n\ndef test_new_errors_are_calculator_errors():\n    assert issubclass(OperationDisabledError, CalculatorError)\n    assert issubclass(BatchSizeExceededError, CalculatorError)\n\n\ndef test_operation_disabled_error_carries_name():\n    err = OperationDisabledError(\"divide\")\n    assert err.name == \"divide\"\n    assert \"divide\" in str(err)\n\n\n# --- policy value object ---------------------------------------------------\n\n\ndef test_policy_defaults():\n    policy = OperationPolicy()\n    assert policy.enabled_operations is None\n    assert policy.max_batch_size is None\n    assert policy.strict_validation is False\n\n\ndef test_policy_is_immutable():\n    policy = OperationPolicy()\n    with pytest.raises(dataclasses.FrozenInstanceError):\n        policy.max_batch_size = 3\n\n\ndef test_policy_is_operation_enabled():\n    assert OperationPolicy().is_operation_enabled(\"add\") is True\n    restricted = OperationPolicy(enabled_operations=frozenset({\"add\"}))\n    assert restricted.is_operation_enabled(\"add\") is True\n    assert restricted.is_operation_enabled(\"divide\") is False\n\n\ndef test_policy_check_batch_size_boundary():\n    assert OperationPolicy().check_batch_size(10 ** 6) is True\n    limited = OperationPolicy(max_batch_size=3)\n    assert limited.check_batch_size(0) is True\n    assert limited.check_batch_size(3) is True\n    assert limited.check_batch_size(4) is False\n\n\ndef test_policy_is_instance_state_not_module_global():\n    first = CalculatorService()\n    second = CalculatorService(policy=OperationPolicy(enabled_operations=frozenset()))\n    assert isinstance(first.policy, OperationPolicy)\n    assert first.policy.enabled_operations is None\n    assert second.policy.enabled_operations == frozenset()\n    # Mutating one instance's registry/policy view does not touch the other.\n    assert first.policy is not second.policy\n\n\n# --- default compatibility -------------------------------------------------\n\n\ndef test_default_policy_preserves_execute():\n    service = CalculatorService()\n    assert service.execute(\"add\", 2, 3) == 5\n    assert service.execute(\"divide\", 7, 2) == 3.5\n\n\ndef test_default_policy_preserves_batch_shape_and_order():\n    service = CalculatorService()\n    results = service.execute_batch(\n        [\n            {\"operation\": \"add\", \"args\": [2, 3]},\n            {\"operation\": \"nope\", \"args\": []},\n            {\"operation\": \"multiply\", \"args\": [4, 3]},\n        ]\n    )\n    assert [r[\"ok\"] for r in results] == [True, False, True]\n    assert results[0] == {\"ok\": True, \"value\": 5}\n    assert results[1][\"error\"][\"type\"] == \"UnknownOperationError\"\n    assert results[2] == {\"ok\": True, \"value\": 12}\n\n\ndef test_default_policy_ignores_extra_keys():\n    service = CalculatorService()\n    results = service.execute_batch(\n        [{\"operation\": \"add\", \"args\": [1, 2], \"extra\": \"ignored\"}]\n    )\n    assert results == [{\"ok\": True, \"value\": 3}]\n\n\n# --- disabled operations ---------------------------------------------------\n\n\ndef test_execute_raises_when_operation_disabled():\n    service = CalculatorService(\n        policy=OperationPolicy(enabled_operations=frozenset({\"add\"}))\n    )\n    assert service.execute(\"add\", 1, 2) == 3\n    with pytest.raises(OperationDisabledError):\n        service.execute(\"divide\", 6, 2)\n\n\ndef test_execute_batch_captures_disabled_operation_per_item():\n    service = CalculatorService(\n        policy=OperationPolicy(enabled_operations=frozenset({\"add\"}))\n    )\n    results = service.execute_batch(\n        [\n            {\"operation\": \"divide\", \"args\": [6, 2]},\n            {\"operation\": \"add\", \"args\": [1, 2]},\n        ]\n    )\n    assert results[0][\"ok\"] is False\n    assert results[0][\"error\"][\"type\"] == \"OperationDisabledError\"\n    assert results[1] == {\"ok\": True, \"value\": 3}\n\n\ndef test_unknown_operation_still_reported_when_restricted():\n    service = CalculatorService(\n        policy=OperationPolicy(enabled_operations=frozenset({\"add\"}))\n    )\n    results = service.execute_batch([{\"operation\": \"nope\", \"args\": []}])\n    assert results[0][\"ok\"] is False\n    assert results[0][\"error\"][\"type\"] == \"UnknownOperationError\"\n\n\n# --- max_batch_size --------------------------------------------------------\n\n\ndef test_batch_size_equal_to_limit_is_allowed():\n    service = CalculatorService(policy=OperationPolicy(max_batch_size=2))\n    results = service.execute_batch(\n        [\n            {\"operation\": \"add\", \"args\": [1, 1]},\n            {\"operation\": \"add\", \"args\": [2, 2]},\n        ]\n    )\n    assert [r[\"value\"] for r in results] == [2, 4]\n\n\ndef test_batch_size_above_limit_raises_deterministically():\n    service = CalculatorService(policy=OperationPolicy(max_batch_size=2))\n    requests = [\n        {\"operation\": \"add\", \"args\": [1, 1]},\n        {\"operation\": \"add\", \"args\": [2, 2]},\n        {\"operation\": \"add\", \"args\": [3, 3]},\n    ]\n    with pytest.raises(BatchSizeExceededError) as exc_info:\n        service.execute_batch(requests)\n    assert exc_info.value.size == 3\n    assert exc_info.value.max_batch_size == 2\n    # Deterministic: raising again yields the same outcome.\n    with pytest.raises(BatchSizeExceededError):\n        service.execute_batch(requests)\n\n\ndef test_batch_size_accepts_generators():\n    service = CalculatorService(policy=OperationPolicy(max_batch_size=1))\n    with pytest.raises(BatchSizeExceededError):\n        service.execute_batch(\n            {\"operation\": \"add\", \"args\": [i, i]} for i in range(3)\n        )\n\n\ndef test_empty_batch_respects_limit():\n    service = CalculatorService(policy=OperationPolicy(max_batch_size=0))\n    assert service.execute_batch([]) == []\n    with pytest.raises(BatchSizeExceededError):\n        service.execute_batch([{\"operation\": \"add\", \"args\": [1, 1]}])\n\n\n# --- strict_validation -----------------------------------------------------\n\n\ndef test_strict_validation_accepts_exact_keys():\n    service = CalculatorService(policy=OperationPolicy(strict_validation=True))\n    results = service.execute_batch([{\"operation\": \"add\", \"args\": [1, 2]}])\n    assert results == [{\"ok\": True, \"value\": 3}]\n\n\ndef test_strict_validation_rejects_extra_keys_per_item():\n    service = CalculatorService(policy=OperationPolicy(strict_validation=True))\n    results = service.execute_batch(\n        [\n            {\"operation\": \"add\", \"args\": [1, 2], \"extra\": 1},\n            {\"operation\": \"add\", \"args\": [3, 4]},\n        ]\n    )\n    assert results[0][\"ok\"] is False\n    assert results[0][\"error\"][\"type\"] == \"InvalidRequestError\"\n    assert results[1] == {\"ok\": True, \"value\": 7}\n\n\ndef test_strict_validation_still_enforces_base_rules():\n    service = CalculatorService(policy=OperationPolicy(strict_validation=True))\n    results = service.execute_batch([{\"operation\": \"add\"}])\n    assert results[0][\"ok\"] is False\n    assert results[0][\"error\"][\"type\"] == \"InvalidRequestError\"\n\n\ndef test_lenient_default_matches_strict_for_valid_request():\n    lenient = CalculatorService()\n    strict = CalculatorService(policy=OperationPolicy(strict_validation=True))\n    payload = [{\"operation\": \"add\", \"args\": [5, 6]}]\n    assert lenient.execute_batch(payload) == strict.execute_batch(payload)\n\n\ndef test_disabled_operations_override_allow_list():\n    policy = OperationPolicy(\n        enabled_operations=frozenset({\"add\", \"divide\"}),\n        disabled_operations=frozenset({\"divide\"}),\n    )\n    service = CalculatorService(policy=policy)\n    assert service.execute(\"add\", 1, 2) == 3\n    with pytest.raises(OperationDisabledError):\n        service.execute(\"divide\", 6, 2)\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "multi-file",
+        "feature",
+        "policy",
+        "tests",
+        "replan-candidate",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core import CalculatorService, OperationDisabledError, OperationPolicy\np = OperationPolicy(enabled_operations=frozenset({'add','divide'}), disabled_operations=frozenset({'divide'}))\ns = CalculatorService(policy=p)\nassert s.execute('add', 2, 3) == 5\ntry:\n    s.execute('divide', 6, 2)\nexcept OperationDisabledError:\n    pass\nelse:\n    raise AssertionError('deny-list must win')\nassert CalculatorService().execute('divide', 6, 2) == 3"
+            ]
+          }
+        },
+        {
+          "id": "full-suite",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-m",
+              "pytest",
+              "-q"
+            ]
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "test-and-verify",
+              "repository-navigation"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "batch-stop-on-error",
+      "description": "Add an OperationPolicy stop_on_error option, defaulting to False. When True, execute_batch must return results up to and including the first failed item and must not execute later requests; when False, current per-item continuation behavior must remain unchanged. Add regression tests and run the full repository tests.",
+      "files": {},
+      "reference_files": {
+        "src/calc_core/policy.py": "\"\"\"Immutable runtime policy for the calculator service.\n\nThe policy describes which operations are enabled and how batches are\nvalidated. It is a frozen dataclass so a policy instance can be shared\nsafely: all state is instance state owned by the service, never\nmodule-level mutable state.\n\"\"\"\n\nfrom dataclasses import dataclass\nfrom typing import FrozenSet, Optional\n\n\n@dataclass(frozen=True)\nclass OperationPolicy:\n    \"\"\"Describe the runtime behavior of a :class:`CalculatorService`.\n\n    Attributes:\n        enabled_operations: frozenset of allowed operation names, or\n            ``None`` to allow every registered operation.\n        max_batch_size: maximum number of requests accepted by\n            ``execute_batch``, or ``None`` for no limit.\n        strict_validation: when ``True`` each batch request must contain\n            exactly the keys ``\"operation\"`` and ``\"args\"``.\n        stop_on_error: when ``True`` batch execution stops after the first failed item.\n    \"\"\"\n\n    enabled_operations: Optional[FrozenSet[str]] = None\n    max_batch_size: Optional[int] = None\n    strict_validation: bool = False\n    stop_on_error: bool = False\n\n    def is_operation_enabled(self, operation_name: str) -> bool:\n        \"\"\"Return whether ``operation_name`` is allowed by this policy.\"\"\"\n        if self.enabled_operations is None:\n            return True\n        return operation_name in self.enabled_operations\n\n    def check_batch_size(self, size: int) -> bool:\n        \"\"\"Return whether a batch of ``size`` items is within the limit.\n\n        ``size == max_batch_size`` is allowed; only a larger batch is\n        rejected. ``None`` means no limit.\n        \"\"\"\n        if self.max_batch_size is None:\n            return True\n        return size <= self.max_batch_size\n\n\nDEFAULT_POLICY = OperationPolicy()\n",
+        "src/calc_core/service.py": "\"\"\"High-level calculator service built on top of the registry.\"\"\"\n\nfrom typing import Iterable, Mapping, Optional\n\nfrom . import operations\nfrom .errors import (\n    BatchSizeExceededError,\n    InvalidRequestError,\n    OperationDisabledError,\n)\nfrom .policy import DEFAULT_POLICY, OperationPolicy\nfrom .registry import OperationRegistry\n\n\nclass CalculatorService:\n    \"\"\"Execute named arithmetic operations.\n\n    A freshly constructed service has all five default operations\n    registered: add, subtract, multiply, divide and clamp.\n\n    Behavior is governed by an optional :class:`OperationPolicy`. The\n    default policy preserves the original behavior: every registered\n    operation is enabled, batches are unlimited and validation is lenient.\n    \"\"\"\n\n    DEFAULT_OPERATIONS = {\n        \"add\": operations.add,\n        \"subtract\": operations.subtract,\n        \"multiply\": operations.multiply,\n        \"divide\": operations.divide,\n        \"clamp\": operations.clamp,\n    }\n\n    def __init__(\n        self,\n        registry: Optional[OperationRegistry] = None,\n        policy: Optional[OperationPolicy] = None,\n    ) -> None:\n        self.registry = registry if registry is not None else OperationRegistry()\n        self.policy = policy if policy is not None else DEFAULT_POLICY\n        for name, operation in self.DEFAULT_OPERATIONS.items():\n            self.registry.register(name, operation)\n\n    def execute(self, operation_name: str, *args: object) -> object:\n        \"\"\"Execute the operation registered under ``operation_name``.\"\"\"\n        operation = self.registry.resolve(operation_name)\n        if not self.policy.is_operation_enabled(operation_name):\n            raise OperationDisabledError(operation_name)\n        return operation(*args)\n\n    def _validate_request(self, request: object) -> tuple:\n        \"\"\"Return ``(operation_name, args)`` or raise InvalidRequestError.\"\"\"\n        if not isinstance(request, Mapping):\n            raise InvalidRequestError(\n                \"request must be a mapping with 'operation' and 'args'\"\n            )\n        if \"operation\" not in request or \"args\" not in request:\n            raise InvalidRequestError(\n                \"request must contain 'operation' and 'args'\"\n            )\n        if self.policy.strict_validation:\n            extra = set(request.keys()) - {\"operation\", \"args\"}\n            if extra:\n                raise InvalidRequestError(\n                    \"request must contain exactly 'operation' and 'args'\"\n                )\n        operation_name = request[\"operation\"]\n        if not isinstance(operation_name, str) or not operation_name:\n            raise InvalidRequestError(\"request 'operation' must be a non-empty string\")\n        args = request[\"args\"]\n        if not isinstance(args, (list, tuple)):\n            raise InvalidRequestError(\"request 'args' must be a list or tuple\")\n        return operation_name, args\n\n    def execute_batch(self, requests: Iterable[object]) -> list:\n        \"\"\"Execute an ordered iterable of requests, one result per item.\n\n        Each result is either ``{\"ok\": True, \"value\": ...}`` or\n        ``{\"ok\": False, \"error\": {\"type\": ..., \"message\": ...}}``.\n        A failing request never aborts the remaining requests.\n\n        If the policy sets ``max_batch_size`` the batch is measured before\n        processing: a batch larger than the limit raises\n        :class:`BatchSizeExceededError` without producing results.\n        \"\"\"\n        items = list(requests)\n        if not self.policy.check_batch_size(len(items)):\n            raise BatchSizeExceededError(len(items), self.policy.max_batch_size)\n        results = []\n        for request in items:\n            try:\n                operation_name, args = self._validate_request(request)\n                value = self.execute(operation_name, *args)\n            except Exception as exc:\n                results.append(\n                    {\n                        \"ok\": False,\n                        \"error\": {\n                            \"type\": type(exc).__name__,\n                            \"message\": str(exc),\n                        },\n                    }\n                )\n                if self.policy.stop_on_error:\n                    break\n            else:\n                results.append({\"ok\": True, \"value\": value})\n        return results\n",
+        "tests/test_policy.py": "\"\"\"Focused tests for the runtime OperationPolicy (Task C).\"\"\"\n\nimport dataclasses\n\nimport pytest\n\nfrom calc_core import (\n    BatchSizeExceededError,\n    CalculatorError,\n    CalculatorService,\n    InvalidRequestError,\n    OperationDisabledError,\n    OperationPolicy,\n)\n\n\n# --- error hierarchy -------------------------------------------------------\n\n\ndef test_new_errors_are_calculator_errors():\n    assert issubclass(OperationDisabledError, CalculatorError)\n    assert issubclass(BatchSizeExceededError, CalculatorError)\n\n\ndef test_operation_disabled_error_carries_name():\n    err = OperationDisabledError(\"divide\")\n    assert err.name == \"divide\"\n    assert \"divide\" in str(err)\n\n\n# --- policy value object ---------------------------------------------------\n\n\ndef test_policy_defaults():\n    policy = OperationPolicy()\n    assert policy.enabled_operations is None\n    assert policy.max_batch_size is None\n    assert policy.strict_validation is False\n\n\ndef test_policy_is_immutable():\n    policy = OperationPolicy()\n    with pytest.raises(dataclasses.FrozenInstanceError):\n        policy.max_batch_size = 3\n\n\ndef test_policy_is_operation_enabled():\n    assert OperationPolicy().is_operation_enabled(\"add\") is True\n    restricted = OperationPolicy(enabled_operations=frozenset({\"add\"}))\n    assert restricted.is_operation_enabled(\"add\") is True\n    assert restricted.is_operation_enabled(\"divide\") is False\n\n\ndef test_policy_check_batch_size_boundary():\n    assert OperationPolicy().check_batch_size(10 ** 6) is True\n    limited = OperationPolicy(max_batch_size=3)\n    assert limited.check_batch_size(0) is True\n    assert limited.check_batch_size(3) is True\n    assert limited.check_batch_size(4) is False\n\n\ndef test_policy_is_instance_state_not_module_global():\n    first = CalculatorService()\n    second = CalculatorService(policy=OperationPolicy(enabled_operations=frozenset()))\n    assert isinstance(first.policy, OperationPolicy)\n    assert first.policy.enabled_operations is None\n    assert second.policy.enabled_operations == frozenset()\n    # Mutating one instance's registry/policy view does not touch the other.\n    assert first.policy is not second.policy\n\n\n# --- default compatibility -------------------------------------------------\n\n\ndef test_default_policy_preserves_execute():\n    service = CalculatorService()\n    assert service.execute(\"add\", 2, 3) == 5\n    assert service.execute(\"divide\", 7, 2) == 3.5\n\n\ndef test_default_policy_preserves_batch_shape_and_order():\n    service = CalculatorService()\n    results = service.execute_batch(\n        [\n            {\"operation\": \"add\", \"args\": [2, 3]},\n            {\"operation\": \"nope\", \"args\": []},\n            {\"operation\": \"multiply\", \"args\": [4, 3]},\n        ]\n    )\n    assert [r[\"ok\"] for r in results] == [True, False, True]\n    assert results[0] == {\"ok\": True, \"value\": 5}\n    assert results[1][\"error\"][\"type\"] == \"UnknownOperationError\"\n    assert results[2] == {\"ok\": True, \"value\": 12}\n\n\ndef test_default_policy_ignores_extra_keys():\n    service = CalculatorService()\n    results = service.execute_batch(\n        [{\"operation\": \"add\", \"args\": [1, 2], \"extra\": \"ignored\"}]\n    )\n    assert results == [{\"ok\": True, \"value\": 3}]\n\n\n# --- disabled operations ---------------------------------------------------\n\n\ndef test_execute_raises_when_operation_disabled():\n    service = CalculatorService(\n        policy=OperationPolicy(enabled_operations=frozenset({\"add\"}))\n    )\n    assert service.execute(\"add\", 1, 2) == 3\n    with pytest.raises(OperationDisabledError):\n        service.execute(\"divide\", 6, 2)\n\n\ndef test_execute_batch_captures_disabled_operation_per_item():\n    service = CalculatorService(\n        policy=OperationPolicy(enabled_operations=frozenset({\"add\"}))\n    )\n    results = service.execute_batch(\n        [\n            {\"operation\": \"divide\", \"args\": [6, 2]},\n            {\"operation\": \"add\", \"args\": [1, 2]},\n        ]\n    )\n    assert results[0][\"ok\"] is False\n    assert results[0][\"error\"][\"type\"] == \"OperationDisabledError\"\n    assert results[1] == {\"ok\": True, \"value\": 3}\n\n\ndef test_unknown_operation_still_reported_when_restricted():\n    service = CalculatorService(\n        policy=OperationPolicy(enabled_operations=frozenset({\"add\"}))\n    )\n    results = service.execute_batch([{\"operation\": \"nope\", \"args\": []}])\n    assert results[0][\"ok\"] is False\n    assert results[0][\"error\"][\"type\"] == \"UnknownOperationError\"\n\n\n# --- max_batch_size --------------------------------------------------------\n\n\ndef test_batch_size_equal_to_limit_is_allowed():\n    service = CalculatorService(policy=OperationPolicy(max_batch_size=2))\n    results = service.execute_batch(\n        [\n            {\"operation\": \"add\", \"args\": [1, 1]},\n            {\"operation\": \"add\", \"args\": [2, 2]},\n        ]\n    )\n    assert [r[\"value\"] for r in results] == [2, 4]\n\n\ndef test_batch_size_above_limit_raises_deterministically():\n    service = CalculatorService(policy=OperationPolicy(max_batch_size=2))\n    requests = [\n        {\"operation\": \"add\", \"args\": [1, 1]},\n        {\"operation\": \"add\", \"args\": [2, 2]},\n        {\"operation\": \"add\", \"args\": [3, 3]},\n    ]\n    with pytest.raises(BatchSizeExceededError) as exc_info:\n        service.execute_batch(requests)\n    assert exc_info.value.size == 3\n    assert exc_info.value.max_batch_size == 2\n    # Deterministic: raising again yields the same outcome.\n    with pytest.raises(BatchSizeExceededError):\n        service.execute_batch(requests)\n\n\ndef test_batch_size_accepts_generators():\n    service = CalculatorService(policy=OperationPolicy(max_batch_size=1))\n    with pytest.raises(BatchSizeExceededError):\n        service.execute_batch(\n            {\"operation\": \"add\", \"args\": [i, i]} for i in range(3)\n        )\n\n\ndef test_empty_batch_respects_limit():\n    service = CalculatorService(policy=OperationPolicy(max_batch_size=0))\n    assert service.execute_batch([]) == []\n    with pytest.raises(BatchSizeExceededError):\n        service.execute_batch([{\"operation\": \"add\", \"args\": [1, 1]}])\n\n\n# --- strict_validation -----------------------------------------------------\n\n\ndef test_strict_validation_accepts_exact_keys():\n    service = CalculatorService(policy=OperationPolicy(strict_validation=True))\n    results = service.execute_batch([{\"operation\": \"add\", \"args\": [1, 2]}])\n    assert results == [{\"ok\": True, \"value\": 3}]\n\n\ndef test_strict_validation_rejects_extra_keys_per_item():\n    service = CalculatorService(policy=OperationPolicy(strict_validation=True))\n    results = service.execute_batch(\n        [\n            {\"operation\": \"add\", \"args\": [1, 2], \"extra\": 1},\n            {\"operation\": \"add\", \"args\": [3, 4]},\n        ]\n    )\n    assert results[0][\"ok\"] is False\n    assert results[0][\"error\"][\"type\"] == \"InvalidRequestError\"\n    assert results[1] == {\"ok\": True, \"value\": 7}\n\n\ndef test_strict_validation_still_enforces_base_rules():\n    service = CalculatorService(policy=OperationPolicy(strict_validation=True))\n    results = service.execute_batch([{\"operation\": \"add\"}])\n    assert results[0][\"ok\"] is False\n    assert results[0][\"error\"][\"type\"] == \"InvalidRequestError\"\n\n\ndef test_lenient_default_matches_strict_for_valid_request():\n    lenient = CalculatorService()\n    strict = CalculatorService(policy=OperationPolicy(strict_validation=True))\n    payload = [{\"operation\": \"add\", \"args\": [5, 6]}]\n    assert lenient.execute_batch(payload) == strict.execute_batch(payload)\n\n\ndef test_stop_on_error_stops_before_later_requests():\n    service = CalculatorService(policy=OperationPolicy(stop_on_error=True))\n    results = service.execute_batch([\n        {\"operation\": \"divide\", \"args\": [1, 0]},\n        {\"operation\": \"add\", \"args\": [2, 3]},\n    ])\n    assert len(results) == 1\n    assert results[0][\"ok\"] is False\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "multi-file",
+        "feature",
+        "change-approach",
+        "replan-candidate",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core import CalculatorService, OperationPolicy\nseen = []\nstrict = CalculatorService(policy=OperationPolicy(stop_on_error=True))\nstrict.registry.register('mark', lambda value: seen.append(value) or value)\nr = strict.execute_batch([{'operation':'divide','args':[1,0]},{'operation':'mark','args':[7]}])\nassert len(r) == 1 and r[0]['ok'] is False and seen == []\nnormal = CalculatorService()\nr2 = normal.execute_batch([{'operation':'divide','args':[1,0]},{'operation':'add','args':[2,3]}])\nassert len(r2) == 2 and r2[1] == {'ok': True, 'value': 5}"
+            ]
+          }
+        },
+        {
+          "id": "full-suite",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-m",
+              "pytest",
+              "-q"
+            ]
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "test-and-verify",
+              "repository-navigation"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "custom-registry-preserve-overrides",
+      "description": "When CalculatorService receives a custom OperationRegistry, pre-registered operation names must be preserved while any missing default operations are still installed. Add a regression test and run the repository tests.",
+      "files": {},
+      "reference_files": {
+        "src/calc_core/registry.py": "\"\"\"Registry mapping operation names to callables.\"\"\"\n\nfrom typing import Callable, Dict\n\nfrom .errors import UnknownOperationError\n\nOperation = Callable[..., object]\n\n\nclass OperationRegistry:\n    \"\"\"Store operations by name and resolve them back.\"\"\"\n\n    def __init__(self) -> None:\n        self._operations: Dict[str, Operation] = {}\n\n    def register(self, name: str, operation: Operation) -> None:\n        \"\"\"Register ``operation`` under ``name``.\"\"\"\n        self._operations[name] = operation\n\n    def contains(self, name: str) -> bool:\n        \"\"\"Return whether name is registered.\"\"\"\n        return name in self._operations\n\n    def resolve(self, name: str) -> Operation:\n        \"\"\"Return the operation registered under ``name``.\n\n        Raises UnknownOperationError if no such operation exists.\n        \"\"\"\n        try:\n            return self._operations[name]\n        except KeyError:\n            raise UnknownOperationError(name) from None",
+        "src/calc_core/service.py": "\"\"\"High-level calculator service built on top of the registry.\"\"\"\n\nfrom typing import Iterable, Mapping, Optional\n\nfrom . import operations\nfrom .errors import (\n    BatchSizeExceededError,\n    InvalidRequestError,\n    OperationDisabledError,\n)\nfrom .policy import DEFAULT_POLICY, OperationPolicy\nfrom .registry import OperationRegistry\n\n\nclass CalculatorService:\n    \"\"\"Execute named arithmetic operations.\n\n    A freshly constructed service has all five default operations\n    registered: add, subtract, multiply, divide and clamp.\n\n    Behavior is governed by an optional :class:`OperationPolicy`. The\n    default policy preserves the original behavior: every registered\n    operation is enabled, batches are unlimited and validation is lenient.\n    \"\"\"\n\n    DEFAULT_OPERATIONS = {\n        \"add\": operations.add,\n        \"subtract\": operations.subtract,\n        \"multiply\": operations.multiply,\n        \"divide\": operations.divide,\n        \"clamp\": operations.clamp,\n    }\n\n    def __init__(\n        self,\n        registry: Optional[OperationRegistry] = None,\n        policy: Optional[OperationPolicy] = None,\n    ) -> None:\n        self.registry = registry if registry is not None else OperationRegistry()\n        self.policy = policy if policy is not None else DEFAULT_POLICY\n        for name, operation in self.DEFAULT_OPERATIONS.items():\n            if not self.registry.contains(name):\n                self.registry.register(name, operation)\n\n    def execute(self, operation_name: str, *args: object) -> object:\n        \"\"\"Execute the operation registered under ``operation_name``.\"\"\"\n        operation = self.registry.resolve(operation_name)\n        if not self.policy.is_operation_enabled(operation_name):\n            raise OperationDisabledError(operation_name)\n        return operation(*args)\n\n    def _validate_request(self, request: object) -> tuple:\n        \"\"\"Return ``(operation_name, args)`` or raise InvalidRequestError.\"\"\"\n        if not isinstance(request, Mapping):\n            raise InvalidRequestError(\n                \"request must be a mapping with 'operation' and 'args'\"\n            )\n        if \"operation\" not in request or \"args\" not in request:\n            raise InvalidRequestError(\n                \"request must contain 'operation' and 'args'\"\n            )\n        if self.policy.strict_validation:\n            extra = set(request.keys()) - {\"operation\", \"args\"}\n            if extra:\n                raise InvalidRequestError(\n                    \"request must contain exactly 'operation' and 'args'\"\n                )\n        operation_name = request[\"operation\"]\n        if not isinstance(operation_name, str) or not operation_name:\n            raise InvalidRequestError(\"request 'operation' must be a non-empty string\")\n        args = request[\"args\"]\n        if not isinstance(args, (list, tuple)):\n            raise InvalidRequestError(\"request 'args' must be a list or tuple\")\n        return operation_name, args\n\n    def execute_batch(self, requests: Iterable[object]) -> list:\n        \"\"\"Execute an ordered iterable of requests, one result per item.\n\n        Each result is either ``{\"ok\": True, \"value\": ...}`` or\n        ``{\"ok\": False, \"error\": {\"type\": ..., \"message\": ...}}``.\n        A failing request never aborts the remaining requests.\n\n        If the policy sets ``max_batch_size`` the batch is measured before\n        processing: a batch larger than the limit raises\n        :class:`BatchSizeExceededError` without producing results.\n        \"\"\"\n        items = list(requests)\n        if not self.policy.check_batch_size(len(items)):\n            raise BatchSizeExceededError(len(items), self.policy.max_batch_size)\n        results = []\n        for request in items:\n            try:\n                operation_name, args = self._validate_request(request)\n                value = self.execute(operation_name, *args)\n            except Exception as exc:\n                results.append(\n                    {\n                        \"ok\": False,\n                        \"error\": {\n                            \"type\": type(exc).__name__,\n                            \"message\": str(exc),\n                        },\n                    }\n                )\n            else:\n                results.append({\"ok\": True, \"value\": value})\n        return results\n",
+        "tests/test_calc_core.py": "\"\"\"Focused tests for the new calc_core architecture.\"\"\"\n\nimport pytest\n\nfrom calc_core import (\n    CalculatorError,\n    CalculatorService,\n    OperationRegistry,\n    UnknownOperationError,\n    add,\n    clamp,\n    divide,\n    multiply,\n    subtract,\n)\nfrom calc_core import operations\n\n\n# --- operations module preserves behavior ---------------------------------\n\n\ndef test_operations_module_exposes_five_ops():\n    assert operations.add(2, 3) == 5\n    assert operations.subtract(5, 3) == 2\n    assert operations.multiply(4, 3) == 12\n    assert operations.divide(10, 2) == 5\n    assert operations.clamp(5, 0, 10) == 5\n\n\ndef test_operations_divide_by_zero_raises():\n    with pytest.raises(ZeroDivisionError, match=\"division by zero\"):\n        operations.divide(5, 0)\n\n\ndef test_operations_clamp_invalid_bounds_raises():\n    with pytest.raises(ValueError, match=\"lower must not exceed upper\"):\n        operations.clamp(5, 10, 0)\n\n\n# --- errors ----------------------------------------------------------------\n\n\ndef test_unknown_operation_error_is_calculator_error():\n    assert issubclass(UnknownOperationError, CalculatorError)\n\n\ndef test_unknown_operation_error_carries_name():\n    err = UnknownOperationError(\"nope\")\n    assert err.name == \"nope\"\n    assert \"nope\" in str(err)\n\n\n# --- registry --------------------------------------------------------------\n\n\ndef test_registry_register_and_resolve():\n    registry = OperationRegistry()\n    registry.register(\"add\", add)\n    assert registry.resolve(\"add\") is add\n\n\ndef test_registry_unknown_name_raises_unknown_operation_error():\n    registry = OperationRegistry()\n    with pytest.raises(UnknownOperationError):\n        registry.resolve(\"missing\")\n\n\n# --- service ---------------------------------------------------------------\n\n\ndef test_service_has_all_default_operations():\n    service = CalculatorService()\n    for name in (\"add\", \"subtract\", \"multiply\", \"divide\", \"clamp\"):\n        assert service.registry.resolve(name) is not None\n\n\ndef test_service_execute_dispatches_by_name():\n    service = CalculatorService()\n    assert service.execute(\"add\", 2, 3) == 5\n    assert service.execute(\"subtract\", 5, 3) == 2\n    assert service.execute(\"multiply\", 4, 3) == 12\n    assert service.execute(\"divide\", 7, 2) == 3.5\n    assert service.execute(\"clamp\", 42, 0, 10) == 10\n\n\ndef test_service_execute_unknown_operation_raises_unknown_operation_error():\n    service = CalculatorService()\n    with pytest.raises(UnknownOperationError):\n        service.execute(\"does_not_exist\", 1, 2)\n\n\ndef test_service_execute_preserves_divide_by_zero():\n    service = CalculatorService()\n    with pytest.raises(ZeroDivisionError):\n        service.execute(\"divide\", 5, 0)\n\n\n# --- facade ----------------------------------------------------------------\n\n\ndef test_facade_reexports_operations():\n    import calculator\n\n    assert calculator.add is operations.add\n    assert calculator.subtract is operations.subtract\n    assert calculator.multiply is operations.multiply\n    assert calculator.divide is operations.divide\n    assert calculator.clamp is operations.clamp\n\n\ndef test_service_preserves_custom_registry_overrides():\n    registry = OperationRegistry()\n    registry.register(\"add\", lambda a, b: 999)\n    service = CalculatorService(registry=registry)\n    assert service.execute(\"add\", 1, 2) == 999\n    assert service.execute(\"multiply\", 2, 3) == 6\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "multi-file",
+        "navigation",
+        "replan-candidate",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core import CalculatorService, OperationRegistry\nr = OperationRegistry()\nr.register('add', lambda a, b: 999)\ns = CalculatorService(registry=r)\nassert s.execute('add', 1, 2) == 999\nassert s.execute('multiply', 3, 4) == 12\nassert s.execute('clamp', 20, 0, 10) == 10"
+            ]
+          }
+        },
+        {
+          "id": "registry-helper",
+          "kind": "file",
+          "params": {
+            "path": "src/calc_core/registry.py",
+            "contains": "def contains"
+          }
+        },
+        {
+          "id": "full-suite",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-m",
+              "pytest",
+              "-q"
+            ]
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "repository-navigation",
+              "test-and-verify"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "multiply-completion-guard",
+      "description": "Fix the regressed multiply operation while preserving the other arithmetic operations, and run the repository tests before finishing.",
+      "files": {
+        "src/calc_core/operations.py": "\"\"\"The five core calculator operations.\n\nThese functions preserve the behavior of the original top-level\n``calculator.py`` implementation:\n\n* ``divide(..., 0)`` raises ``ZeroDivisionError``.\n* ``clamp`` raises ``ValueError`` when ``lower > upper``.\n\"\"\"\n\n\ndef add(a: int, b: int) -> int:\n    \"\"\"Return the sum of two integers.\"\"\"\n    return a + b\n\n\ndef subtract(a: int, b: int) -> int:\n    \"\"\"Return the difference of two integers (a - b).\"\"\"\n    return a - b\n\n\ndef multiply(a: int, b: int) -> int:\n    \"\"\"Return the product of two integers.\"\"\"\n    return a + b\n\n\ndef divide(a: int, b: int) -> float:\n    \"\"\"Return the quotient of two integers (a / b).\n\n    Raises ZeroDivisionError if b is zero.\n    \"\"\"\n    if b == 0:\n        raise ZeroDivisionError(\"division by zero\")\n    return a / b\n\n\ndef clamp(value: int, lower: int, upper: int) -> int:\n    \"\"\"将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。\"\"\"\n    if lower > upper:\n        raise ValueError(\"lower must not exceed upper\")\n    return max(lower, min(value, upper))"
+      },
+      "reference_files": {
+        "src/calc_core/operations.py": "\"\"\"The five core calculator operations.\n\nThese functions preserve the behavior of the original top-level\n``calculator.py`` implementation:\n\n* ``divide(..., 0)`` raises ``ZeroDivisionError``.\n* ``clamp`` raises ``ValueError`` when ``lower > upper``.\n\"\"\"\n\n\ndef add(a: int, b: int) -> int:\n    \"\"\"Return the sum of two integers.\"\"\"\n    return a + b\n\n\ndef subtract(a: int, b: int) -> int:\n    \"\"\"Return the difference of two integers (a - b).\"\"\"\n    return a - b\n\n\ndef multiply(a: int, b: int) -> int:\n    \"\"\"Return the product of two integers.\"\"\"\n    return a * b\n\n\ndef divide(a: int, b: int) -> float:\n    \"\"\"Return the quotient of two integers (a / b).\n\n    Raises ZeroDivisionError if b is zero.\n    \"\"\"\n    if b == 0:\n        raise ZeroDivisionError(\"division by zero\")\n    return a / b\n\n\ndef clamp(value: int, lower: int, upper: int) -> int:\n    \"\"\"将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。\"\"\"\n    if lower > upper:\n        raise ValueError(\"lower must not exceed upper\")\n    return max(lower, min(value, upper))"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "single-file-bug",
+        "completion-guard",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys\nsys.path.insert(0, 'src')\nfrom calc_core.operations import add, multiply\nassert multiply(7, 0) == 0\nassert multiply(-4, 3) == -12\nassert add(2, 3) == 5"
+            ]
+          }
+        },
+        {
+          "id": "full-suite",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-m",
+              "pytest",
+              "-q"
+            ]
+          }
+        },
+        {
+          "id": "tests-used",
           "kind": "run_trace",
           "params": {
             "run_status": "success",
@@ -682,8 +743,8 @@
           "kind": "skill_selection",
           "params": {
             "expected_any": [
-              "test-and-verify",
-              "repository-navigation"
+              "bug-fix",
+              "test-and-verify"
             ],
             "forbidden": []
           },
