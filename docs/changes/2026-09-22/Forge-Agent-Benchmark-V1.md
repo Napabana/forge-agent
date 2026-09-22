@@ -3,7 +3,8 @@
 日期：2026-09-22  
 基线 HEAD：3962241d67566c752418eb0f24778e51b5fd6636  
 Benchmark ID：forge-agent-real-model-benchmark-v1  
-Suite：evals/fixtures/coding_agent/benchmark_v1.json
+Suite：evals/fixtures/coding_agent/benchmark_v1.json  
+Canonical suite SHA-256：ad69fc2fd905b501db9ae5f4c6d37363d4b67f6b1cdecace90ddc64173f4c7ec
 
 ## 1. 目标与归因边界
 
@@ -74,7 +75,7 @@ all required deterministic outcome graders pass
 - skill_selection 等 process grader 默认不决定主要功能成功；
 - recovery / replan 是否真实发生由 Trace 统计，不通过改 Agent 强制制造；
 - should-not-trigger task 只用于测量 false-trigger；
-- 一旦开始真实运行，suite 文件和 SHA-256 一起冻结，不能根据结果修改 fixture。
+- 一旦开始真实运行，suite 语义内容和 canonical SHA-256 一起冻结，不能根据结果修改 fixture。Canonical hash 对 JSON key 顺序、缩进和 CRLF/LF 不敏感，避免 Windows/WSL checkout 差异被误判成 suite 漂移。
 
 ## 4. Frozen protocol
 
@@ -101,7 +102,7 @@ provider: openai
 model: deepseek-v4.1-flash
 ~~~
 
-CLI 会把 provider / protocol / model、suite SHA-256、max_steps、budget_tokens、Repo Map mode、planning/recovery/skills/MCP 状态写入 metadata.json 的 run_metadata。最终汇总器会拒绝两组 artifact 的公平性字段发生漂移。
+CLI 会把 provider / protocol / model、canonical suite SHA-256、max_steps、budget_tokens、Repo Map mode、planning/recovery/skills/MCP 状态写入 metadata.json 的 run_metadata。最终汇总器会拒绝两组 artifact 的公平性字段发生漂移。
 
 ## 5. Metrics
 
