@@ -1,0 +1,91 @@
+{
+  "suite_id": "forge-agent-benchmark-v1",
+  "task_id": "batch-stop-on-error",
+  "trial_id": "batch-stop-on-error--baseline_react--r002",
+  "variant": "baseline_react",
+  "repetition": 2,
+  "execution_status": "executed",
+  "evidence_kind": "real_model",
+  "real_model_executed": true,
+  "run_status": "success",
+  "termination_reason": "completion_satisfied",
+  "acceptance_status": "passed",
+  "success": true,
+  "metrics": {
+    "steps": 14,
+    "total_tokens": 241473,
+    "provider_usage": {
+      "llm_calls": 14,
+      "input_tokens": 237147,
+      "cached_tokens": 92672,
+      "cache_write_tokens": 0,
+      "output_tokens": 4326,
+      "reasoning_tokens": 0,
+      "estimated_calls": 0,
+      "unattributed_tokens": 0,
+      "total_tokens": 241473
+    },
+    "wall_time_seconds": 112.23313499100004,
+    "tool_call_count": 13,
+    "test_attempt_count": 1,
+    "completion_rejection_count": 0,
+    "reflection_count": 1,
+    "file_read_count": 6,
+    "shell_call_count": 0,
+    "plan_created_count": 0,
+    "plan_revision_count": 0,
+    "plan_step_completed_count": 0,
+    "planning_skipped": false,
+    "failure_classified_count": 0,
+    "recovery_selected_count": 0,
+    "recovery_replan_count": 0,
+    "recovery_exhausted_count": 0,
+    "skill_discovered_count": 0,
+    "skill_selected_count": 0,
+    "skill_loaded_count": 0,
+    "skill_reference_loaded_count": 0,
+    "mcp_tool_discovered_count": 0,
+    "mcp_tool_call_count": 0,
+    "mcp_tool_failure_count": 0
+  },
+  "grader_results": [
+    {
+      "grader_id": "behavior",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "full-suite",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": "........................................................................ [ 98%]\n.                                                                        [100%]\n73 passed in 1.10s\n",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "skill-selection",
+      "kind": "skill_selection",
+      "passed": false,
+      "required": false,
+      "detail": "selected=[], expected_any=['repository-navigation', 'test-and-verify'], forbidden=[]",
+      "evidence": {
+        "selected_skills": []
+      }
+    }
+  ],
+  "trace_ref": "trials/batch-stop-on-error--baseline_react--r002/traces/batch-stop-on-error--baseline_react--r002_20260922_145150.jsonl",
+  "patch_ref": "trials/batch-stop-on-error--baseline_react--r002/patch.diff",
+  "final_state_ref": "trials/batch-stop-on-error--baseline_react--r002/final_state.json",
+  "error": null
+}

@@ -1,0 +1,20 @@
+{
+  ".gitattributes": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c",
+  ".gitignore": "599e8d09a18b6bac6f70ed12bf96f67e49c4d992ee2601bc173d92fbcb64b11d",
+  "calculator.py": "0be794c14d1dfbda1cbd9a2ff05835c8723dd8418e9dd733650dde14c3a01244",
+  "pytest.ini": "ce517d53b60cd120fc26ad1111c6487f6a5a9723fdc8f0a98ce62189245782ea",
+  "src/app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "src/app/config.py": "f46fca785fff1280140ddbeca613f21d1d9d39dde64d9acaa35311ae89af5cf0",
+  "src/app/runtime.py": "f4dff27540a248eede4301bff4d37d9d667d3a01e6cd13e6618d62456595eb4a",
+  "src/calc_core/__init__.py": "ab6006414da8757d9340137e5937db469a93e092c3982218fbd00b8b1680275f",
+  "src/calc_core/errors.py": "b3ffb7049e965b41ad7c6f0651cf463ade0eeee6f3f53337b4a81da1fb21ddba",
+  "src/calc_core/operations.py": "af45d03ab9243c621c24e9e8cc6e907ef1907b3dd70b084d98af92541c8073ac",
+  "src/calc_core/policy.py": "4170c4ed59e62f5fb8d9a4181a893ab78f7883e513cd0ee986e58a55736b3502",
+  "src/calc_core/registry.py": "b53dd951c985ec14b0023cbee1e5ac001fce6eed47af724f0e901062cab841e4",
+  "src/calc_core/service.py": "72b5b47f739e9d711c8c0fcbaf91a28e0ad571228df43d1e696081fa3a114d50",
+  "tests/test_batch_execution.py": "719e01d92857b6fa5694aeba057d360821f20134fb3f904a6d981d41c3e40f51",
+  "tests/test_calc_core.py": "6c073e4218d8574abadc9a3e789096d14d977a4243d4d04e2a82d651c3a0ddb9",
+  "tests/test_calculator.py": "1c22ab3f7c46ec11342475d789bbcbb2017fc23999215ed337ae1ede364392ef",
+  "tests/test_policy.py": "1535c65a4563c5bad10a3f5c962fe4aae50446cfcaa75436d526248db442ea54",
+  "tests/test_policy_runtime.py": "852c9da35af442dfe83d31b3dae23751b90694a9b5bd1b72ae1309d0c314f2d5"
+}

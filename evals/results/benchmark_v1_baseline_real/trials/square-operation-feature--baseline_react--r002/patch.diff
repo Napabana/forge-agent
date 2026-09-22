@@ -1,0 +1,16 @@
+diff --git a/src/calc_core/operations.py b/src/calc_core/operations.py
+index bd3baee..69017df 100644
+--- a/src/calc_core/operations.py
++++ b/src/calc_core/operations.py
+@@ -23,6 +23,11 @@ def multiply(a: int, b: int) -> int:
+     return a * b
+ 
+ 
++def square(value: int) -> int:
++    """Return the square of a number (value * value)."""
++    return value * value
++
++
+ def divide(a: int, b: int) -> float:
+     """Return the quotient of two integers (a / b).
+ 

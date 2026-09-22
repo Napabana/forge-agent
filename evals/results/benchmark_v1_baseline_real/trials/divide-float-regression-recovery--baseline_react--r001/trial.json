@@ -1,0 +1,99 @@
+{
+  "suite_id": "forge-agent-benchmark-v1",
+  "task_id": "divide-float-regression-recovery",
+  "trial_id": "divide-float-regression-recovery--baseline_react--r001",
+  "variant": "baseline_react",
+  "repetition": 1,
+  "execution_status": "executed",
+  "evidence_kind": "real_model",
+  "real_model_executed": true,
+  "run_status": "success",
+  "termination_reason": "completion_satisfied",
+  "acceptance_status": "passed",
+  "success": true,
+  "metrics": {
+    "steps": 8,
+    "total_tokens": 73233,
+    "provider_usage": {
+      "llm_calls": 8,
+      "input_tokens": 72237,
+      "cached_tokens": 27776,
+      "cache_write_tokens": 0,
+      "output_tokens": 996,
+      "reasoning_tokens": 0,
+      "estimated_calls": 0,
+      "unattributed_tokens": 0,
+      "total_tokens": 73233
+    },
+    "wall_time_seconds": 71.54787397100017,
+    "tool_call_count": 7,
+    "test_attempt_count": 2,
+    "completion_rejection_count": 0,
+    "reflection_count": 1,
+    "file_read_count": 3,
+    "shell_call_count": 0,
+    "plan_created_count": 0,
+    "plan_revision_count": 0,
+    "plan_step_completed_count": 0,
+    "planning_skipped": false,
+    "failure_classified_count": 0,
+    "recovery_selected_count": 0,
+    "recovery_replan_count": 0,
+    "recovery_exhausted_count": 0,
+    "skill_discovered_count": 0,
+    "skill_selected_count": 0,
+    "skill_loaded_count": 0,
+    "skill_reference_loaded_count": 0,
+    "mcp_tool_discovered_count": 0,
+    "mcp_tool_call_count": 0,
+    "mcp_tool_failure_count": 0
+  },
+  "grader_results": [
+    {
+      "grader_id": "behavior",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "full-suite",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": "....................................................................     [100%]\n68 passed in 1.21s\n",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "reproduced-and-retested",
+      "kind": "run_trace",
+      "passed": true,
+      "required": false,
+      "detail": "run_status=success; min_test_attempts=2>=2",
+      "evidence": {}
+    },
+    {
+      "grader_id": "skill-selection",
+      "kind": "skill_selection",
+      "passed": false,
+      "required": false,
+      "detail": "selected=[], expected_any=['bug-fix', 'test-and-verify'], forbidden=[]",
+      "evidence": {
+        "selected_skills": []
+      }
+    }
+  ],
+  "trace_ref": "trials/divide-float-regression-recovery--baseline_react--r001/traces/divide-float-regression-recovery--baseline_react--r001_20260922_141907.jsonl",
+  "patch_ref": "trials/divide-float-regression-recovery--baseline_react--r001/patch.diff",
+  "final_state_ref": "trials/divide-float-regression-recovery--baseline_react--r001/final_state.json",
+  "error": null
+}

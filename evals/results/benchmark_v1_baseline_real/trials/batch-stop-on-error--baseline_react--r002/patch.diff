@@ -1,0 +1,143 @@
+diff --git a/src/calc_core/policy.py b/src/calc_core/policy.py
+index 41350a5..e28f8d9 100644
+--- a/src/calc_core/policy.py
++++ b/src/calc_core/policy.py
+@@ -21,11 +21,17 @@ class OperationPolicy:
+             ``execute_batch``, or ``None`` for no limit.
+         strict_validation: when ``True`` each batch request must contain
+             exactly the keys ``"operation"`` and ``"args"``.
++        stop_on_error: when ``True`` ``execute_batch`` stops at the first
++            failed request, returning results up to and including that
++            failure without executing later requests. When ``False`` (the
++            default) failures are captured per item and later requests still
++            run.
+     """
+ 
+     enabled_operations: Optional[FrozenSet[str]] = None
+     max_batch_size: Optional[int] = None
+     strict_validation: bool = False
++    stop_on_error: bool = False
+ 
+     def is_operation_enabled(self, operation_name: str) -> bool:
+         """Return whether ``operation_name`` is allowed by this policy."""
+diff --git a/src/calc_core/service.py b/src/calc_core/service.py
+index 90654ae..67f0778 100644
+--- a/src/calc_core/service.py
++++ b/src/calc_core/service.py
+@@ -82,6 +82,10 @@ class CalculatorService:
+         If the policy sets ``max_batch_size`` the batch is measured before
+         processing: a batch larger than the limit raises
+         :class:`BatchSizeExceededError` without producing results.
++
++        When the policy sets ``stop_on_error`` the loop stops at the first
++        failed request: the returned list contains results up to and
++        including that failure and no later request is executed.
+         """
+         items = list(requests)
+         if not self.policy.check_batch_size(len(items)):
+@@ -101,6 +105,8 @@ class CalculatorService:
+                         },
+                     }
+                 )
++                if self.policy.stop_on_error:
++                    break
+             else:
+                 results.append({"ok": True, "value": value})
+         return results
+diff --git a/tests/test_policy.py b/tests/test_policy.py
+index c1dee57..c219cf4 100644
+--- a/tests/test_policy.py
++++ b/tests/test_policy.py
+@@ -36,6 +36,7 @@ def test_policy_defaults():
+     assert policy.enabled_operations is None
+     assert policy.max_batch_size is None
+     assert policy.strict_validation is False
++    assert policy.stop_on_error is False
+ 
+ 
+ def test_policy_is_immutable():
+@@ -216,3 +217,84 @@ def test_lenient_default_matches_strict_for_valid_request():
+     strict = CalculatorService(policy=OperationPolicy(strict_validation=True))
+     payload = [{"operation": "add", "args": [5, 6]}]
+     assert lenient.execute_batch(payload) == strict.execute_batch(payload)
++
++
++# --- stop_on_error ---------------------------------------------------------
++
++
++def test_stop_on_error_default_is_off():
++    service = CalculatorService()
++    results = service.execute_batch(
++        [
++            {"operation": "add", "args": [1, 1]},
++            {"operation": "nope", "args": []},
++            {"operation": "multiply", "args": [4, 3]},
++        ]
++    )
++    # Default keeps the per-item continuation behavior.
++    assert [r["ok"] for r in results] == [True, False, True]
++
++
++def test_stop_on_error_stops_at_first_failure():
++    service = CalculatorService(policy=OperationPolicy(stop_on_error=True))
++    results = service.execute_batch(
++        [
++            {"operation": "add", "args": [1, 1]},
++            {"operation": "nope", "args": []},
++            {"operation": "multiply", "args": [4, 3]},
++        ]
++    )
++    assert len(results) == 2
++    assert results[0] == {"ok": True, "value": 2}
++    assert results[1]["ok"] is False
++    assert results[1]["error"]["type"] == "UnknownOperationError"
++
++
++def test_stop_on_error_does_not_execute_later_requests():
++    calls = []
++
++    def recording_operation(a, b):
++        calls.append((a, b))
++        return a + b
++
++    service = CalculatorService(policy=OperationPolicy(stop_on_error=True))
++    service.registry.register("record", recording_operation)
++    results = service.execute_batch(
++        [
++            {"operation": "add", "args": [1, 2]},
++            {"operation": "divide", "args": [1, 0]},
++            {"operation": "record", "args": [5, 6]},
++        ]
++    )
++    assert [r["ok"] for r in results] == [True, False]
++    assert results[1]["error"]["type"] == "ZeroDivisionError"
++    assert calls == []
++
++
++def test_stop_on_error_with_no_failures_returns_all():
++    service = CalculatorService(policy=OperationPolicy(stop_on_error=True))
++    results = service.execute_batch(
++        [
++            {"operation": "add", "args": [1, 1]},
++            {"operation": "multiply", "args": [2, 3]},
++        ]
++    )
++    assert results == [
++        {"ok": True, "value": 2},
++        {"ok": True, "value": 6},
++    ]
++
++
++def test_stop_on_error_composes_with_max_batch_size():
++    service = CalculatorService(
++        policy=OperationPolicy(max_batch_size=2, stop_on_error=True)
++    )
++    results = service.execute_batch(
++        [
++            {"operation": "nope", "args": []},
++            {"operation": "add", "args": [1, 1]},
++        ]
++    )
++    assert len(results) == 1
++    assert results[0]["ok"] is False
++    assert results[0]["error"]["type"] == "UnknownOperationError"
