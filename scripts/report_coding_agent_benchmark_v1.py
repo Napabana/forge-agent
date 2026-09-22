@@ -42,11 +42,13 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _suite_identity(path: Path) -> tuple[dict[str, Any], str]:
-    content = path.read_bytes()
-    value = json.loads(content)
+    value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("benchmark suite must be a JSON object")
-    return value, hashlib.sha256(content).hexdigest()
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return value, hashlib.sha256(canonical).hexdigest()
 
 
 def _run_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
