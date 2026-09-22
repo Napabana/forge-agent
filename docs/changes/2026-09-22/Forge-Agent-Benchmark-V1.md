@@ -95,10 +95,11 @@ repo_map_mode: incremental
 MCP: false
 ~~~
 
-当前 config/default.yaml 的默认模型：
+当前 config/default.yaml / config/schema.py 解析出的模型配置：
 
 ~~~yaml
 provider: openai
+protocol: auto
 model: deepseek-v4.1-flash
 ~~~
 
@@ -142,6 +143,13 @@ Secondary：
 9. fairness drift rejection；
 10. output no-overwrite；
 11. 0 Provider calls。
+
+当前冻结前离线自检结果：
+
+- 12/12 reference solutions 通过 deterministic outcome graders；
+- Benchmark aggregator synthetic A/B regression 通过；
+- canonical suite hash 复核为 `ad69fc2fd905b501db9ae5f4c6d37363d4b67f6b1cdecace90ddc64173f4c7ec`；
+- 当前 ChatGPT 执行容器无法解析 github.com，因此没有在容器中运行完整仓库 pytest；不能把下面的 pytest 记为已通过，需由用户本地执行。
 
 本地 regression：
 
