@@ -762,3 +762,16 @@ pytest -q
 - `budget_tokens=40000` 是每轮 Context TokenBudget，不是整条 run 累计 Provider token cap；保持 baseline/full 相同。
 - 当前尚未执行任何 Benchmark V1 real-model trial；不得已有成功率/Token/Latency 结论。
 - 本轮更新日志：`docs/changes/2026-09-22/Forge-Agent-Benchmark-V1.md`。
+
+
+### 最后交接（2026-09-22，Benchmark V1 R2 正式冻结）
+
+- 原 `benchmark_v1.json` 的 24-trial baseline 已完成并审计：18/24 strict pass，0 infrastructure failure；但 pilot 暴露了 exact test-name / internal helper 类型 implementation-shape grader。该结果保留为 pilot evidence，不进入正式 A/B。
+- 原 suite 已原样归档到 `evals/fixtures/coding_agent/benchmark_v1_pilot.json`，suite_id=`forge-agent-benchmark-v1`，hash=`f0117c4ca39271401ba878c99afd30643b1dd7af28e0c0cdca9214f128b97f14`，max_steps=20，budget_tokens=40000。
+- 正式 V1 R2 仍使用同一 12 task intents 与 frozen `Napabana/pr-test@23019998f2e801e79dea59fd23fc49c58fc20038`，但 suite_id 改为 `forge-agent-benchmark-v1-r2`，canonical hash=`f7ba1370fe1442773967ec4f65883be5cdc0a21f14ced28d1ea57ed1f384bd0a`。
+- R2 defaults：`max_steps=30`、`budget_tokens=60000`；两个 architecture variants 完全相同预算。
+- R2 required acceptance 中不再存在 `file` grader。功能/API 由 executable behavior grader 验证；full pytest 防回归；明确要求新增 regression test 的 6 个 task 使用 implementation-independent `test-change` command grader，只检查 `tests/` 相对 task baseline 是否有修改。
+- 新增 `scripts/run_coding_agent_benchmark_v1.py`：一键执行 source check → pytest → 两个 0-API dry-run → baseline 24 real → infrastructure gate → Full P2 24 real → infrastructure gate → offline summary；所有输出目录拒绝覆盖。
+- 正式 R2 输出使用 `benchmark_v1_r2_*` 路径，不覆盖 pilot 的 `benchmark_v1_baseline_real`。
+- 正式 R2 尚未由 ChatGPT 触发任何 Provider；必须由用户人工启动 runner。
+- 更新日志：`docs/changes/2026-09-22/Forge-Agent-Benchmark-V1.md`。
