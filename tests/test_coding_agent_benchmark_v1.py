@@ -279,3 +279,16 @@ def test_benchmark_v1_summary_rejects_budget_drift(tmp_path: Path):
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     with pytest.raises(ValueError, match="fairness violation"):
         build_summary(suite_path=SUITE_PATH, baseline_dir=baseline_dir, full_dir=full_dir)
+
+def test_benchmark_v1_summary_rejects_source_commit_drift(tmp_path: Path):
+    suite = EvaluationSuite.load(SUITE_PATH)
+    baseline_dir, full_dir = tmp_path / "baseline", tmp_path / "full"
+    _write_real_artifact(baseline_dir, suite, variant=BASELINE_VARIANT, full=False)
+    _write_real_artifact(full_dir, suite, variant=FULL_VARIANT, full=True)
+    metadata_path = full_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["run_metadata"]["source_commit"] = "0" * 40
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="source_commit"):
+        build_summary(suite_path=SUITE_PATH, baseline_dir=baseline_dir, full_dir=full_dir)
+
