@@ -155,7 +155,13 @@ def main() -> int:
 
     suite_path = Path(args.suite).resolve()
     suite = EvaluationSuite.load(suite_path)
-    suite_sha256 = hashlib.sha256(suite_path.read_bytes()).hexdigest()
+    suite_canonical = json.dumps(
+        json.loads(suite_path.read_text(encoding="utf-8")),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    suite_sha256 = hashlib.sha256(suite_canonical).hexdigest()
     planning_mode = _planning_mode_for_variant(args.variant)
     recovery_mode = _recovery_mode_for_variant(args.variant)
     skills_enabled = _skills_enabled_for_variant(args.variant)
