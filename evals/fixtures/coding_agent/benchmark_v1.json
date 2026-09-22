@@ -1,0 +1,695 @@
+{
+  "schema_version": 1,
+  "suite_id": "forge-agent-benchmark-v1",
+  "description": "Frozen 12-task real-model Coding Agent Benchmark V1 for baseline_react vs planning_recovery_skills. Task success is determined only by deterministic outcome graders plus the Run/Acceptance contract; process graders are non-blocking unless they restate an acceptance requirement.",
+  "defaults": {
+    "max_steps": 20,
+    "budget_tokens": 40000
+  },
+  "tasks": [
+    {
+      "id": "email-normalization-bug",
+      "description": "Fix normalize_email(email) in account.py so user comparisons ignore surrounding whitespace and email letter case. Keep is_same_user(left, right) behavior routed through normalize_email.",
+      "files": {
+        "account.py": "def normalize_email(email):\n    return email.strip()\n\n\ndef is_same_user(left, right):\n    return normalize_email(left) == normalize_email(right)\n"
+      },
+      "reference_files": {
+        "account.py": "def normalize_email(email):\n    return email.strip().lower()\n\n\ndef is_same_user(left, right):\n    return normalize_email(left) == normalize_email(right)\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "single-file-bug",
+        "bug-fix",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from account import normalize_email, is_same_user; assert normalize_email('  Alice@EXAMPLE.COM ') == 'alice@example.com'; assert is_same_user('A@B.COM', ' a@b.com ') is True"
+            ]
+          }
+        },
+        {
+          "id": "changed",
+          "kind": "repository_state",
+          "params": {
+            "changed": true
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "bug-fix"
+            ],
+            "forbidden": [
+              "repository-navigation"
+            ]
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "clamp-feature",
+      "description": "Add clamp(value, lower, upper) to range_utils.py. It must return lower below the range, upper above the range, and value inside the range. Keep floor_at_zero(value) unchanged.",
+      "files": {
+        "range_utils.py": "def floor_at_zero(value):\n    return max(0, value)\n"
+      },
+      "reference_files": {
+        "range_utils.py": "def floor_at_zero(value):\n    return max(0, value)\n\n\ndef clamp(value, lower, upper):\n    return max(lower, min(value, upper))\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "single-file-feature",
+        "feature",
+        "skill-should-not-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from range_utils import floor_at_zero, clamp; assert floor_at_zero(-2) == 0; assert clamp(-3, 0, 10) == 0; assert clamp(4, 0, 10) == 4; assert clamp(15, 0, 10) == 10"
+            ]
+          }
+        },
+        {
+          "id": "shape",
+          "kind": "file",
+          "params": {
+            "path": "range_utils.py",
+            "contains": "def clamp"
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [],
+            "forbidden": [
+              "bug-fix",
+              "test-and-verify",
+              "repository-navigation"
+            ]
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "canonical-retry-config",
+      "description": "The client retry limit should be 4. Update the canonical retry configuration used by the runtime rather than hardcoding a second retry value in client.py or retry.py.",
+      "files": {
+        "app/__init__.py": "",
+        "app/config.py": "RETRY_LIMIT = 2\n",
+        "app/retry.py": "from .config import RETRY_LIMIT\n\n\ndef attempts():\n    return RETRY_LIMIT\n",
+        "app/client.py": "from .retry import attempts\n\n\ndef request_budget():\n    return attempts()\n",
+        "README.md": "Retry settings live under app/.\n"
+      },
+      "reference_files": {
+        "app/config.py": "RETRY_LIMIT = 4\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "navigation",
+        "configuration",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from app.client import request_budget; assert request_budget() == 4"
+            ]
+          }
+        },
+        {
+          "id": "canonical",
+          "kind": "file",
+          "params": {
+            "path": "app/config.py",
+            "contains": "RETRY_LIMIT = 4"
+          }
+        },
+        {
+          "id": "client-no-hardcode",
+          "kind": "file",
+          "params": {
+            "path": "app/client.py",
+            "not_contains": "return 4"
+          }
+        },
+        {
+          "id": "retry-no-hardcode",
+          "kind": "file",
+          "params": {
+            "path": "app/retry.py",
+            "not_contains": "return 4"
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "repository-navigation"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "multifile-display-name",
+      "description": "Add normalize_name(name) to formatting.py so it trims surrounding whitespace, collapses repeated internal whitespace, and title-cases words. Update render_user(name) in users.py to pass the normalized name to label(name).",
+      "files": {
+        "formatting.py": "def label(name):\n    return f'User: {name}'\n",
+        "users.py": "from formatting import label\n\n\ndef render_user(name):\n    return label(name)\n"
+      },
+      "reference_files": {
+        "formatting.py": "def label(name):\n    return f'User: {name}'\n\n\ndef normalize_name(name):\n    return ' '.join(name.split()).title()\n",
+        "users.py": "from formatting import label, normalize_name\n\n\ndef render_user(name):\n    return label(normalize_name(name))\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "multi-file",
+        "feature",
+        "planning-candidate"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from users import render_user; assert render_user('  alice   smith  ') == 'User: Alice Smith'; assert render_user('BOB') == 'User: Bob'"
+            ]
+          }
+        },
+        {
+          "id": "formatter",
+          "kind": "file",
+          "params": {
+            "path": "formatting.py",
+            "contains": "def normalize_name"
+          }
+        },
+        {
+          "id": "caller",
+          "kind": "file",
+          "params": {
+            "path": "users.py",
+            "contains": "normalize_name"
+          }
+        }
+      ]
+    },
+    {
+      "id": "slug-regression-recovery",
+      "description": "Fix slugify(text) so the existing repository tests pass. Reproduce the failure before editing, then run the tests again after the fix before finishing.",
+      "files": {
+        "slug.py": "def slugify(text):\n    return text.strip().lower().replace(' ', '_')\n",
+        "tests/test_slug.py": "from slug import slugify\n\n\ndef test_slugify_words():\n    assert slugify('Hello World') == 'hello-world'\n\n\ndef test_slugify_repeated_whitespace():\n    assert slugify('  A   B  ') == 'a-b'\n"
+      },
+      "reference_files": {
+        "slug.py": "def slugify(text):\n    return '-'.join(text.strip().lower().split())\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "recovery",
+        "tests",
+        "bug-fix",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from slug import slugify; assert slugify('Hello World') == 'hello-world'; assert slugify('  A   B  ') == 'a-b'; assert slugify('One') == 'one'"
+            ]
+          }
+        },
+        {
+          "id": "reproduced-and-retested",
+          "kind": "run_trace",
+          "params": {
+            "run_status": "success",
+            "min_test_attempts": 2
+          },
+          "required": false
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "bug-fix",
+              "test-and-verify"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "completion-guard-increment",
+      "description": "Implement increment(value) in counter.py so it returns value + 1, and run the repository tests before finishing.",
+      "files": {
+        "counter.py": "def increment(value):\n    return value\n",
+        "tests/test_counter.py": "from counter import increment\n\n\ndef test_increment():\n    assert increment(4) == 5\n"
+      },
+      "reference_files": {
+        "counter.py": "def increment(value):\n    return value + 1\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "completion-guard",
+        "tests",
+        "single-file-feature",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from counter import increment; assert increment(4) == 5; assert increment(-1) == 0"
+            ]
+          }
+        },
+        {
+          "id": "tests-used",
+          "kind": "run_trace",
+          "params": {
+            "run_status": "success",
+            "min_test_attempts": 1
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "test-and-verify"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "runtime-config-navigation",
+      "description": "Fix transport.timeout() so it reflects runtime changes to settings.DEFAULT_TIMEOUT instead of keeping a stale imported value. Keep DEFAULT_TIMEOUT public and run the repository tests before finishing.",
+      "files": {
+        "settings.py": "DEFAULT_TIMEOUT = 5\n",
+        "transport.py": "from settings import DEFAULT_TIMEOUT\n\n\ndef timeout():\n    return DEFAULT_TIMEOUT\n",
+        "tests/test_transport.py": "import settings\nimport transport\n\n\ndef test_runtime_timeout_override():\n    original = settings.DEFAULT_TIMEOUT\n    try:\n        settings.DEFAULT_TIMEOUT = 9\n        assert transport.timeout() == 9\n    finally:\n        settings.DEFAULT_TIMEOUT = original\n"
+      },
+      "reference_files": {
+        "transport.py": "import settings\n\n\ndef timeout():\n    return settings.DEFAULT_TIMEOUT\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "navigation",
+        "recovery",
+        "bug-fix",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import settings, transport; settings.DEFAULT_TIMEOUT = 12; assert transport.timeout() == 12"
+            ]
+          }
+        },
+        {
+          "id": "public-setting",
+          "kind": "file",
+          "params": {
+            "path": "settings.py",
+            "contains": "DEFAULT_TIMEOUT"
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "repository-navigation",
+              "bug-fix",
+              "test-and-verify"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "generated-copy-change-approach",
+      "description": "Rendered identifiers should use prefix 'v2'. One repository file is only a generated defaults snapshot; leave that generated snapshot unchanged and update the runtime source of truth instead.",
+      "files": {
+        "src/app/__init__.py": "",
+        "src/app/constants.py": "PREFIX = 'v1'\n",
+        "src/app/generated_defaults.py": "# generated snapshot; do not edit manually\nPREFIX = 'v1'\n",
+        "src/app/renderer.py": "from .constants import PREFIX\n\n\ndef render(value):\n    return f'{PREFIX}:{value}'\n",
+        "README.md": "Runtime constants and generated snapshots live under src/app.\n"
+      },
+      "reference_files": {
+        "src/app/constants.py": "PREFIX = 'v2'\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "navigation",
+        "change-approach",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import sys; sys.path.insert(0, 'src'); from app.renderer import render; assert render('42') == 'v2:42'"
+            ]
+          }
+        },
+        {
+          "id": "source-of-truth",
+          "kind": "file",
+          "params": {
+            "path": "src/app/constants.py",
+            "contains": "PREFIX = 'v2'"
+          }
+        },
+        {
+          "id": "generated-unchanged",
+          "kind": "file",
+          "params": {
+            "path": "src/app/generated_defaults.py",
+            "equals": "# generated snapshot; do not edit manually\nPREFIX = 'v1'\n"
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "repository-navigation"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "tag-parser-recovery",
+      "description": "Fix parse_tags(value) so the existing repository tests pass, then run the complete repository test suite before finishing.",
+      "files": {
+        "tags.py": "def parse_tags(value):\n    return [part.strip() for part in value.split(',')]\n",
+        "tests/test_tags.py": "from tags import parse_tags\n\n\ndef test_tags_normalized():\n    assert parse_tags(' Alpha, beta ') == ['alpha', 'beta']\n\n\ndef test_tags_skip_empty_and_duplicates():\n    assert parse_tags('a,, A, b,') == ['a', 'b']\n"
+      },
+      "reference_files": {
+        "tags.py": "def parse_tags(value):\n    result = []\n    seen = set()\n    for part in value.split(','):\n        tag = part.strip().lower()\n        if tag and tag not in seen:\n            result.append(tag)\n            seen.add(tag)\n    return result\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "recovery",
+        "change-approach",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from tags import parse_tags; assert parse_tags(' Alpha, beta ') == ['alpha', 'beta']; assert parse_tags('a,, A, b,') == ['a', 'b']; assert parse_tags('') == []"
+            ]
+          }
+        },
+        {
+          "id": "tests-observed",
+          "kind": "run_trace",
+          "params": {
+            "run_status": "success",
+            "min_test_attempts": 1
+          },
+          "required": false
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "bug-fix",
+              "test-and-verify"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "registry-text-encoder",
+      "description": "Add plain-text encoding support. Implement encode_text(value), expose it through the encoder registry under key 'text', add a regression test for the new registry behavior, and run the repository tests before finishing. Existing JSON behavior must remain unchanged.",
+      "files": {
+        "encoders.py": "import json\n\n\ndef encode_json(value):\n    return json.dumps(value, sort_keys=True)\n",
+        "registry.py": "from encoders import encode_json\n\nENCODERS = {'json': encode_json}\n\n\ndef get_encoder(kind):\n    return ENCODERS[kind]\n",
+        "service.py": "from registry import get_encoder\n\n\ndef render(kind, value):\n    return get_encoder(kind)(value)\n",
+        "tests/test_registry.py": "from service import render\n\n\ndef test_json_encoder():\n    assert render('json', {'b': 1, 'a': 2}) == '{\"a\": 2, \"b\": 1}'\n"
+      },
+      "reference_files": {
+        "encoders.py": "import json\n\n\ndef encode_json(value):\n    return json.dumps(value, sort_keys=True)\n\n\ndef encode_text(value):\n    return str(value)\n",
+        "registry.py": "from encoders import encode_json, encode_text\n\nENCODERS = {'json': encode_json, 'text': encode_text}\n\n\ndef get_encoder(kind):\n    return ENCODERS[kind]\n",
+        "tests/test_registry.py": "from service import render\n\n\ndef test_json_encoder():\n    assert render('json', {'b': 1, 'a': 2}) == '{\"a\": 2, \"b\": 1}'\n\n\ndef test_text_encoder():\n    assert render('text', 42) == '42'\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "multi-file",
+        "feature",
+        "replan-candidate",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from service import render; assert render('text', 42) == '42'; assert render('json', {'b': 1, 'a': 2}) == '{\"a\": 2, \"b\": 1}'"
+            ]
+          }
+        },
+        {
+          "id": "encoder",
+          "kind": "file",
+          "params": {
+            "path": "encoders.py",
+            "contains": "def encode_text"
+          }
+        },
+        {
+          "id": "registry",
+          "kind": "file",
+          "params": {
+            "path": "registry.py",
+            "contains": "'text'"
+          }
+        },
+        {
+          "id": "regression-test",
+          "kind": "file",
+          "params": {
+            "path": "tests/test_registry.py",
+            "contains": "test_text_encoder"
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "test-and-verify",
+              "repository-navigation"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "warning-color-feature",
+      "description": "Add the mapping 'warning': 'yellow' to DEFAULT_COLORS in palette.py without changing the existing mappings.",
+      "files": {
+        "palette.py": "DEFAULT_COLORS = {\n    'ok': 'green',\n    'error': 'red',\n}\n"
+      },
+      "reference_files": {
+        "palette.py": "DEFAULT_COLORS = {\n    'ok': 'green',\n    'error': 'red',\n    'warning': 'yellow',\n}\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": [
+        "single-file-feature",
+        "feature",
+        "skill-should-not-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from palette import DEFAULT_COLORS; assert DEFAULT_COLORS == {'ok': 'green', 'error': 'red', 'warning': 'yellow'}"
+            ]
+          }
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [],
+            "forbidden": [
+              "bug-fix",
+              "test-and-verify",
+              "repository-navigation"
+            ]
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "id-contract-migration",
+      "description": "Change normalize_id(value) so normalized IDs are trimmed strings that preserve leading zeros. Update affected callers so public_id(value) returns that normalized string while next_numeric_id(value) still returns the next integer. Run the repository tests before finishing.",
+      "files": {
+        "id_utils.py": "def normalize_id(value):\n    return int(value)\n",
+        "api.py": "from id_utils import normalize_id\n\n\ndef public_id(value):\n    return normalize_id(value)\n",
+        "sequence.py": "from id_utils import normalize_id\n\n\ndef next_numeric_id(value):\n    return normalize_id(value) + 1\n",
+        "tests/test_ids.py": "from api import public_id\nfrom sequence import next_numeric_id\n\n\ndef test_public_id_preserves_leading_zeroes():\n    assert public_id(' 007 ') == '007'\n\n\ndef test_next_numeric_id_stays_numeric():\n    assert next_numeric_id(' 007 ') == 8\n"
+      },
+      "reference_files": {
+        "id_utils.py": "def normalize_id(value):\n    return str(value).strip()\n",
+        "sequence.py": "from id_utils import normalize_id\n\n\ndef next_numeric_id(value):\n    return int(normalize_id(value)) + 1\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "test_cmd": "pytest -q",
+      "tags": [
+        "multi-file",
+        "replan-candidate",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from api import public_id; from sequence import next_numeric_id; assert public_id(' 007 ') == '007'; assert next_numeric_id(' 007 ') == 8"
+            ]
+          }
+        },
+        {
+          "id": "contract",
+          "kind": "file",
+          "params": {
+            "path": "id_utils.py",
+            "contains": "str(value).strip()"
+          }
+        },
+        {
+          "id": "caller-adapted",
+          "kind": "file",
+          "params": {
+            "path": "sequence.py",
+            "contains": "int(normalize_id(value))"
+          }
+        },
+        {
+          "id": "final-tests",
+          "kind": "run_trace",
+          "params": {
+            "run_status": "success",
+            "min_test_attempts": 1
+          },
+          "required": false
+        },
+        {
+          "id": "skill-selection",
+          "kind": "skill_selection",
+          "params": {
+            "expected_any": [
+              "test-and-verify",
+              "repository-navigation"
+            ],
+            "forbidden": []
+          },
+          "required": false
+        }
+      ]
+    }
+  ]
+}
