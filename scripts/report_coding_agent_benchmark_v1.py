@@ -293,7 +293,7 @@ def build_summary(*, suite_path: Path, baseline_dir: Path, full_dir: Path) -> di
     delta = float(full["observed_success_rate"]) - float(baseline["observed_success_rate"])
     return {
         "schema_version": 1,
-        "benchmark_id": "forge-agent-real-model-benchmark-v1",
+        "benchmark_id": "forge-agent-real-model-benchmark-v1-r2",
         "suite_id": suite_id,
         "suite_path": str(suite_path),
         "suite_sha256": suite_sha256,
