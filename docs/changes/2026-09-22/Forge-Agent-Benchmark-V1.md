@@ -1,7 +1,7 @@
 # Forge Agent Real-model Benchmark V1
 
 日期：2026-09-22  
-状态：**REAL-REPOSITORY PROTOCOL IMPLEMENTED / LOCAL VALIDATION PENDING**  
+状态：**REAL-REPOSITORY PROTOCOL IMPLEMENTED / 12/12 REFERENCE + BOTH DRY-RUNS PASSED / PYTEST RESULT NOT YET RECORDED**  
 Benchmark ID：`forge-agent-real-model-benchmark-v1`
 
 ## 1. 本轮事实源
@@ -360,15 +360,45 @@ tests/test_coding_agent_benchmark_v1.py
 - variant/source/fairness 实现审查；
 - 0 real Provider calls。
 
-当前 ChatGPT 执行容器无法解析 `github.com`，因此无法 clone 完整 `pr-test` 到本容器，也不能声称：
+当前 ChatGPT 执行容器无法解析 `github.com`，因此完整仓库验证由用户本地执行。
+
+2026-09-22 用户本地已经完成两个 0-API dry-run，结果：
 
 ~~~text
-12/12 reference validation PASS
-pytest PASS
-dry-run PASS
+reference solutions: 12/12 PASS
+
+baseline_react:
+  execution_status: not_executed
+  real_model_executed: false
+  planned_trial_count: 24
+  suite_sha256: f0117c4ca39271401ba878c99afd30643b1dd7af28e0c0cdca9214f128b97f14
+  source_commit: 23019998f2e801e79dea59fd23fc49c58fc20038
+  model: deepseek-v4.1-flash
+  max_steps: 20
+  budget_tokens: 40000
+  planning: off
+  recovery: off
+  skills: false
+  MCP: false
+
+planning_recovery_skills:
+  execution_status: not_executed
+  real_model_executed: false
+  planned_trial_count: 24
+  suite_sha256: f0117c4ca39271401ba878c99afd30643b1dd7af28e0c0cdca9214f128b97f14
+  source_commit: 23019998f2e801e79dea59fd23fc49c58fc20038
+  model: deepseek-v4.1-flash
+  max_steps: 20
+  budget_tokens: 40000
+  planning: always
+  recovery: structured
+  skills: true
+  MCP: false
 ~~~
 
-这三项必须由用户本地完成后才进入正式 frozen / real-model execution。
+两组 dry-run 的公平性字段一致，差异只存在于预期的 Planning / Recovery / Skills capability。
+
+当前尚未记录用户本地 `pytest tests/test_coding_agent_eval.py tests/test_coding_agent_benchmark_v1.py` 的结果，因此不能写成 pytest 已通过。
 
 ## 14. 本地验证顺序
 
