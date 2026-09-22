@@ -12,8 +12,12 @@ from evals.coding_agent.__main__ import (
     _recovery_mode_for_variant,
     _skills_enabled_for_variant,
 )
-from evals.coding_agent.runner import validate_suite_references, write_not_executed
-from evals.coding_agent.schema import EvaluationSuite
+from evals.coding_agent.runner import (
+    materialize_task_repo,
+    validate_suite_references,
+    write_not_executed,
+)
+from evals.coding_agent.schema import EvalTask, EvaluationSuite, RepositorySource
 from scripts.report_coding_agent_benchmark_v1 import (
     BASELINE_VARIANT,
     FULL_VARIANT,
@@ -50,6 +54,8 @@ def _run_metadata(*, full: bool) -> dict[str, object]:
         "protocol": "chat_completions",
         "model": "test-model",
         "suite_sha256": _suite_sha256(),
+        "source_repository": "Napabana/pr-test",
+        "source_commit": "23019998f2e801e79dea59fd23fc49c58fc20038",
         "max_steps": 20,
         "budget_tokens": 40000,
         "repo_map_mode": "incremental",
@@ -130,19 +136,80 @@ def _write_real_artifact(
     )
 
 
-def test_benchmark_v1_suite_has_frozen_coverage_and_reference_solutions(tmp_path: Path):
+def test_benchmark_v1_suite_has_frozen_real_repository_identity_and_coverage():
     suite = EvaluationSuite.load(SUITE_PATH)
     assert suite.suite_id == "forge-agent-benchmark-v1"
     assert len(suite.tasks) == 12
     assert suite.defaults == {"max_steps": 20, "budget_tokens": 40000}
+    assert suite.source == RepositorySource(
+        "Napabana/pr-test",
+        "23019998f2e801e79dea59fd23fc49c58fc20038",
+    )
     tags = {tag for task in suite.tasks for tag in task.tags}
     assert REQUIRED_TAGS <= tags
     assert sum("skill-should-trigger" in task.tags for task in suite.tasks) >= 4
     assert sum("skill-should-not-trigger" in task.tags for task in suite.tasks) >= 2
     assert sum("recovery" in task.tags for task in suite.tasks) >= 3
-    validated = validate_suite_references(suite, tmp_path / "references")
-    assert len(validated) == 12
-    assert all(validated[task.task_id] for task in suite.tasks)
+
+
+def test_real_repository_materialization_uses_exact_commit_and_strips_history(tmp_path: Path):
+    source = tmp_path / "source"
+    source.mkdir()
+    import subprocess
+
+    def git(repo: Path, *args: str) -> str:
+        completed = subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        )
+        return completed.stdout.strip()
+
+    git(source, "init", "-q")
+    git(source, "config", "user.email", "eval@example.invalid")
+    git(source, "config", "user.name", "Eval")
+    (source / "value.py").write_text("VALUE = 1\n", encoding="utf-8")
+    git(source, "add", "-A")
+    git(source, "commit", "-qm", "source")
+    source_commit = git(source, "rev-parse", "HEAD")
+
+    task = EvalTask.from_dict({
+        "id": "external-task",
+        "description": "Fix VALUE.",
+        "files": {"value.py": "VALUE = 0\n"},
+        "reference_files": {"value.py": "VALUE = 2\n"},
+        "graders": [{
+            "id": "value",
+            "kind": "command",
+            "params": {"command": ["{python}", "-c", "import value; assert value.VALUE == 2"]},
+        }],
+    })
+    suite = EvaluationSuite(
+        "external-suite",
+        (task,),
+        source=RepositorySource("example/source", source_commit),
+    )
+    validated = validate_suite_references(
+        suite,
+        tmp_path / "references",
+        source_repo_path=source,
+    )
+    assert validated == {"external-task": ["value"]}
+
+    trial = materialize_task_repo(
+        task,
+        tmp_path / "trial",
+        source_repo_path=source,
+        source_commit=source_commit,
+    )
+    assert (trial / "value.py").read_text(encoding="utf-8") == "VALUE = 0\n"
+    assert git(trial, "rev-list", "--count", "HEAD") == "1"
+    missing = subprocess.run(
+        ["git", "cat-file", "-e", f"{source_commit}^{{commit}}"],
+        cwd=trial,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing.returncode != 0
 
 
 def test_benchmark_v1_variant_mapping_keeps_mcp_out_of_main_ab():
