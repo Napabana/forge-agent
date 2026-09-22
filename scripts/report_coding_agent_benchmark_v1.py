@@ -345,6 +345,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"Suite: {summary['suite_id']}",
         f"Suite SHA-256: {summary['suite_sha256']}",
         f"Tasks x repetitions x variants: {summary['task_count']} x {summary['repetitions']} x 2 = {summary['planned_trials']}",
+        f"Source repository: {summary['common_run_config'].get('source_repository')} @ {summary['common_run_config'].get('source_commit')}",
         f"Provider / model: {summary['common_run_config'].get('provider')} / {summary['common_run_config'].get('model')}",
         "",
         "## Primary metric",
