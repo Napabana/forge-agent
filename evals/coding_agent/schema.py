@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SUPPORTED_GRADERS = {"command", "file", "repository_state", "run_trace", "skill_selection", "recovery_motif"}
 
 
@@ -111,6 +112,20 @@ class GraderSpec:
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.grader_id, "kind": self.kind, "params": self.params, "required": self.required}
 
+@dataclass(frozen=True)
+class RepositorySource:
+    """Immutable source repository identity for real-repository evaluation suites."""
+
+    repository: str
+    commit: str
+
+    def __post_init__(self) -> None:
+        if not self.repository.strip():
+            raise ValueError("source.repository must be non-empty")
+        if not _COMMIT_RE.fullmatch(self.commit):
+            raise ValueError("source.commit must be a full 40-character lowercase SHA")
+
+
 #一个评估的具体任务
 @dataclass(frozen=True)
 class EvalTask:
@@ -128,8 +143,6 @@ class EvalTask:
         _validate_id(self.task_id, field_name="task_id")
         if not self.description.strip():
             raise ValueError(f"task {self.task_id!r} requires a description")
-        if not self.files:
-            raise ValueError(f"task {self.task_id!r} requires fixture files")
         for path, content in self.files.items():
             _validate_fixture_path(path, field_name=f"task {self.task_id} fixture path")
             if not isinstance(content, str):
@@ -168,6 +181,7 @@ class EvaluationSuite:
     tasks: tuple[EvalTask, ...]
     description: str = ""
     defaults: dict[str, Any] = field(default_factory=dict)
+    source: RepositorySource | None = None
     schema_version: int = 1
 
     def __post_init__(self) -> None:
@@ -176,6 +190,13 @@ class EvaluationSuite:
         _validate_id(self.suite_id, field_name="suite_id")
         if not self.tasks:
             raise ValueError("evaluation suite must contain tasks")
+        if self.source is None:
+            empty = [task.task_id for task in self.tasks if not task.files]
+            if empty:
+                raise ValueError(
+                    "synthetic evaluation tasks require fixture files: "
+                    + ", ".join(empty)
+                )
         task_ids = [task.task_id for task in self.tasks]
         duplicates = sorted({item for item in task_ids if task_ids.count(item) > 1})
         if duplicates:
@@ -187,11 +208,21 @@ class EvaluationSuite:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "EvaluationSuite":
+        source_raw = raw.get("source")
+        source = None
+        if source_raw is not None:
+            if not isinstance(source_raw, dict):
+                raise ValueError("evaluation suite source must be an object")
+            source = RepositorySource(
+                repository=str(source_raw.get("repository", "")),
+                commit=str(source_raw.get("commit", "")),
+            )
         return cls(
             schema_version=int(raw.get("schema_version", 1)),
             suite_id=str(raw.get("suite_id", "")),
             description=str(raw.get("description", "")),
             defaults=dict(raw.get("defaults") or {}),
+            source=source,
             tasks=tuple(EvalTask.from_dict(item) for item in raw.get("tasks", ())),
         )
 
