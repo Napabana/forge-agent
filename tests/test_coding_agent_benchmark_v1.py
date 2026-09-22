@@ -56,8 +56,8 @@ def _run_metadata(*, full: bool) -> dict[str, object]:
         "suite_sha256": _suite_sha256(),
         "source_repository": "Napabana/pr-test",
         "source_commit": "23019998f2e801e79dea59fd23fc49c58fc20038",
-        "max_steps": 20,
-        "budget_tokens": 40000,
+        "max_steps": 30,
+        "budget_tokens": 60000,
         "repo_map_mode": "incremental",
         "planning_mode": "always" if full else "off",
         "recovery_mode": "structured" if full else "off",
@@ -138,9 +138,9 @@ def _write_real_artifact(
 
 def test_benchmark_v1_suite_has_frozen_real_repository_identity_and_coverage():
     suite = EvaluationSuite.load(SUITE_PATH)
-    assert suite.suite_id == "forge-agent-benchmark-v1"
+    assert suite.suite_id == "forge-agent-benchmark-v1-r2"
     assert len(suite.tasks) == 12
-    assert suite.defaults == {"max_steps": 20, "budget_tokens": 40000}
+    assert suite.defaults == {"max_steps": 30, "budget_tokens": 60000}
     assert suite.source == RepositorySource(
         "Napabana/pr-test",
         "23019998f2e801e79dea59fd23fc49c58fc20038",
@@ -150,6 +150,26 @@ def test_benchmark_v1_suite_has_frozen_real_repository_identity_and_coverage():
     assert sum("skill-should-trigger" in task.tags for task in suite.tasks) >= 4
     assert sum("skill-should-not-trigger" in task.tags for task in suite.tasks) >= 2
     assert sum("recovery" in task.tags for task in suite.tasks) >= 3
+    required_file_graders = [
+        grader
+        for task in suite.tasks
+        for grader in task.graders
+        if grader.required and grader.kind == "file"
+    ]
+    assert required_file_graders == []
+    test_change_tasks = {
+        task.task_id
+        for task in suite.tasks
+        if any(grader.grader_id == "test-change" and grader.required for grader in task.graders)
+    }
+    assert test_change_tasks == {
+        "runtime-policy-mode-live",
+        "power-operation-integration",
+        "registry-case-insensitive",
+        "policy-deny-list",
+        "batch-stop-on-error",
+        "custom-registry-preserve-overrides",
+    }
 
 
 def test_real_repository_materialization_uses_exact_commit_and_strips_history(tmp_path: Path):
@@ -238,8 +258,8 @@ def test_benchmark_v1_dry_run_records_24_planned_trials_and_frozen_metadata(tmp_
     assert report["planned_trial_count"] == 24
     assert metadata["planned_trial_count"] == 24
     assert metadata["run_metadata"]["suite_sha256"] == _suite_sha256()
-    assert metadata["run_metadata"]["max_steps"] == 20
-    assert metadata["run_metadata"]["budget_tokens"] == 40000
+    assert metadata["run_metadata"]["max_steps"] == 30
+    assert metadata["run_metadata"]["budget_tokens"] == 60000
     assert metadata["real_model_executed"] is False
 
 
