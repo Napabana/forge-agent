@@ -1,8 +1,8 @@
 # Forge Agent Real-model Benchmark V1
 
 日期：2026-09-22  
-状态：**REAL-REPOSITORY PROTOCOL IMPLEMENTED / 12/12 REFERENCE + BOTH DRY-RUNS PASSED / PYTEST RESULT NOT YET RECORDED**  
-Benchmark ID：`forge-agent-real-model-benchmark-v1`
+状态：**FORMAL V1 R2 COMPLETE / 48 REAL-MODEL TRIALS AGGREGATED**  
+Benchmark ID：`forge-agent-real-model-benchmark-v1-r2`
 
 ## 1. 本轮事实源
 
@@ -641,3 +641,132 @@ evals/results/benchmark_v1_r2_summary
 
 正式 R2 real-model trial 尚未由 ChatGPT 触发；必须由用户人工启动 one-shot runner。
 
+
+
+## 19. Formal V1 R2 final result（2026-09-23）
+
+用户已完成并 push 正式 R2 的全部 48 个 real-model trials，以及离线聚合产物：
+
+~~~text
+evals/results/benchmark_v1_r2_baseline_real/
+evals/results/benchmark_v1_r2_full_p2_real/
+evals/results/benchmark_v1_r2_summary/
+~~~
+
+公平性锚点：
+
+~~~text
+suite_id = forge-agent-benchmark-v1-r2
+suite_sha256 = f7ba1370fe1442773967ec4f65883be5cdc0a21f14ced28d1ea57ed1f384bd0a
+source = Napabana/pr-test@23019998f2e801e79dea59fd23fc49c58fc20038
+model = deepseek-v4.1-flash
+provider = openai
+max_steps = 30
+budget_tokens = 60000
+repo_map_mode = incremental
+MCP = off
+repetitions = 2
+~~~
+
+Primary metric：
+
+~~~text
+baseline_react:
+  23 / 24
+  95.8%
+
+planning_recovery_skills:
+  23 / 24
+  95.8%
+
+absolute delta:
+  0.0 percentage points
+
+paired outcomes:
+  Full P2 wins = 1
+  Full P2 losses = 1
+  ties = 22
+~~~
+
+Recovery-tagged tasks：
+
+~~~text
+baseline: 6/6
+Full P2: 6/6
+~~~
+
+Successful-trial efficiency：
+
+~~~text
+steps mean:
+  12.30 → 15.65
+  Full P2 ≈ +27.2%
+
+total tokens mean:
+  169,602 → 223,881
+  Full P2 ≈ +32.0%
+
+wall time mean:
+  102.02s → 118.32s
+  Full P2 ≈ +16.0%
+~~~
+
+Process audit：
+
+~~~text
+Planning:
+  plan_created = 24/24
+  total plan steps completed = 61
+  plan revisions = 0
+
+Recovery:
+  failure_classified = 20
+  recovery_selected = 20
+  recovery-tagged trials = 6 selections
+  non-recovery-tagged trials = 14 selections
+  recovery_replan = 0
+  recovery_exhausted = 0
+
+Skills:
+  should-trigger trials = 20
+  selected = 1
+  loaded = 1
+  loaded rate = 5%
+  process match = 0/20
+  should-not-trigger false-trigger = 0/4
+~~~
+
+两个正式失败均不是基础设施故障：
+
+- baseline：`batch-stop-on-error/r2`，functional behavior/full suite 完成，但没有按 prompt 新增 regression-test change，因此 `test-change` acceptance 失败；
+- Full P2：`power-operation-integration/r1`，同样因没有新增 regression-test change 而 acceptance 失败。
+
+没有 provider / connection / timeout / runner infrastructure failure。
+
+### 结论
+
+这份冻结 12-task / 48-trial 小样本 **没有观察到 Full P2 对 independent acceptance 的提升**。
+
+同时 Full P2 在成功 trial 上消耗更多 steps、tokens 与 wall time；Trace 表明当前 orchestration policy 的主要问题是：
+
+1. Planning always-on 带来稳定开销，但本次没有发生 plan revision；
+2. Recovery 对非 recovery-tagged task 存在明显过触发；
+3. Skills 的 selection/adoption 极低，且唯一加载未命中该 task 的期望 Skill。
+
+因此本轮不能写：
+
+> Planning / Recovery / Skills 将 Coding Agent 成功率提升 X%。
+
+可以准确写：
+
+> 构建冻结 real-repository A/B Harness，并在 48 个 real-model trials 上验证两套 Agent architecture；结果显示 acceptance 持平（95.8% vs 95.8%），同时通过 Trace 定位到 always-on planning 开销、recovery 过触发和 skill adoption 不足，作为后续 orchestration policy 优化依据。
+
+### 后续改进方向
+
+后续若继续 P2，不修改本轮 frozen R2 结果。改动进入新 regression / benchmark revision：
+
+- Planning：从 `always` 转向 task-complexity / mutation-risk gating，只有复杂 multi-file / ambiguity / recovery case 才建 plan；
+- Recovery：缩紧 failure classification 与 selection gate，区分 expected test failure、normal exploration failure 和真正需要 strategy change 的 failure；
+- Replanning：设计真正会触发 strategy invalidation 的任务/事件，验证 plan revision，而不是只记录初始 plan；
+- Skills：改进 discovery/selection prompt 与 trigger metadata，优先验证 should-trigger adoption 和 wrong-skill rate；
+- Evaluation：增加更多 repository/task diversity，再讨论总体 capability 趋势。
