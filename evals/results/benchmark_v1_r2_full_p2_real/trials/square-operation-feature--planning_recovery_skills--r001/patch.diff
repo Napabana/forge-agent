@@ -1,0 +1,16 @@
+diff --git a/src/calc_core/operations.py b/src/calc_core/operations.py
+index bd3baee..9165b60 100644
+--- a/src/calc_core/operations.py
++++ b/src/calc_core/operations.py
+@@ -33,6 +33,11 @@ def divide(a: int, b: int) -> float:
+     return a / b
+ 
+ 
++def square(value: int) -> int:
++    """Return ``value`` squared (value * value)."""
++    return value * value
++
++
+ def clamp(value: int, lower: int, upper: int) -> int:
+     """将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。"""
+     if lower > upper:

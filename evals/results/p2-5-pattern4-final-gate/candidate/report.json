@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "suite_id": "p2-5-recovery-motif-real-gate",
+  "execution_status": "executed",
+  "real_model_executed": true,
+  "trial_count": 4,
+  "variants": [
+    "evolution_candidate"
+  ],
+  "claim_boundary": "Fake/scripted trials validate the Evaluation Harness only. Capability metrics are emitted only for explicitly executed real-model trials. Real-model rates are observed small-sample values, not stable pass@1 estimates. Skill-selection checks are non-blocking process evidence and do not change task success.",
+  "real_model_small_sample": {
+    "evolution_candidate": {
+      "runs": 4,
+      "observed_successes": 2,
+      "observed_success_rate": 0.5,
+      "mean_steps": 6.25,
+      "mean_total_tokens": 35157.25,
+      "mean_wall_time_seconds": 52.233121628001754,
+      "mean_tool_calls": 5.25,
+      "mean_test_attempts": 1,
+      "mean_completion_rejections": 0,
+      "mean_plan_created": 0,
+      "mean_plan_revisions": 0,
+      "mean_plan_steps_completed": 0,
+      "planning_skipped_runs": 0,
+      "mean_failures_classified": 1,
+      "mean_recoveries_selected": 1,
+      "mean_replans_selected": 0,
+      "recovery_exhausted_runs": 0,
+      "mean_skills_discovered": 1,
+      "mean_skills_selected": 0,
+      "mean_skills_loaded": 0,
+      "mean_skill_references_loaded": 0,
+      "mean_mcp_tools_discovered": 0,
+      "mean_mcp_tool_calls": 0,
+      "mean_mcp_tool_failures": 0,
+      "skill_selection_process_checks": 3,
+      "skill_selection_process_passes": 1
+    }
+  }
+}

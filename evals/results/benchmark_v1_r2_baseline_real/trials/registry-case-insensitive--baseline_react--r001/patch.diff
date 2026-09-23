@@ -1,0 +1,82 @@
+diff --git a/src/calc_core/registry.py b/src/calc_core/registry.py
+index 7994efb..2ec56f7 100644
+--- a/src/calc_core/registry.py
++++ b/src/calc_core/registry.py
+@@ -8,14 +8,24 @@ Operation = Callable[..., object]
+ 
+ 
+ class OperationRegistry:
+-    """Store operations by name and resolve them back."""
++    """Store operations by name and resolve them back.
++
++    Operation names are case-insensitive and ignore surrounding
++    whitespace: registering ``"Add"`` and resolving ``"  add "`` refer to
++    the same operation. Canonical lowercase names are preserved.
++    """
+ 
+     def __init__(self) -> None:
+         self._operations: Dict[str, Operation] = {}
+ 
++    @staticmethod
++    def _normalize(name: str) -> str:
++        """Return the canonical lookup key for ``name``."""
++        return name.strip().lower()
++
+     def register(self, name: str, operation: Operation) -> None:
+         """Register ``operation`` under ``name``."""
+-        self._operations[name] = operation
++        self._operations[self._normalize(name)] = operation
+ 
+     def resolve(self, name: str) -> Operation:
+         """Return the operation registered under ``name``.
+@@ -23,6 +33,6 @@ class OperationRegistry:
+         Raises UnknownOperationError if no such operation exists.
+         """
+         try:
+-            return self._operations[name]
++            return self._operations[self._normalize(name)]
+         except KeyError:
+             raise UnknownOperationError(name) from None
+\ No newline at end of file
+diff --git a/tests/test_calc_core.py b/tests/test_calc_core.py
+index 1b00ac0..0de8cb6 100644
+--- a/tests/test_calc_core.py
++++ b/tests/test_calc_core.py
+@@ -65,6 +65,37 @@ def test_registry_unknown_name_raises_unknown_operation_error():
+         registry.resolve("missing")
+ 
+ 
++def test_registry_lookup_is_case_insensitive_and_strips_whitespace():
++    registry = OperationRegistry()
++    registry.register("Add", add)
++    assert registry.resolve("add") is add
++    assert registry.resolve("ADD") is add
++    assert registry.resolve("  add  ") is add
++    assert registry.resolve("  AdD  ") is add
++
++
++def test_registry_registration_is_case_insensitive_and_strips_whitespace():
++    registry = OperationRegistry()
++    registry.register("  ADD  ", add)
++    assert registry.resolve("add") is add
++    assert registry.resolve("Add") is add
++
++
++def test_registry_normalization_still_raises_unknown_operation_error():
++    registry = OperationRegistry()
++    registry.register("add", add)
++    with pytest.raises(UnknownOperationError) as exc_info:
++        registry.resolve("  Nope  ")
++    # The original (non-normalized) name is preserved on the error.
++    assert exc_info.value.name == "  Nope  "
++
++
++def test_service_execute_is_case_insensitive_and_strips_whitespace():
++    service = CalculatorService()
++    assert service.execute("  ADD  ", 2, 3) == 5
++    assert service.execute("Divide", 7, 2) == 3.5
++
++
+ # --- service ---------------------------------------------------------------
+ 
+ 

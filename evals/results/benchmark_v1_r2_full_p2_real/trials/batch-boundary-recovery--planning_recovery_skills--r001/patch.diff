@@ -1,0 +1,13 @@
+diff --git a/src/calc_core/policy.py b/src/calc_core/policy.py
+index 199fb21..41350a5 100644
+--- a/src/calc_core/policy.py
++++ b/src/calc_core/policy.py
+@@ -41,7 +41,7 @@ class OperationPolicy:
+         """
+         if self.max_batch_size is None:
+             return True
+-        return size < self.max_batch_size
++        return size <= self.max_batch_size
+ 
+ 
+ DEFAULT_POLICY = OperationPolicy()

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "suite_id": "forge-agent-benchmark-v1-r2",
+  "execution_status": "executed",
+  "real_model_executed": true,
+  "trial_count": 24,
+  "variants": [
+    "planning_recovery_skills"
+  ],
+  "claim_boundary": "Fake/scripted trials validate the Evaluation Harness only. Capability metrics are emitted only for explicitly executed real-model trials. Real-model rates are observed small-sample values, not stable pass@1 estimates. Skill-selection checks are non-blocking process evidence and do not change task success.",
+  "real_model_small_sample": {
+    "planning_recovery_skills": {
+      "runs": 24,
+      "observed_successes": 23,
+      "observed_success_rate": 0.9583333333333334,
+      "mean_steps": 15.875,
+      "mean_total_tokens": 227780.91666666666,
+      "mean_wall_time_seconds": 119.88999477774996,
+      "mean_tool_calls": 11.083333333333334,
+      "mean_test_attempts": 1.5416666666666667,
+      "mean_completion_rejections": 0,
+      "mean_plan_created": 1,
+      "mean_plan_revisions": 0,
+      "mean_plan_steps_completed": 2.5416666666666665,
+      "planning_skipped_runs": 0,
+      "mean_failures_classified": 0.8333333333333334,
+      "mean_recoveries_selected": 0.8333333333333334,
+      "mean_replans_selected": 0,
+      "recovery_exhausted_runs": 0,
+      "mean_skills_discovered": 3,
+      "mean_skills_selected": 0.041666666666666664,
+      "mean_skills_loaded": 0.041666666666666664,
+      "mean_skill_references_loaded": 0,
+      "mean_mcp_tools_discovered": 0,
+      "mean_mcp_tool_calls": 0,
+      "mean_mcp_tool_failures": 0,
+      "skill_selection_process_checks": 24,
+      "skill_selection_process_passes": 4
+    }
+  }
+}

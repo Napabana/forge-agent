@@ -1,0 +1,17 @@
+diff --git a/src/calc_core/operations.py b/src/calc_core/operations.py
+index bd3baee..215cd14 100644
+--- a/src/calc_core/operations.py
++++ b/src/calc_core/operations.py
+@@ -37,4 +37,9 @@ def clamp(value: int, lower: int, upper: int) -> int:
+     """将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。"""
+     if lower > upper:
+         raise ValueError("lower must not exceed upper")
+-    return max(lower, min(value, upper))
+\ No newline at end of file
++    return max(lower, min(value, upper))
++
++
++def square(value: int) -> int:
++    """Return ``value`` squared."""
++    return value * value
+\ No newline at end of file

@@ -1,0 +1,103 @@
+{
+  "suite_id": "forge-agent-benchmark-v1-r2",
+  "task_id": "custom-registry-preserve-overrides",
+  "trial_id": "custom-registry-preserve-overrides--baseline_react--r002",
+  "variant": "baseline_react",
+  "repetition": 2,
+  "execution_status": "executed",
+  "evidence_kind": "real_model",
+  "real_model_executed": true,
+  "run_status": "success",
+  "termination_reason": "completion_satisfied",
+  "acceptance_status": "passed",
+  "success": true,
+  "metrics": {
+    "steps": 18,
+    "total_tokens": 282617,
+    "provider_usage": {
+      "llm_calls": 18,
+      "input_tokens": 277001,
+      "cached_tokens": 77056,
+      "cache_write_tokens": 0,
+      "output_tokens": 5616,
+      "reasoning_tokens": 0,
+      "estimated_calls": 0,
+      "unattributed_tokens": 0,
+      "total_tokens": 282617
+    },
+    "wall_time_seconds": 150.23560523499964,
+    "tool_call_count": 17,
+    "test_attempt_count": 1,
+    "completion_rejection_count": 0,
+    "reflection_count": 1,
+    "file_read_count": 7,
+    "shell_call_count": 1,
+    "plan_created_count": 0,
+    "plan_revision_count": 0,
+    "plan_step_completed_count": 0,
+    "planning_skipped": false,
+    "failure_classified_count": 0,
+    "recovery_selected_count": 0,
+    "recovery_replan_count": 0,
+    "recovery_exhausted_count": 0,
+    "skill_discovered_count": 0,
+    "skill_selected_count": 0,
+    "skill_loaded_count": 0,
+    "skill_reference_loaded_count": 0,
+    "mcp_tool_discovered_count": 0,
+    "mcp_tool_call_count": 0,
+    "mcp_tool_failure_count": 0
+  },
+  "grader_results": [
+    {
+      "grader_id": "behavior",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "test-change",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "full-suite",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": ".....................................................................    [100%]\n69 passed in 1.14s\n",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "skill-selection",
+      "kind": "skill_selection",
+      "passed": false,
+      "required": false,
+      "detail": "selected=[], expected_any=['repository-navigation', 'test-and-verify'], forbidden=[]",
+      "evidence": {
+        "selected_skills": []
+      }
+    }
+  ],
+  "trace_ref": "trials/custom-registry-preserve-overrides--baseline_react--r002/traces/custom-registry-preserve-overrides--baseline_react--r002_20260922_155900.jsonl",
+  "patch_ref": "trials/custom-registry-preserve-overrides--baseline_react--r002/patch.diff",
+  "final_state_ref": "trials/custom-registry-preserve-overrides--baseline_react--r002/final_state.json",
+  "error": null
+}

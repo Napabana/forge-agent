@@ -1,0 +1,586 @@
+{
+  "candidate_count": 7,
+  "candidates": [
+    {
+      "artifact_dir": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/skill-evolution-mine-20260921-114701/candidates/experience-recovery-workflow-cbbf464f",
+      "candidate_id": "candidate-1838ffad689395a0",
+      "candidate_store_path": null,
+      "candidate_store_reused": false,
+      "candidate_version": 1,
+      "content_hash": "7d363302a937b862762bd283baeb5e5552fcdf2bec11e33b6b415948b428e17d",
+      "evidence_count": 2,
+      "pattern_id": "pattern-10fb8c39cbbf464f",
+      "pattern_type": "recovery_workflow",
+      "promotion_evidence_ready": true,
+      "promotion_min_evidence_count": 2,
+      "skill_name": "experience-recovery-workflow-cbbf464f"
+    },
+    {
+      "artifact_dir": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/skill-evolution-mine-20260921-114701/candidates/experience-recovery-workflow-951d6405",
+      "candidate_id": "candidate-26e8af0b8808718b",
+      "candidate_store_path": null,
+      "candidate_store_reused": false,
+      "candidate_version": 1,
+      "content_hash": "93174857619ebc25c75b040bd7fcaf07bc8c42600bd7df40a2b71dfeab0c2a1a",
+      "evidence_count": 1,
+      "pattern_id": "pattern-3a3b991b951d6405",
+      "pattern_type": "recovery_workflow",
+      "promotion_evidence_ready": false,
+      "promotion_min_evidence_count": 2,
+      "skill_name": "experience-recovery-workflow-951d6405"
+    },
+    {
+      "artifact_dir": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/skill-evolution-mine-20260921-114701/candidates/experience-recovery-workflow-6946807c",
+      "candidate_id": "candidate-f52b870187b718b1",
+      "candidate_store_path": null,
+      "candidate_store_reused": false,
+      "candidate_version": 1,
+      "content_hash": "a4a37dc314171d2d3cf971dc18b2b61ad02d4337482c310cdd01fb3e84e9d17e",
+      "evidence_count": 1,
+      "pattern_id": "pattern-5047b0c06946807c",
+      "pattern_type": "recovery_workflow",
+      "promotion_evidence_ready": false,
+      "promotion_min_evidence_count": 2,
+      "skill_name": "experience-recovery-workflow-6946807c"
+    },
+    {
+      "artifact_dir": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/skill-evolution-mine-20260921-114701/candidates/experience-recovery-workflow-f06f6bad",
+      "candidate_id": "candidate-79c28281d85b7dc6",
+      "candidate_store_path": null,
+      "candidate_store_reused": false,
+      "candidate_version": 1,
+      "content_hash": "9750eb23cbc7cbebb09af8e37245ebf44cb708df56ee6a5ecbae2fb6378e17d9",
+      "evidence_count": 2,
+      "pattern_id": "pattern-591db3daf06f6bad",
+      "pattern_type": "recovery_workflow",
+      "promotion_evidence_ready": true,
+      "promotion_min_evidence_count": 2,
+      "skill_name": "experience-recovery-workflow-f06f6bad"
+    },
+    {
+      "artifact_dir": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/skill-evolution-mine-20260921-114701/candidates/experience-recovery-workflow-e79ca097",
+      "candidate_id": "candidate-f2005cf929664588",
+      "candidate_store_path": null,
+      "candidate_store_reused": false,
+      "candidate_version": 1,
+      "content_hash": "fb4e6e30a79c8742f8734e483514d14880bf7024dadee53901a4e636238554f8",
+      "evidence_count": 2,
+      "pattern_id": "pattern-7d481d35e79ca097",
+      "pattern_type": "recovery_workflow",
+      "promotion_evidence_ready": true,
+      "promotion_min_evidence_count": 2,
+      "skill_name": "experience-recovery-workflow-e79ca097"
+    },
+    {
+      "artifact_dir": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/skill-evolution-mine-20260921-114701/candidates/experience-recovery-workflow-c5f3f3b0",
+      "candidate_id": "candidate-ada75ffa1c16a023",
+      "candidate_store_path": null,
+      "candidate_store_reused": false,
+      "candidate_version": 1,
+      "content_hash": "fca927b647725e82dcfdfd43f565a48ff7c0cfbb699a92b317f8e3fd808ce1e4",
+      "evidence_count": 1,
+      "pattern_id": "pattern-9fdd1c8fc5f3f3b0",
+      "pattern_type": "recovery_workflow",
+      "promotion_evidence_ready": false,
+      "promotion_min_evidence_count": 2,
+      "skill_name": "experience-recovery-workflow-c5f3f3b0"
+    },
+    {
+      "artifact_dir": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/skill-evolution-mine-20260921-114701/candidates/experience-recovery-workflow-58e44909",
+      "candidate_id": "candidate-d3c3d5aca4bb314f",
+      "candidate_store_path": null,
+      "candidate_store_reused": false,
+      "candidate_version": 1,
+      "content_hash": "2ffecd967f09e882421907b593096bdafe138eaf8a7de5df954baa2684752244",
+      "evidence_count": 1,
+      "pattern_id": "pattern-deb681f558e44909",
+      "pattern_type": "recovery_workflow",
+      "promotion_evidence_ready": false,
+      "promotion_min_evidence_count": 2,
+      "skill_name": "experience-recovery-workflow-58e44909"
+    }
+  ],
+  "created_at": "2026-09-21T11:47:03.305212+00:00",
+  "eligible_trajectory_count": 3,
+  "evaluation_executed": false,
+  "input_traces": [
+    "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-a-20260921-084810_20260921_084810.jsonl",
+    "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+    "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-c-20260921-094855_20260921_094855.jsonl"
+  ],
+  "mining_strategy": "recovery_motif_v2",
+  "mode": "mine_only",
+  "pattern_count": 7,
+  "patterns": [
+    {
+      "evidence_count": 2,
+      "failure_categories": [
+        "tool_failure"
+      ],
+      "pattern_id": "pattern-10fb8c39cbbf464f",
+      "pattern_type": "recovery_workflow",
+      "recovery_strategies": [
+        "inspect"
+      ],
+      "signature": [
+        "failure:tool_failure",
+        "recovery:inspect",
+        "INSPECT"
+      ],
+      "source_trajectories": [
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-a-20260921-084810_20260921_084810",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-a-20260921-084810",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-a-20260921-084810_20260921_084810.jsonl",
+          "trace_sha256": "6a9fbf87da1aa28406c8b02ab3b3aa5ca6b35673fad89e58d62929a180832b02",
+          "trial_id": null,
+          "trial_result_ref": null
+        },
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-c-20260921-094855_20260921_094855",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-c-20260921-094855",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-c-20260921-094855_20260921_094855.jsonl",
+          "trace_sha256": "add5d5873b6596b8fcdd95de3e8a313331f2a7d8e736c7dcff01056137b668c8",
+          "trial_id": null,
+          "trial_result_ref": null
+        }
+      ]
+    },
+    {
+      "evidence_count": 1,
+      "failure_categories": [
+        "test_failure"
+      ],
+      "pattern_id": "pattern-3a3b991b951d6405",
+      "pattern_type": "recovery_workflow",
+      "recovery_strategies": [
+        "inspect"
+      ],
+      "signature": [
+        "failure:test_failure",
+        "recovery:inspect",
+        "TEST"
+      ],
+      "source_trajectories": [
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-b-20260921-093721_20260921_093721",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-b-20260921-093721",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+          "trace_sha256": "81c6855672f65769e74b60f7ab50ed60ebe10abf67b17f9e2eda076fe032cc6d",
+          "trial_id": null,
+          "trial_result_ref": null
+        }
+      ]
+    },
+    {
+      "evidence_count": 1,
+      "failure_categories": [
+        "test_failure"
+      ],
+      "pattern_id": "pattern-5047b0c06946807c",
+      "pattern_type": "recovery_workflow",
+      "recovery_strategies": [
+        "replan"
+      ],
+      "signature": [
+        "failure:test_failure",
+        "recovery:replan",
+        "REPLAN"
+      ],
+      "source_trajectories": [
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-b-20260921-093721_20260921_093721",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-b-20260921-093721",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+          "trace_sha256": "81c6855672f65769e74b60f7ab50ed60ebe10abf67b17f9e2eda076fe032cc6d",
+          "trial_id": null,
+          "trial_result_ref": null
+        }
+      ]
+    },
+    {
+      "evidence_count": 2,
+      "failure_categories": [
+        "no_progress"
+      ],
+      "pattern_id": "pattern-591db3daf06f6bad",
+      "pattern_type": "recovery_workflow",
+      "recovery_strategies": [
+        "change_approach"
+      ],
+      "signature": [
+        "failure:no_progress",
+        "recovery:change_approach",
+        "INSPECT"
+      ],
+      "source_trajectories": [
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-a-20260921-084810_20260921_084810",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-a-20260921-084810",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-a-20260921-084810_20260921_084810.jsonl",
+          "trace_sha256": "6a9fbf87da1aa28406c8b02ab3b3aa5ca6b35673fad89e58d62929a180832b02",
+          "trial_id": null,
+          "trial_result_ref": null
+        },
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-c-20260921-094855_20260921_094855",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-c-20260921-094855",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-c-20260921-094855_20260921_094855.jsonl",
+          "trace_sha256": "add5d5873b6596b8fcdd95de3e8a313331f2a7d8e736c7dcff01056137b668c8",
+          "trial_id": null,
+          "trial_result_ref": null
+        }
+      ]
+    },
+    {
+      "evidence_count": 2,
+      "failure_categories": [
+        "no_progress"
+      ],
+      "pattern_id": "pattern-7d481d35e79ca097",
+      "pattern_type": "recovery_workflow",
+      "recovery_strategies": [
+        "change_approach"
+      ],
+      "signature": [
+        "failure:no_progress",
+        "recovery:change_approach",
+        "PLAN"
+      ],
+      "source_trajectories": [
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-a-20260921-084810_20260921_084810",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-a-20260921-084810",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-a-20260921-084810_20260921_084810.jsonl",
+          "trace_sha256": "6a9fbf87da1aa28406c8b02ab3b3aa5ca6b35673fad89e58d62929a180832b02",
+          "trial_id": null,
+          "trial_result_ref": null
+        },
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-b-20260921-093721_20260921_093721",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-b-20260921-093721",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+          "trace_sha256": "81c6855672f65769e74b60f7ab50ed60ebe10abf67b17f9e2eda076fe032cc6d",
+          "trial_id": null,
+          "trial_result_ref": null
+        }
+      ]
+    },
+    {
+      "evidence_count": 1,
+      "failure_categories": [
+        "permission_denied"
+      ],
+      "pattern_id": "pattern-9fdd1c8fc5f3f3b0",
+      "pattern_type": "recovery_workflow",
+      "recovery_strategies": [
+        "change_approach"
+      ],
+      "signature": [
+        "failure:permission_denied",
+        "recovery:change_approach",
+        "TEST"
+      ],
+      "source_trajectories": [
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-b-20260921-093721_20260921_093721",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-b-20260921-093721",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+          "trace_sha256": "81c6855672f65769e74b60f7ab50ed60ebe10abf67b17f9e2eda076fe032cc6d",
+          "trial_id": null,
+          "trial_result_ref": null
+        }
+      ]
+    },
+    {
+      "evidence_count": 1,
+      "failure_categories": [
+        "test_failure"
+      ],
+      "pattern_id": "pattern-deb681f558e44909",
+      "pattern_type": "recovery_workflow",
+      "recovery_strategies": [
+        "replan"
+      ],
+      "signature": [
+        "failure:test_failure",
+        "recovery:replan",
+        "INSPECT"
+      ],
+      "source_trajectories": [
+        {
+          "acceptance_status": "passed",
+          "eval_task_id": null,
+          "run_id": "pr-practice-b-20260921-093721_20260921_093721",
+          "run_status": "success",
+          "suite_id": null,
+          "task_id": "pr-practice-b-20260921-093721",
+          "termination_reason": "completion_satisfied",
+          "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+          "trace_sha256": "81c6855672f65769e74b60f7ab50ed60ebe10abf67b17f9e2eda076fe032cc6d",
+          "trial_id": null,
+          "trial_result_ref": null
+        }
+      ]
+    }
+  ],
+  "promotion_min_evidence_count": 2,
+  "provider_calls": 0,
+  "repo": "/mnt/e/2806/forgeAgent/pr-test-agent-practice",
+  "schema_version": 1,
+  "trajectories": [
+    {
+      "acceptance_status": "passed",
+      "eligibility_reason": "success_with_acceptance_pass",
+      "eligible": true,
+      "failure_categories": [
+        "no_progress",
+        "tool_failure",
+        "no_progress"
+      ],
+      "loaded_skills": [],
+      "recovery_strategies": [
+        "change_approach",
+        "inspect",
+        "change_approach"
+      ],
+      "run_id": "pr-practice-a-20260921-084810_20260921_084810",
+      "run_status": "success",
+      "task_id": "pr-practice-a-20260921-084810",
+      "termination_reason": "completion_satisfied",
+      "tools": [
+        "shell",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "git_status",
+        "file_write",
+        "test",
+        "test",
+        "git_status"
+      ],
+      "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-a-20260921-084810_20260921_084810.jsonl",
+      "trace_sha256": "6a9fbf87da1aa28406c8b02ab3b3aa5ca6b35673fad89e58d62929a180832b02",
+      "workflow": [
+        "SHELL",
+        "INSPECT",
+        "FAIL:no_progress",
+        "RECOVER:change_approach",
+        "INSPECT",
+        "FAIL:tool_failure",
+        "RECOVER:inspect",
+        "INSPECT",
+        "TOOL",
+        "FAIL:no_progress",
+        "RECOVER:change_approach",
+        "PLAN",
+        "EDIT",
+        "TEST",
+        "TOOL",
+        "FINISH"
+      ]
+    },
+    {
+      "acceptance_status": "passed",
+      "eligibility_reason": "success_with_acceptance_pass",
+      "eligible": true,
+      "failure_categories": [
+        "no_progress",
+        "permission_denied",
+        "test_failure",
+        "test_failure",
+        "test_failure",
+        "test_failure"
+      ],
+      "loaded_skills": [],
+      "recovery_strategies": [
+        "change_approach",
+        "change_approach",
+        "inspect",
+        "replan",
+        "replan",
+        "replan"
+      ],
+      "run_id": "pr-practice-b-20260921-093721_20260921_093721",
+      "run_status": "success",
+      "task_id": "pr-practice-b-20260921-093721",
+      "termination_reason": "completion_satisfied",
+      "tools": [
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "git_status",
+        "file_read",
+        "shell",
+        "test",
+        "test",
+        "file_read",
+        "test",
+        "file_edit",
+        "test",
+        "file_view",
+        "file_edit",
+        "file_view",
+        "file_edit",
+        "file_view",
+        "test",
+        "test"
+      ],
+      "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+      "trace_sha256": "81c6855672f65769e74b60f7ab50ed60ebe10abf67b17f9e2eda076fe032cc6d",
+      "workflow": [
+        "INSPECT",
+        "TOOL",
+        "INSPECT",
+        "FAIL:no_progress",
+        "RECOVER:change_approach",
+        "PLAN",
+        "SHELL",
+        "FAIL:permission_denied",
+        "RECOVER:change_approach",
+        "TEST",
+        "FAIL:test_failure",
+        "RECOVER:inspect",
+        "TEST",
+        "FAIL:test_failure",
+        "RECOVER:replan",
+        "INSPECT",
+        "TEST",
+        "FAIL:test_failure",
+        "RECOVER:replan",
+        "REPLAN",
+        "EDIT",
+        "TEST",
+        "FAIL:test_failure",
+        "RECOVER:replan",
+        "INSPECT",
+        "REPLAN",
+        "EDIT",
+        "INSPECT",
+        "EDIT",
+        "INSPECT",
+        "TEST",
+        "FINISH"
+      ]
+    },
+    {
+      "acceptance_status": "passed",
+      "eligibility_reason": "success_with_acceptance_pass",
+      "eligible": true,
+      "failure_categories": [
+        "tool_failure",
+        "no_progress"
+      ],
+      "loaded_skills": [],
+      "recovery_strategies": [
+        "inspect",
+        "change_approach"
+      ],
+      "run_id": "pr-practice-c-20260921-094855_20260921_094855",
+      "run_status": "success",
+      "task_id": "pr-practice-c-20260921-094855",
+      "termination_reason": "completion_satisfied",
+      "tools": [
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_edit",
+        "file_write",
+        "file_write",
+        "search_text",
+        "file_read",
+        "file_edit",
+        "file_write",
+        "test",
+        "test",
+        "git_status",
+        "git_diff",
+        "file_read"
+      ],
+      "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-c-20260921-094855_20260921_094855.jsonl",
+      "trace_sha256": "add5d5873b6596b8fcdd95de3e8a313331f2a7d8e736c7dcff01056137b668c8",
+      "workflow": [
+        "INSPECT",
+        "FAIL:tool_failure",
+        "RECOVER:inspect",
+        "INSPECT",
+        "FAIL:no_progress",
+        "RECOVER:change_approach",
+        "INSPECT",
+        "PLAN",
+        "INSPECT",
+        "EDIT",
+        "TOOL",
+        "INSPECT",
+        "EDIT",
+        "TEST",
+        "TOOL",
+        "INSPECT",
+        "FINISH"
+      ]
+    }
+  ],
+  "trajectory_count": 3
+}

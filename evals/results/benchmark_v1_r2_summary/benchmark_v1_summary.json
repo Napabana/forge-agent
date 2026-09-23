@@ -1,0 +1,440 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "forge-agent-real-model-benchmark-v1-r2",
+  "suite_id": "forge-agent-benchmark-v1-r2",
+  "suite_path": "/mnt/e/2806/forgeAgent/forge-agent/evals/fixtures/coding_agent/benchmark_v1.json",
+  "suite_sha256": "f7ba1370fe1442773967ec4f65883be5cdc0a21f14ced28d1ea57ed1f384bd0a",
+  "task_count": 12,
+  "repetitions": 2,
+  "planned_trials": 48,
+  "variants": [
+    "baseline_react",
+    "planning_recovery_skills"
+  ],
+  "common_run_config": {
+    "provider": "openai",
+    "protocol": "auto",
+    "model": "deepseek-v4.1-flash",
+    "suite_sha256": "f7ba1370fe1442773967ec4f65883be5cdc0a21f14ced28d1ea57ed1f384bd0a",
+    "source_repository": "Napabana/pr-test",
+    "source_commit": "23019998f2e801e79dea59fd23fc49c58fc20038",
+    "max_steps": 30,
+    "budget_tokens": 60000,
+    "repo_map_mode": "incremental",
+    "mcp_enabled": false,
+    "mcp_server_ids": []
+  },
+  "primary_metric": {
+    "name": "Independent Acceptance Pass Rate",
+    "baseline": {
+      "observed_successes": 23,
+      "trials": 24,
+      "observed_success_rate": 0.9583333333333334
+    },
+    "full_p2": {
+      "observed_successes": 23,
+      "trials": 24,
+      "observed_success_rate": 0.9583333333333334
+    },
+    "absolute_delta": 0.0,
+    "absolute_delta_percentage_points": 0.0
+  },
+  "baseline": {
+    "trials": 24,
+    "successes": 23,
+    "observed_success_rate": 0.9583333333333334,
+    "successful_only": {
+      "steps": {
+        "count": 23,
+        "mean": 12.304347826086957,
+        "median": 11.0
+      },
+      "total_tokens": {
+        "count": 23,
+        "mean": 169601.95652173914,
+        "median": 119874.0
+      },
+      "wall_time_seconds": {
+        "count": 23,
+        "mean": 102.02284436539128,
+        "median": 92.96810172999994
+      }
+    },
+    "all_trials_audit": {
+      "steps": {
+        "count": 24,
+        "mean": 12.375,
+        "median": 11.5
+      },
+      "total_tokens": {
+        "count": 24,
+        "mean": 172758.04166666666,
+        "median": 124125.5
+      },
+      "wall_time_seconds": {
+        "count": 24,
+        "mean": 102.57825283741663,
+        "median": 93.17700107300016
+      }
+    },
+    "recovery_tasks": {
+      "trials": 6,
+      "successes": 6,
+      "observed_success_rate": 1.0
+    },
+    "skills": {
+      "should_trigger_trials": 20,
+      "selected_trials": 0,
+      "selected_rate": 0.0,
+      "loaded_trials": 0,
+      "loaded_rate": 0.0,
+      "selection_process_match_trials": 0,
+      "selection_process_match_rate": 0.0,
+      "should_not_trigger_trials": 4,
+      "false_trigger_trials": 0,
+      "false_trigger_rate": 0.0
+    },
+    "process_audit": {
+      "completion_rejections": {
+        "count": 24,
+        "mean": 0.0,
+        "median": 0.0
+      },
+      "plan_revisions": {
+        "count": 24,
+        "mean": 0.0,
+        "median": 0.0
+      },
+      "recoveries_selected": {
+        "count": 24,
+        "mean": 0.0,
+        "median": 0.0
+      },
+      "test_attempts": {
+        "count": 24,
+        "mean": 1.5833333333333333,
+        "median": 1.0
+      }
+    }
+  },
+  "full_p2": {
+    "trials": 24,
+    "successes": 23,
+    "observed_success_rate": 0.9583333333333334,
+    "successful_only": {
+      "steps": {
+        "count": 23,
+        "mean": 15.652173913043478,
+        "median": 16.0
+      },
+      "total_tokens": {
+        "count": 23,
+        "mean": 223880.86956521738,
+        "median": 169316.0
+      },
+      "wall_time_seconds": {
+        "count": 23,
+        "mean": 118.32192502556514,
+        "median": 105.90566949599997
+      }
+    },
+    "all_trials_audit": {
+      "steps": {
+        "count": 24,
+        "mean": 15.875,
+        "median": 16.0
+      },
+      "total_tokens": {
+        "count": 24,
+        "mean": 227780.91666666666,
+        "median": 185372.0
+      },
+      "wall_time_seconds": {
+        "count": 24,
+        "mean": 119.88999477774996,
+        "median": 112.39238129549994
+      }
+    },
+    "recovery_tasks": {
+      "trials": 6,
+      "successes": 6,
+      "observed_success_rate": 1.0
+    },
+    "skills": {
+      "should_trigger_trials": 20,
+      "selected_trials": 1,
+      "selected_rate": 0.05,
+      "loaded_trials": 1,
+      "loaded_rate": 0.05,
+      "selection_process_match_trials": 0,
+      "selection_process_match_rate": 0.0,
+      "should_not_trigger_trials": 4,
+      "false_trigger_trials": 0,
+      "false_trigger_rate": 0.0
+    },
+    "process_audit": {
+      "completion_rejections": {
+        "count": 24,
+        "mean": 0.0,
+        "median": 0.0
+      },
+      "plan_revisions": {
+        "count": 24,
+        "mean": 0.0,
+        "median": 0.0
+      },
+      "recoveries_selected": {
+        "count": 24,
+        "mean": 0.8333333333333334,
+        "median": 1.0
+      },
+      "test_attempts": {
+        "count": 24,
+        "mean": 1.5416666666666667,
+        "median": 1.0
+      }
+    }
+  },
+  "paired_outcomes": {
+    "full_p2_wins": 1,
+    "full_p2_losses": 1,
+    "ties": 22
+  },
+  "per_task": {
+    "subtract-regression-recovery": {
+      "tags": [
+        "single-file-bug",
+        "recovery",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    },
+    "batch-boundary-recovery": {
+      "tags": [
+        "single-file-bug",
+        "recovery",
+        "tests",
+        "change-approach",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    },
+    "divide-float-regression-recovery": {
+      "tags": [
+        "single-file-bug",
+        "recovery",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    },
+    "square-operation-feature": {
+      "tags": [
+        "single-file-feature",
+        "feature",
+        "skill-should-not-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    },
+    "registry-contains-feature": {
+      "tags": [
+        "single-file-feature",
+        "feature",
+        "skill-should-not-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    },
+    "runtime-policy-mode-live": {
+      "tags": [
+        "navigation",
+        "configuration",
+        "multi-file",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    },
+    "power-operation-integration": {
+      "tags": [
+        "multi-file",
+        "feature",
+        "replan-candidate",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 1,
+        "observed_success_rate": 0.5
+      },
+      "absolute_delta": -0.5
+    },
+    "registry-case-insensitive": {
+      "tags": [
+        "navigation",
+        "feature",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    },
+    "policy-deny-list": {
+      "tags": [
+        "multi-file",
+        "feature",
+        "policy",
+        "tests",
+        "replan-candidate",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    },
+    "batch-stop-on-error": {
+      "tags": [
+        "multi-file",
+        "feature",
+        "change-approach",
+        "replan-candidate",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 1,
+        "observed_success_rate": 0.5
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.5
+    },
+    "custom-registry-preserve-overrides": {
+      "tags": [
+        "multi-file",
+        "navigation",
+        "replan-candidate",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    },
+    "multiply-completion-guard": {
+      "tags": [
+        "single-file-bug",
+        "completion-guard",
+        "tests",
+        "skill-should-trigger"
+      ],
+      "baseline": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "full_p2": {
+        "trials": 2,
+        "successes": 2,
+        "observed_success_rate": 1.0
+      },
+      "absolute_delta": 0.0
+    }
+  },
+  "claim_boundary": "Observed outcomes from one frozen, project-authored 12-task suite with two repetitions per architecture variant. They are not a stable population pass@1 estimate, do not use an LLM judge, and should not be generalized beyond this benchmark without additional evaluation. Successful-only efficiency metrics exclude failed trials; all-trial audit metrics are retained separately."
+}

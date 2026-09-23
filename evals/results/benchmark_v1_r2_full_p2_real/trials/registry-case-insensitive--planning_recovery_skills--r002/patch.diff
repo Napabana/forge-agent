@@ -1,0 +1,107 @@
+diff --git a/src/calc_core/registry.py b/src/calc_core/registry.py
+index 7994efb..fac1e3f 100644
+--- a/src/calc_core/registry.py
++++ b/src/calc_core/registry.py
+@@ -7,6 +7,16 @@ from .errors import UnknownOperationError
+ Operation = Callable[..., object]
+ 
+ 
++def normalize_operation_name(name: str) -> str:
++    """Return the canonical key for ``name``.
++
++    Operation names are matched case-insensitively and ignore surrounding
++    whitespace, so ``"ADD"``, ``" add "`` and ``"add"`` all refer to the
++    same operation.
++    """
++    return name.strip().lower()
++
++
+ class OperationRegistry:
+     """Store operations by name and resolve them back."""
+ 
+@@ -14,15 +24,16 @@ class OperationRegistry:
+         self._operations: Dict[str, Operation] = {}
+ 
+     def register(self, name: str, operation: Operation) -> None:
+-        """Register ``operation`` under ``name``."""
+-        self._operations[name] = operation
++        """Register ``operation`` under ``name`` (normalized)."""
++        self._operations[normalize_operation_name(name)] = operation
+ 
+     def resolve(self, name: str) -> Operation:
+         """Return the operation registered under ``name``.
+ 
++        Lookup is case-insensitive and ignores surrounding whitespace.
+         Raises UnknownOperationError if no such operation exists.
+         """
+         try:
+-            return self._operations[name]
++            return self._operations[normalize_operation_name(name)]
+         except KeyError:
+             raise UnknownOperationError(name) from None
+\ No newline at end of file
+diff --git a/src/calc_core/service.py b/src/calc_core/service.py
+index 90654ae..834e776 100644
+--- a/src/calc_core/service.py
++++ b/src/calc_core/service.py
+@@ -9,7 +9,7 @@ from .errors import (
+     OperationDisabledError,
+ )
+ from .policy import DEFAULT_POLICY, OperationPolicy
+-from .registry import OperationRegistry
++from .registry import OperationRegistry, normalize_operation_name
+ 
+ 
+ class CalculatorService:
+@@ -44,7 +44,7 @@ class CalculatorService:
+     def execute(self, operation_name: str, *args: object) -> object:
+         """Execute the operation registered under ``operation_name``."""
+         operation = self.registry.resolve(operation_name)
+-        if not self.policy.is_operation_enabled(operation_name):
++        if not self.policy.is_operation_enabled(normalize_operation_name(operation_name)):
+             raise OperationDisabledError(operation_name)
+         return operation(*args)
+ 
+diff --git a/tests/test_calc_core.py b/tests/test_calc_core.py
+index 1b00ac0..354abd8 100644
+--- a/tests/test_calc_core.py
++++ b/tests/test_calc_core.py
+@@ -65,6 +65,20 @@ def test_registry_unknown_name_raises_unknown_operation_error():
+         registry.resolve("missing")
+ 
+ 
++def test_registry_lookup_is_case_insensitive_and_ignores_whitespace():
++    registry = OperationRegistry()
++    registry.register("add", add)
++    for variant in ("add", "ADD", "Add", " add ", "\tADD\n"):
++        assert registry.resolve(variant) is add
++    # Registration also normalizes, whichever case/spacing is used.
++    registry.register("  MULTIPLY  ", multiply)
++    assert registry.resolve("multiply") is multiply
++    # Unknown names still raise, carrying the original spelling.
++    with pytest.raises(UnknownOperationError) as exc_info:
++        registry.resolve("  Nope  ")
++    assert exc_info.value.name == "  Nope  "
++
++
+ # --- service ---------------------------------------------------------------
+ 
+ 
+@@ -83,6 +97,17 @@ def test_service_execute_dispatches_by_name():
+     assert service.execute("clamp", 42, 0, 10) == 10
+ 
+ 
++def test_service_execute_is_case_insensitive_and_ignores_whitespace():
++    service = CalculatorService()
++    assert service.execute("ADD", 2, 3) == 5
++    assert service.execute(" add ", 2, 3) == 5
++    assert service.execute("SuBtRaCt", 5, 3) == 2
++    # Unknown operations still raise UnknownOperationError, carrying the name.
++    with pytest.raises(UnknownOperationError) as exc_info:
++        service.execute("  Nope  ", 1, 2)
++    assert exc_info.value.name == "  Nope  "
++
++
+ def test_service_execute_unknown_operation_raises_unknown_operation_error():
+     service = CalculatorService()
+     with pytest.raises(UnknownOperationError):

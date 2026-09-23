@@ -1,0 +1,15 @@
+diff --git a/src/calc_core/registry.py b/src/calc_core/registry.py
+index 7994efb..7f63308 100644
+--- a/src/calc_core/registry.py
++++ b/src/calc_core/registry.py
+@@ -17,6 +17,10 @@ class OperationRegistry:
+         """Register ``operation`` under ``name``."""
+         self._operations[name] = operation
+ 
++    def contains(self, name: str) -> bool:
++        """Return whether an operation is registered under exactly ``name``."""
++        return name in self._operations
++
+     def resolve(self, name: str) -> Operation:
+         """Return the operation registered under ``name``.
+ 

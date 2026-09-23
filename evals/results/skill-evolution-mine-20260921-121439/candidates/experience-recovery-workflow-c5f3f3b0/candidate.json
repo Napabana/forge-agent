@@ -1,0 +1,29 @@
+{
+  "candidate_id": "candidate-edde505db6ac9158",
+  "candidate_version": 1,
+  "content_hash": "74e80b078d180e2153d7507f58c69220fe58b49d151ab6a24244b30f035985ec",
+  "created_at": "2026-09-21T12:14:40.994738+00:00",
+  "description": "Use after structured recovery classifies permission_denied and selects change_approach; the observed next semantic action is TEST.",
+  "instructions": "# Recovery Motif\n\nUse only when the current structured failure classification matches this observed motif.\nObserved failure category: `permission_denied`.\nObserved recovery strategy: `change_approach`.\nSource evidence: 1 accepted trajectory/trajectories.\n\nRecovery:\n1. Do not retry the failed action unchanged.\n2. Change approach instead of repeating the action that produced no semantic progress.\n3. Run the narrowest relevant verification after the latest change.\n\nDo not treat a successful edit as completion by itself.\nKeep normal Forge permission, tool, acceptance, and verification boundaries unchanged.",
+  "parent_skill_hash": null,
+  "parent_skill_name": null,
+  "parent_skill_version": null,
+  "pattern_id": "pattern-9fdd1c8fc5f3f3b0",
+  "pattern_type": "recovery_workflow",
+  "skill_name": "experience-recovery-workflow-c5f3f3b0",
+  "source_trajectories": [
+    {
+      "acceptance_status": "passed",
+      "eval_task_id": null,
+      "run_id": "pr-practice-b-20260921-093721_20260921_093721",
+      "run_status": "success",
+      "suite_id": null,
+      "task_id": "pr-practice-b-20260921-093721",
+      "termination_reason": "completion_satisfied",
+      "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+      "trace_sha256": "81c6855672f65769e74b60f7ab50ed60ebe10abf67b17f9e2eda076fe032cc6d",
+      "trial_id": null,
+      "trial_result_ref": null
+    }
+  ]
+}

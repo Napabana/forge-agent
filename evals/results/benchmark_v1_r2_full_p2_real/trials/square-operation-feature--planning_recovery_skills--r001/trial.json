@@ -1,0 +1,79 @@
+{
+  "suite_id": "forge-agent-benchmark-v1-r2",
+  "task_id": "square-operation-feature",
+  "trial_id": "square-operation-feature--planning_recovery_skills--r001",
+  "variant": "planning_recovery_skills",
+  "repetition": 1,
+  "execution_status": "executed",
+  "evidence_kind": "real_model",
+  "real_model_executed": true,
+  "run_status": "success",
+  "termination_reason": "completion_satisfied",
+  "acceptance_status": "passed",
+  "success": true,
+  "metrics": {
+    "steps": 22,
+    "total_tokens": 299790,
+    "provider_usage": {
+      "llm_calls": 22,
+      "input_tokens": 294948,
+      "cached_tokens": 96128,
+      "cache_write_tokens": 0,
+      "output_tokens": 4842,
+      "reasoning_tokens": 0,
+      "estimated_calls": 0,
+      "unattributed_tokens": 0,
+      "total_tokens": 299790
+    },
+    "wall_time_seconds": 159.03402752599868,
+    "tool_call_count": 18,
+    "test_attempt_count": 4,
+    "completion_rejection_count": 0,
+    "reflection_count": 0,
+    "file_read_count": 7,
+    "shell_call_count": 1,
+    "plan_created_count": 1,
+    "plan_revision_count": 0,
+    "plan_step_completed_count": 2,
+    "planning_skipped": false,
+    "failure_classified_count": 2,
+    "recovery_selected_count": 2,
+    "recovery_replan_count": 0,
+    "recovery_exhausted_count": 0,
+    "skill_discovered_count": 3,
+    "skill_selected_count": 0,
+    "skill_loaded_count": 0,
+    "skill_reference_loaded_count": 0,
+    "mcp_tool_discovered_count": 0,
+    "mcp_tool_call_count": 0,
+    "mcp_tool_failure_count": 0
+  },
+  "grader_results": [
+    {
+      "grader_id": "behavior",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "skill-selection",
+      "kind": "skill_selection",
+      "passed": true,
+      "required": false,
+      "detail": "selected=[], expected_any=[], forbidden=['bug-fix', 'repository-navigation', 'test-and-verify']",
+      "evidence": {
+        "selected_skills": []
+      }
+    }
+  ],
+  "trace_ref": "trials/square-operation-feature--planning_recovery_skills--r001/traces/square-operation-feature--planning_recovery_skills--r001_20260922_160722.jsonl",
+  "patch_ref": "trials/square-operation-feature--planning_recovery_skills--r001/patch.diff",
+  "final_state_ref": "trials/square-operation-feature--planning_recovery_skills--r001/final_state.json",
+  "error": null
+}

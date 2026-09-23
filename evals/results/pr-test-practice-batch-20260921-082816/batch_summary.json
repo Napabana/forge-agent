@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "batch_id": "pr-test-practice-batch-20260921-082816",
+  "repo": "/mnt/e/2806/forgeAgent/pr-test-agent-practice",
+  "base_branch": "forge-p2-mcp-demo",
+  "base_head": "0de0c7cc8d947999900e65c2c25b30c9ebfa3af1",
+  "model": "deepseek-v4.1-flash",
+  "tasks": {
+    "A": {
+      "status": "success",
+      "acceptance_status": "passed",
+      "acceptance_error": null,
+      "termination_reason": "completion_satisfied",
+      "resource_reason": null,
+      "steps": 21,
+      "tokens": 243664,
+      "elapsed": 258.56945116099814,
+      "trace_path": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-a-20260921-084810_20260921_084810.jsonl",
+      "trajectory_eligible": true,
+      "trajectory_eligibility_reason": "success_with_acceptance_pass",
+      "summary": "Task complete. Here's a summary of what I found and did.\n\n## Findings\nThe refactor was already largely in place in the working tree:\n- `calculator.py` — already a thin compatibility facade re-exporting the five ops from `calc_core.operations`.\n- `src/calc_core/operations.py` — owns the 5 implementations (preserving `ZeroDivisionError` and `ValueError(\"lower must not exceed upper\")`).\n- `src/calc_core/errors.py` — `CalculatorError` / `UnknownOperationError` (carries `.name`).\n- `src/calc_core/registry.py` — `OperationRegistry.register/resolve`, converting `KeyError` into `UnknownOperationError`.\n- `src/calc_core/service.py` — `CalculatorService` with all 5 defaults registered and `execute(name, *args)`.\n- `pytest.ini` — `pythonpath = .` and `src`.\n- `tests/test_calc_core.py` — focused architecture tests.\n\nThe single missing piece was **`src/calc_core/__init__.py`**, which the focused tests import from (`from calc_core import ...`).\n\n## Change made\nCreated `src/calc_core/__init__.py` re-exporting the public API: the five operations, `operations` module, `CalculatorError`, `UnknownOperationError`, `OperationRegistry`, and `CalculatorService`, with an explicit `__all__`.\n\n## Verification\n- Focused architecture tests: `tests/test_calc_core.py` → **12 passed**.\n- Full regression suite: `tests/` → **28 passed** (no existing tests weakened or removed).\n\nThe frozen contract holds (public facade, divide-by-zero, clamp bounds, unknown-op → `UnknownOperationError`), and no Git commit was created.",
+      "error": null,
+      "finished_at": "2026-09-21T08:52:29.297246+00:00"
+    },
+    "B": {
+      "status": "success",
+      "acceptance_status": "passed",
+      "acceptance_error": null,
+      "termination_reason": "completion_satisfied",
+      "resource_reason": null,
+      "steps": 31,
+      "tokens": 381712,
+      "elapsed": 692.1883284540017,
+      "trace_path": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+      "trajectory_eligible": true,
+      "trajectory_eligibility_reason": "success_with_acceptance_pass",
+      "summary": "All tests pass. Here's my summary.\n\n## Summary\n\n**Root cause:** `tests/test_batch_execution.py` had a naming mismatch in the validation test. The `@pytest.mark.parametrize` decorator declared the argument as `\"batch_request\"`, but the test function signature was `def test_execute_batch_invalid_request_is_captured_per_item(request)`. This caused a pytest collection error (unrecognized parametrize argument) that aborted the entire test session before any test could run.\n\n**Fix (minimal, 1 file):** Aligned the names in `tests/test_batch_execution.py` by naming both the parametrize argument and the function parameter `batch_request` (avoiding shadowing pytest's built-in `request` fixture):\n- `@pytest.mark.parametrize(\"batch_request\", [...])`\n- `def test_execute_batch_invalid_request_is_captured_per_item(batch_request):`\n\n**Verification of the implementation contract:** `CalculatorService.execute_batch` (in `src/calc_core/service.py`) already satisfied the frozen contract — validated by the passing focused tests:\n- Preserves input order and returns one result per item (lists, tuples, and arbitrary iterables).\n- Success items: `{\"ok\": True, \"value\": ...}`.\n- Error items: `{\"ok\": False, \"error\": {\"type\": ..., \"message\": ...}}`.\n- One failing request never aborts later ones.\n- Per-item error types: `UnknownOperationError` (unknown op), `ZeroDivisionError` (divide by zero), `InvalidRequestError` (malformed request, added in `src/calc_core/errors.py` and re-exported from `calc_core`).\n\n**Test results:**\n- Focused: `tests/test_batch_execution.py` — 19 passed.\n- Full regression: `tests/` — 47 passed, 0 failed (`test_calculator.py`, `test_calc_core.py`, `test_policy_runtime.py`, and the batch tests). The existing `execute` single-op API and the `calculator.py` Task A facade were not touched and remain green.\n\nNo Git commit was created.",
+      "error": null,
+      "finished_at": "2026-09-21T09:48:53.887357+00:00"
+    },
+    "C": {
+      "status": "success",
+      "acceptance_status": "passed",
+      "acceptance_error": null,
+      "termination_reason": "completion_satisfied",
+      "resource_reason": null,
+      "steps": 32,
+      "tokens": 602226,
+      "elapsed": 488.3608755719979,
+      "trace_path": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-c-20260921-094855_20260921_094855.jsonl",
+      "trajectory_eligible": true,
+      "trajectory_eligibility_reason": "success_with_acceptance_pass",
+      "summary": "All work is complete. Final summary:\n\n## Task C — Runtime Operation Policy: Complete\n\n### Changes made\n\n**`src/calc_core/errors.py`** — Added two new exception types, both subclassing `CalculatorError`:\n- `OperationDisabledError(name)` — carries `.name`, message `\"operation disabled: <name>\"`.\n- `BatchSizeExceededError(size, max_batch_size)` — carries `.size` and `.max_batch_size`.\n\n**`src/calc_core/policy.py`** (new) — Frozen `OperationPolicy` dataclass (no module-level mutable state):\n- `enabled_operations: frozenset[str] | None = None` (None → all enabled)\n- `max_batch_size: int | None = None` (None → no limit)\n- `strict_validation: bool = False`\n- Helper methods `is_operation_enabled(name)` and `check_batch_size(size)` (equal-to-limit allowed).\n\n**`src/calc_core/service.py`** — `CalculatorService` now takes an optional `policy` (defaults to `DEFAULT_POLICY`, preserving Task A/B behavior):\n- `execute()` raises `OperationDisabledError` for disabled operations (resolution happens first, so unknown operations still raise `UnknownOperationError`).\n- `execute_batch()` checks `max_batch_size` before processing → raises `BatchSizeExceededError` deterministically; disabled operations are captured per item as the existing structured error result.\n- `_validate_request` enforces strict mode: extra keys become a per-item `InvalidRequestError`; base Task B validation stays deterministic in all modes.\n\n**`src/calc_core/__init__.py`** — Re-exports `OperationPolicy`, `OperationDisabledError`, `BatchSizeExceededError`.\n\n**`tests/test_policy.py`** (new, 21 tests) — Covers default compatibility, disabled operations (execute + batch per-item), `max_batch_size` boundary/generators/empty batches, strict validation, policy immutability, and instance-vs-module state.\n\n### Verification\n- Focused: `tests/test_policy.py` → **21 passed**\n- Full suite: `tests/` → **68 passed** (no regressions to Task A/B; no existing tests weakened)\n\nNo Git commit was created.",
+      "error": null,
+      "finished_at": "2026-09-21T09:57:03.523073+00:00"
+    }
+  },
+  "eligible_traces_for_p2_5": [
+    "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-a-20260921-084810_20260921_084810.jsonl",
+    "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-b-20260921-093721_20260921_093721.jsonl",
+    "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-c-20260921-094855_20260921_094855.jsonl"
+  ],
+  "total_steps": 84,
+  "total_tokens": 1227602,
+  "total_elapsed": 1439.1186551869978,
+  "updated_at": "2026-09-21T09:57:04.721971+00:00"
+}
