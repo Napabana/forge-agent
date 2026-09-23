@@ -775,3 +775,18 @@ pytest -q
 - 正式 R2 输出使用 `benchmark_v1_r2_*` 路径，不覆盖 pilot 的 `benchmark_v1_baseline_real`。
 - 正式 R2 尚未由 ChatGPT 触发任何 Provider；必须由用户人工启动 runner。
 - 更新日志：`docs/changes/2026-09-22/Forge-Agent-Benchmark-V1.md`。
+
+
+### 最后交接（2026-09-23，Benchmark V1 R2 正式完成）
+
+- 正式 Benchmark V1 R2 已完成全部 48 个 real-model trials，并 push 聚合结果。
+- Frozen identity：suite_id=`forge-agent-benchmark-v1-r2`，suite SHA=`f7ba1370fe1442773967ec4f65883be5cdc0a21f14ced28d1ea57ed1f384bd0a`，source=`Napabana/pr-test@23019998f2e801e79dea59fd23fc49c58fc20038`，model=`deepseek-v4.1-flash`，max_steps=30，budget_tokens=60000，Repo Map=incremental，MCP=off。
+- Primary metric：baseline_react 23/24=95.8%；planning_recovery_skills 23/24=95.8%；absolute delta=0.0 pp；paired outcomes Full P2 1 win / 1 loss / 22 ties。
+- Recovery-tagged tasks 两边均 6/6。
+- Successful-trial efficiency：Full P2 相对 Baseline mean steps 12.30→15.65（约 +27.2%）；mean total tokens 169,602→223,881（约 +32.0%）；mean wall time 102.02s→118.32s（约 +16.0%）。
+- Full P2 process：24/24 创建 plan、累计 61 个 plan steps、0 plan revision；failure_classified/recovery_selected 共 20，其中 14 次发生在非 recovery-tagged trial；recovery_replan=0。
+- Skills：should-trigger 20 trials，仅 selected/loaded 1 次（5%），且该次加载 bug-fix 未匹配期望 repository-navigation/test-and-verify，process match=0/20；should-not-trigger false-trigger=0/4。
+- 两个正式失败均为 prompt 要求的 regression-test change 未满足，不是 Provider/network/runner infrastructure failure；整轮 48 trials 没有 infrastructure failure。
+- 结论：当前 Full P2 没有在该 frozen suite 上提升 observed acceptance，且增加执行成本；下一阶段应优化 planning gating、recovery trigger/classification 与 skill selection/adoption，不得将本轮包装成“P2 提升成功率”。
+- 正式结果：`evals/results/benchmark_v1_r2_summary/benchmark_v1_summary.{json,md}`。
+- Evidence Pack 与 README 已更新为真实结果；更新日志：`docs/changes/2026-09-22/Forge-Agent-Benchmark-V1.md`。
