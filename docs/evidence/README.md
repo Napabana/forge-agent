@@ -28,7 +28,7 @@ python -m evals.verify_evidence_pack
 | MCP external capability 接入现有 Tool lifecycle | Implementation Fact / Local Validation Pending | `mcp_integration/manager.py`, `mcp_integration/adapter.py`, `mcp_integration/registry.py`, `tests/test_mcp_integration.py` | `python -m pytest -q tests/test_mcp_integration.py` | 已实现 official SDK v2 client、stdio/Streamable HTTP transport adapter、namespace/schema/effect/permission/Trace/lifecycle 接线；本轮尚未记录用户本地 pytest 通过 | 不能写成 MCP regression 已通过、真实外部 MCP 成功率或对 coding success 的提升 |
 | cancellation 为 cooperative cancellation | Implementation Fact + Regression | `agent/core.py`, `harness/executor.py`, `entry/api.py`, `tests/test_tool_lifecycle_p0_2.py`, `tests/test_failure_harness.py` | 同上 | 在 Provider / lifecycle 边界检查 cancel，并返回明确终止语义 | 不会强杀任意正在执行的同步 Provider/Tool 调用 |
 | Failure Harness 覆盖 provider/hook/permission/tool/prepare/cancel/completion/acceptance/Trace 故障合同 | Deterministic Offline Regression | `tests/test_failure_harness.py`, `tests/test_failure_harness_isolate.py` | `pytest tests/test_failure_harness.py tests/test_failure_harness_isolate.py -q` | 走生产 `ExecutionRunner → Agent → ToolExecutor` 路径注入故障 | 这是 contract regression，不是 Agent success rate |
-| Coding Agent Evaluation Harness 提供 task → isolated trial → production Runner → deterministic graders → artifact/report 的统一 A/B 外壳 | Implementation Fact + Deterministic Offline Regression | `evals/coding_agent/`, `evals/fixtures/coding_agent/suite.json`, `tests/test_coding_agent_eval.py` | `pytest tests/test_coding_agent_eval.py -q` | 8-case suite、Trial/Grader/Report、no-overwrite、not-executed 与 fake-evidence boundary 已有离线回归；用户本地确认相关回归及全量 pytest 通过 | 真实模型 baseline 尚未执行；不能写 Forge Agent success rate、pass@1、token 或 latency 对比 |
+| Coding Agent Evaluation Harness 提供 frozen real-repository task → isolated trial → production Runner → deterministic acceptance → artifact/report 的统一 A/B 外壳 | Implementation Fact + Deterministic Regression + Real-model Small Sample | `evals/coding_agent/`, `evals/fixtures/coding_agent/benchmark_v1.json`, `evals/results/benchmark_v1_r2_*/`, `tests/test_coding_agent_benchmark_v1.py` | `python scripts/report_coding_agent_benchmark_v1.py ...`（离线聚合） | V1 R2：12 tasks × 2 reps × 2 variants = 48 real-model trials；baseline/full 均 23/24 = 95.8%；paired outcomes 1 win / 1 loss / 22 ties | 项目自建单仓库小样本，不是稳定 pass@1；Full P2 未提升 success rate，且成功 trial 的 steps/tokens/wall-time 更高 |
 | Trace v2 提供 schema v2、run/step/tool correlation、termination/acceptance/delivery 记录和磁盘边界脱敏 | Implementation Fact + Regression | `agent/event_log.py`, `agent/trace_v2.py`, `tests/test_trace_v2.py` | `pytest tests/test_trace_v2.py -q` | append-only audit trace 可 replay 读取 | EventLog 不是确定性执行 replay；本地 token breakdown 是估算 |
 | Context Compaction 保留 canonical history，模型视图支持 deterministic pruning + structured semantic compaction + checkpoint lineage | Implementation Fact + Frozen Benchmark + Small Sample | `context/compaction.py`, `context/tool_pruning.py`, `context/structured_compaction.py`, B1/B2 结果 | `python -m evals.verify_evidence_pack` | B1 frozen replay 中 hybrid `7/7`，hard-constraint / recent-raw recall 均 `1.0` | B1 semantic 是 fixture；B2 只有 9 个真实模型 run，不能宣称稳定总体收益 |
 | Query-aware Repo Map 改善冻结 commit-history 检索排序 | Frozen Offline Benchmark | `context/repo_map.py`, `evals/repo_map_ablation.py`, `evals/results/repo_map_ablation/report.json` | `python -m evals.verify_evidence_pack` | 12-case：MRR `0.096954 → 0.318750`；budget target recall `0.364914 → 0.635251` | 只代表 12 个冻结 commit-history case，不代表 coding task success rate |
@@ -44,6 +44,48 @@ python -m evals.verify_evidence_pack
 | LLMBackend / router 支持 Anthropic、OpenAI 和 OpenAI-compatible provider 接入 | Implementation Fact | `llm/base.py`, `llm/router.py`, backend adapters/tests | 检查源码与 adapter tests | provider/protocol 统一到 `LLMBackend` | 不能据此声称所有 provider 都做过相同规模真实 E2E 验证 |
 | Git Worktree 支持隔离工作区的创建、检查、保留/清理 | Implementation Fact + Regression | `runtime/worktree.py`, `agent/orchestrate.py`, `tests/test_worktree_session.py`, `tests/test_orchestrate.py` | 对应 pytest | 能隔离 checkout/workspace 生命周期 | Git Worktree 不是安全沙箱 |
 | Docker Runtime 有资源、网络和挂载边界 | Implementation Fact + Regression | `tools/runtime.py`, `tests/test_sandbox.py` | `pytest tests/test_sandbox.py -q` | 默认 1 GiB、2 CPU、`--network none`，并支持只读根/受控挂载 | 不能写“完全安全”；真实 PR #5 案例没有同时启用 Docker isolate |
+
+### Coding Agent Benchmark V1 R2 — Real-model A/B
+
+证据：`evals/fixtures/coding_agent/benchmark_v1.json`、`evals/results/benchmark_v1_r2_baseline_real/`、`evals/results/benchmark_v1_r2_full_p2_real/`、`evals/results/benchmark_v1_r2_summary/benchmark_v1_summary.json`。
+
+协议：
+
+- source 固定为 `Napabana/pr-test@23019998f2e801e79dea59fd23fc49c58fc20038`；
+- suite=`forge-agent-benchmark-v1-r2`，SHA-256=`f7ba1370fe1442773967ec4f65883be5cdc0a21f14ced28d1ea57ed1f384bd0a`；
+- 12 tasks × 2 repetitions × 2 architecture variants = 48 real-model trials；
+- model=`deepseek-v4.1-flash`，provider=`openai`；
+- 两边共同固定 `max_steps=30`、Context TokenBudget=`60000`、Repo Map=`incremental`、MCP=off；
+- baseline=`planning off / recovery off / skills false`；
+- Full P2=`planning always / structured recovery / skills true`；
+- primary metric 为 independent deterministic acceptance，不使用 LLM judge。
+
+主结果：
+
+- baseline：`23/24 = 95.8%`；
+- Full P2：`23/24 = 95.8%`；
+- absolute delta=`0.0 pp`；
+- paired outcomes：Full P2 `1 win / 1 loss / 22 ties`；
+- recovery-tagged tasks 两边均 `6/6`。
+
+successful-trial efficiency：
+
+- steps mean：`12.30 → 15.65`，Full P2 约 `+27.2%`；
+- total tokens mean：`169,602 → 223,881`，约 `+32.0%`；
+- wall time mean：`102.02s → 118.32s`，约 `+16.0%`。
+
+过程审计：
+
+- Full P2 `24/24` trial 创建 plan，累计完成 `61` 个 plan steps，但 `0` 次 plan revision；
+- structured recovery 共分类并选择 `20` 次，其中 recovery-tagged trials 为 `6` 次，非 recovery-tagged trials 为 `14` 次；`recovery_replan=0`、`recovery_exhausted=0`；
+- Skill should-trigger 共 `20` trials，只 selected/loaded `1/20 = 5%`；该次加载的是 `bug-fix`，未匹配该 task 期望的 `repository-navigation/test-and-verify`，process match=`0/20`；
+- should-not-trigger `4` trials false-trigger=`0/4`。
+
+解释边界：这组结果说明 P2 Planning/Recovery/Skills 的运行时机制确实进入真实 production-path trial，但**当前组合策略没有在这份冻结 suite 上提高 observed acceptance，并带来明显执行开销**。它不能被写成“P2 提升成功率”；更合理的工程结论是后续需要优化 planning gating、recovery trigger/classification 与 skill selection/adoption。
+
+机器校验锚点：**Benchmark V1 R2: 48 real-model trials; baseline 23/24; Full P2 23/24; delta 0.0 pp**  
+机器校验锚点：**Full P2 successful-trial overhead: steps +27.2%; tokens +32.0%; wall time +16.0%**  
+机器校验锚点：**Full P2 Skills: loaded 1/20 should-trigger trials; process match 0/20**
 
 ## 正式数字与适用边界
 
@@ -241,11 +283,11 @@ real-model final gate 保留 TARGET / SHOULD_TRIGGER / SHOULD_NOT_TRIGGER / NON_
 | ReAct coding Agent | KEEP | “实现同步 ReAct coding Agent 主循环，覆盖 ToolCall、Observation、Reflection 与 completion guard。” | `agent/core.py` + completion tests；不要加总体成功率 |
 | 多 Provider abstraction | REWORD | “抽象统一 `LLMBackend`，路由 Anthropic、OpenAI 与 OpenAI-compatible provider/protocol。” | `llm/base.py`, `llm/router.py`；不要说所有 provider 都做过同等 E2E |
 | Tool Calling | KEEP | “统一 Tool schema/validation、Hook、Permission、execution 与 Observation 生命周期。” | executor/lifecycle tests |
-| Structured Planning | KEEP | “实现 typed ExecutionPlan/PlanStep/PlanRevision，并将 current plan 作为 runtime context 注入单一 Agent loop，支持 off/auto/always 与 Trace lifecycle。” | deterministic regression 已通过；没有 real-model A/B，不能写效果提升 |
-| Agent Skills | KEEP | “实现 project/global filesystem Skill catalog 与 progressive disclosure，按需加载 Skill/reference，并将当前 Skill state 作为 runtime context 保留。” | deterministic regression 已通过；P2-5 E2E 暴露并修复 Candidate metadata 泄漏 next action 的边界；仍不能写 Skills 提升成功率百分比 |
+| Structured Planning | KEEP | “实现 typed ExecutionPlan/PlanStep/PlanRevision，并将 current plan 作为 runtime context 注入单一 Agent loop，支持 off/auto/always 与 Trace lifecycle。” | combined Full-P2 real-model A/B 已执行：24/24 建 plan、0 plan revision；不能把 combined A/B 当成 Planning 单项收益 |
+| Agent Skills | KEEP | “实现 project/global filesystem Skill catalog 与 progressive disclosure，按需加载 Skill/reference，并将当前 Skill state 作为 runtime context 保留。” | combined Full-P2 A/B 中 should-trigger 只 loaded 1/20、process match 0/20；可作为暴露 selection/adoption 问题的证据，不能写 Skills 提升成功率 |
 | Trajectory-driven Skill Evolution | KEEP | “基于 accepted Trace 提取 recovery motif，生成隔离 Candidate，并通过 baseline/candidate Evaluation Harness 与 deterministic PromotionGate 做受控晋升判断。” | 已有 3 条真实 source traces + 8 个 real-model final-gate trials；本次 Candidate 被 REJECT/未 promotion，不能写‘自主进化’或效果提升 |
 | MCP Client / Tool Adapter | KEEP | “基于 official MCP Python SDK v2 将外部 MCP Tool 适配进既有 ToolRegistry/ToolExecutor，并统一复用 Permission、Hook、cooperative cancel、Planning effect gate 与 Trace。” | deterministic regression + 独立 pr-test real-model E2E 已完成；单次 r3 只能作 case evidence，不能写稳定性能提升或生产级外部服务可靠性 |
-| Failure-aware recovery | KEEP | “实现 typed FailureContext/RecoveryDecision 与 bounded RecoveryPolicy，并把 repeated failure 与 P2-1 plan revision gate 联动。” | deterministic regression 已通过；没有 real-model A/B，不能写效果百分比 |
+| Failure-aware recovery | KEEP | “实现 typed FailureContext/RecoveryDecision 与 bounded RecoveryPolicy，并把 repeated failure 与 P2-1 plan revision gate 联动。” | combined Full-P2 A/B 中 recovery_selected=20，其中 14 次发生在非 recovery-tagged trial；可写真实触发审计，不能写单项收益 |
 | Error recovery | REWORD | “实现 transient provider retry、typed failure Observation、loop/completion guard，并用 Failure Harness 做确定性故障回归。” | Failure Harness；不要说生产级容错率 |
 | Loop detection | KEEP | “对重复 Action/Observation 指纹与无进展循环做检测和终止/恢复控制。” | `agent/loop_detector.py`, loop tests | 只能写 contract，不写效果百分比 |
 | Context compaction | REWORD | “实现 canonical-history-preserving 的 pruning + structured compaction，并用 7-case frozen replay 与 9-run real-model 小样本审计。” | B1/B2；明确小样本边界 |
