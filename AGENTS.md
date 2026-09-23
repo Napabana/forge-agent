@@ -790,3 +790,15 @@ pytest -q
 - 结论：当前 Full P2 没有在该 frozen suite 上提升 observed acceptance，且增加执行成本；下一阶段应优化 planning gating、recovery trigger/classification 与 skill selection/adoption，不得将本轮包装成“P2 提升成功率”。
 - 正式结果：`evals/results/benchmark_v1_r2_summary/benchmark_v1_summary.{json,md}`。
 - Evidence Pack 与 README 已更新为真实结果；更新日志：`docs/changes/2026-09-22/Forge-Agent-Benchmark-V1.md`。
+
+
+### 最后交接（2026-09-23，P3 路线冻结 / 暂停实现）
+
+- 新增路线文档：`docs/todo/P3-Orchestration-与-PostTraining-路线.md`。
+- 当前决策不是继续堆 Multi-Agent / parallel tools，而是把 Benchmark V1 R2 暴露的问题拆成两个方向：
+  1. Track A：不训练模型的 orchestration optimization，包括 adaptive planning gating、recovery trigger precision、Skill selection/routing 与更有区分度的 Benchmark V2；
+  2. Track B/C：用户先通过 MiniMind 学习 SFT / DPO / Agent RL，之后再决定是否引入 small open model，先做 untrained small-model × scaffold baseline，再决定 SFT / preference optimization / Agent RL。
+- 当前证据同时支持 ceiling effect 与 orchestration 问题：strong-model Baseline 已 23/24=95.8%；Full P2 24/24 建 plan 但 0 revision，20 次 recovery 中 14 次出现在非 recovery-tagged trials，Skills should-trigger 20 次仅 loaded 1 次且 process match=0。
+- 因此当前不把“Full P2 未提升”解释成 Planning/Skills 无意义，也不把全部问题归因于 task 太简单。
+- 暂不实施 P3 runtime 改动，不修改 Benchmark V1 R2，不启动 GPU / small-model training，不构造训练数据。优先完善简历与面试叙事；用户完成 MiniMind 的 SFT/DPO/Agent RL 学习后再 reopen P3。
+- 若未来继续：先跑 small-model untrained baseline。若 scaffold 对弱模型有收益，再进入 SFT/DPO；若仍无收益，优先实现 Track A orchestration optimization。
