@@ -10,6 +10,8 @@ P2 Agent Intelligence 已完成 Structured Planning、Failure-aware Recovery、A
 
 P2-5 的真实闭环已经跑通：3 条真实 accepted trajectories 经 `recovery_motif_v2` 挖掘得到可重复 recovery motifs，选取 `no_progress → change_approach → INSPECT` Candidate 进入 4-role baseline/candidate final gate；8 个 real-model Agent trials 的功能 outcome 全部通过，但 Candidate 在 target / should-trigger 中未被选择或加载，因此 PromotionGate 最终 `REJECT`，没有 promotion。这个结果用于证明 **trajectory → candidate → evaluation → deterministic gate** 的闭环与拒绝路径真实工作，而不是证明“Agent 已经自动变强”。
 
+此外已完成一轮冻结 real-repository A/B：`pr-test` 上 12 tasks × 2 repetitions × 2 variants，共 48 个 `deepseek-v4.1-flash` real-model trials。Baseline ReAct 与 `Planning + Recovery + Skills` 均为 `23/24 = 95.8%` independent acceptance，observed delta=`0.0 pp`；Full P2 成功 trial 的平均 steps / total tokens / wall time 分别高约 `27.2% / 32.0% / 16.0%`。过程 Trace 显示 Planning 24/24 建 plan 但 0 次 revision，Recovery 20 次选择中 14 次发生在非 recovery-tagged trial，Skills 在 20 个 should-trigger trial 中仅加载 1 次且未命中期望 Skill。该结果用于暴露当前 orchestration policy 的 gating/selection 问题，不宣称 P2 已提升总体 Coding Agent 成功率。
+
 ## 1. 整体架构
 
 Forge Agent 将系统拆成六个彼此独立但可组合的层：入口层、执行控制层、上下文层、工具安全层、隔离与状态层、审计与交付层。
@@ -815,7 +817,7 @@ python -m entry.github_issue \
 
 本仓库把“实现事实”“离线确定性回归”“冻结 benchmark”“真实模型小样本”和“真实端到端案例”分开记录。所有可引用数字统一以 [`docs/evidence/README.md`](docs/evidence/README.md) 为入口。
 
-当前可复现证据包括 Context B1、Repo Map retrieval benchmark、Persistent Repo Map phase benchmark、B2 real-model small sample、Failure Harness、Trace/Runner contract，以及一个真实 Issue → merged PR 案例。它们各自只能证明对应协议和样本范围，不能外推为总体 Coding Agent 成功率或线上 SLA。
+当前可复现证据包括 Context B1、Repo Map retrieval benchmark、Persistent Repo Map phase benchmark、B2 real-model small sample、Failure Harness、Trace/Runner contract、48-trial Coding Agent Benchmark V1 R2，以及一个真实 Issue → merged PR 案例。V1 R2 的 95.8%/95.8% 只属于冻结 `pr-test` 12-task 协议，不应外推为总体 Coding Agent pass@1 或线上 SLA。
 
 默认离线证据校验：
 
