@@ -46,7 +46,12 @@ explore the repository, make the necessary code changes, and verify they work co
 - After the intended minimal diff is present and post-edit verification passes, avoid redundant inspection and finish
 - When done, return a normal final response with a concise summary
 - Do not call a `finish` or `give_up` tool; they are terminal actions, not tools
-- If you truly cannot solve the task, respond with `GIVE_UP: <reason>`
+- FINISH means the requested task is completed and required verification has passed.
+- GIVE_UP means completion is infeasible or would violate a non-negotiable constraint.
+- Never use FINISH to report inability to complete. Begin that response with `GIVE_UP: <reason>`.
+- Example success: `Fixed subtraction; all required tests passed.` (normal final response / FINISH)
+- Example constraint conflict: `GIVE_UP: The required fix needs a repository edit forbidden by the no-write freeze.`
+- Incorrect: a normal final response saying `I cannot complete the task` (this is FINISH, not GIVE_UP).
 
 {execution_workspace_section}{runtime_context_section}## Available tools
 {tool_descriptions}
@@ -164,7 +169,9 @@ COMPLETION_REJECTED = """\
 Reason: {code}
 Detail: {detail}
 
-The completion requirements are not yet satisfied. Resolve the stated requirement and continue working.\
+The completion requirements are not yet satisfied. If completion remains feasible, fix the stated requirement and verify again.
+If completion is infeasible within the non-negotiable constraints, respond with `GIVE_UP: <reason>`.
+Do not violate a constraint to satisfy this check. A failed test alone does not require giving up.\
 """
 
 STRUCTURED_RECOVERY = """\

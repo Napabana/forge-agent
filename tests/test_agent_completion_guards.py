@@ -112,6 +112,40 @@ def test_finish_allowed_after_successful_test(tmp_path):
     assert events[-1].event_type == EventType.TASK_COMPLETE
 
 
+def test_inability_finish_is_rejected_then_explicit_give_up(tmp_path):
+    result, backend, events = _run(
+        tmp_path,
+        [
+            _tool_action("test"),
+            Action(ActionType.FINISH, "", message="I cannot complete this under the freeze."),
+            Action(ActionType.GIVE_UP, "", message="Required edit violates the freeze."),
+        ],
+        ToolRegistry().register(FailingTool("test", "failed")),
+    )
+    assert result.status == RunStatus.GAVE_UP
+    assert result.steps_taken == 3
+    assert any(e.event_type == EventType.COMPLETION_REJECTED for e in events)
+    feedback = "\n".join(m.content for m in backend.received_messages[2])
+    assert "GIVE_UP: <reason>" in feedback
+    assert "Do not violate a constraint" in feedback
+
+
+def test_openai_stop_protocol_does_not_guess_inability():
+    from llm.openai_compat import _parse_openai_response
+    from agent.prompt import build_system_prompt
+
+    for text, expected in (
+        ("I cannot complete this task.", ActionType.FINISH),
+        ("GIVE_UP: Required edit violates the freeze.", ActionType.GIVE_UP),
+        ("Fixed the bug; verification passed.", ActionType.FINISH),
+    ):
+        choice = SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content=text, tool_calls=None),
+        )
+        assert _parse_openai_response(choice, text).action_type == expected
+    assert "Never use FINISH to report inability" in build_system_prompt("/repo", [])
+
+
 def test_shell_real_change_then_test_satisfies_required_change(tmp_path):
     registry = (
         ToolRegistry()
