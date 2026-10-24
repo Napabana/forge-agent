@@ -27,12 +27,14 @@ _RISKY_TOOLS = {
 }
 
 
-def build_pilot(benchmark: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def build_pilot(benchmark: dict[str, Any], *, selected: tuple[str, ...] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """从冻结 Benchmark V1 派生任务，act/abstain 保持完全相同的仓库初态。"""
     index = {task["id"]: task for task in benchmark["tasks"]}
     tasks: list[dict[str, Any]] = []
     pairs: list[dict[str, str]] = []
-    for source_id in _SOURCE_TASKS:
+    for source_id in (_SOURCE_TASKS if selected is None else selected):
+        if source_id not in _SOURCE_TASKS:
+            raise ValueError(f"unsupported pilot source task: {source_id}")
         original = copy.deepcopy(index[source_id])
         if not original.get("files"):
             raise ValueError(f"{source_id} requires an explicit broken-file fixture")
@@ -197,13 +199,14 @@ def main() -> int:
     build.add_argument("--benchmark", default="evals/fixtures/coding_agent/benchmark_v1.json")
     build.add_argument("--suite-out", required=True)
     build.add_argument("--manifest-out", required=True)
+    build.add_argument("--pair", action="append", choices=_SOURCE_TASKS, default=[], help="optional single-pair smoke run")
     score = sub.add_parser("score", help="score real-model results after EvaluationHarness")
     score.add_argument("--manifest", required=True)
     score.add_argument("--results-dir", required=True)
     score.add_argument("--report-out", required=True)
     args = parser.parse_args()
     if args.action == "build":
-        suite, manifest = build_pilot(_load_json(Path(args.benchmark)))
+        suite, manifest = build_pilot(_load_json(Path(args.benchmark)), selected=tuple(args.pair) if args.pair else None)
         from evals.coding_agent.schema import EvaluationSuite
         EvaluationSuite.from_dict(suite)  # 按原 Harness schema 校验而非私自扩展。
         for path, value in ((Path(args.suite_out), suite), (Path(args.manifest_out), manifest)):
