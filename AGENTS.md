@@ -802,3 +802,18 @@ pytest -q
 - 因此当前不把“Full P2 未提升”解释成 Planning/Skills 无意义，也不把全部问题归因于 task 太简单。
 - 暂不实施 P3 runtime 改动，不修改 Benchmark V1 R2，不启动 GPU / small-model training，不构造训练数据。优先完善简历与面试叙事；用户完成 MiniMind 的 SFT/DPO/Agent RL 学习后再 reopen P3。
 - 若未来继续：先跑 small-model untrained baseline。若 scaffold 对弱模型有收益，再进入 SFT/DPO；若仍无收益，优先实现 Track A orchestration optimization。
+
+### 最后交接（2026-10-24，Abstention Reliability Phase A/B/C）
+
+- 本轮按用户明确授权完成停止协议、可信运行级只读约束、V2 独立评分；没有第二套主循环/工具管线，没有调用真实模型 API 或执行收费 Benchmark。
+- 开始时本地 dev 与 SSH 只读查询到的远端 dev 均为 `0c669447197a8e014f72a97bfd14ab55999474c9`。本轮只创建本地提交，不 Push/PR/重写历史/Reset/Clean。
+- 已复核冻结 `abstain_s3_real_r2`：Step 18 普通无法完成回答被解析为 FINISH，随后 LATEST_TEST_FAILED；Step 19 file_edit 被 ALLOW 并实际改动 operations.py，最终 incomplete。
+- Phase A：`agent/prompt.py` 明确 FINISH/GIVE_UP 正反例和 completion rejection 两条合法后续路径；Core 成功判定、解析器关键词行为不变。提交 `e63b292`。
+- Phase B：`harness/permission.py` 增加 frozen ExecutionConstraints，默认 read_only=false；`harness/executor.py` 在原 permission 阶段强制约束，自定义策略/confirm 不可放宽。`agent/runner.py`、`orchestrate.py` 与 Eval task 显式配置传递；未知/MCP/test/未审查 Shell 保守拒绝。提交 `a8746b6`，后续补齐初始 Agent 缓存键以保留默认 Chat 实例复用。
+- Trace v2 保留工具尝试事件，增加实际调用和 repository effect 边界、运行约束标记；git_status 禁用 optional locks/fsmonitor，git_diff 禁用 external diff/textconv。
+- Phase C：`evals/coding_agent/abstention_pilot.py` 默认 V2，分开决策/尝试/权限拒绝/执行/仓库变化/事后放弃/步数/token；旧 Trace 执行次数未知而非零，显式 V1 评分仍可复现。prompt_only 与 policy_enforced 为显式独立配置，不从 should-abstain 标签启用权限。
+- 新增/扩展 `tests/test_agent_completion_guards.py`、`test_execution_constraints.py`、`test_orchestrate.py`、`test_coding_agent_abstention_pilot.py`、`test_abstention_scoring_v2.py`；`test_repo_map_product_behavior.py` 隔离测试缓存，保留冷构建断言。完整文件路径与设计取舍见本轮日志。
+- WSL `source ~/.venvs/forge-agent/bin/activate`：Phase A 61 passed；Phase B 141 passed；Phase C 最终 68 passed；最终完整 pytest 1075 passed / 14 skipped / 30 warnings，163.73s。Docker 不可用导致跳过；warnings 为 AnyIO/Python 弃用提示。开发中发现的缓存键和冷构建测试缓存依赖均已修复并重跑完整回归。
+- 用户已有历史实验 nested repo dirty 状态、未跟踪 abstain_s3_dry_r1 / abstain_s3_real_r1 及 stash 均保留，未加入提交。`config/default.yaml`、冻结 Benchmark fixtures、历史结果文件未修改。
+- 本轮日志：`docs/changes/2026-10-24/Abstention-Reliability-Phase-ABC.md`。其下 `abstention-reliability/` 保存新单对配置和冻结 baseline 的离线 V1/V2 重评分；后者不是修复后模型能力证据。
+- 下一步：用户 Review 本地提交后自行 Push；如需真实模型验证，由用户手动运行日志中的单对 prompt-only Follow-up，输出新目录。只读工具保护不等于 OS 只读隔离；副作用指纹不覆盖完整 syscall/ignored/仓库外文件。

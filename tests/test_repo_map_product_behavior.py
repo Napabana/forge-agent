@@ -19,7 +19,9 @@ def _config(tmp_path) -> AppConfig:
     return cfg
 
 
-def test_chat_query_change_reranks_same_persistent_index_without_reparse(tmp_path):
+def test_chat_query_change_reranks_same_persistent_index_without_reparse(tmp_path, monkeypatch):
+    # 冷构建断言必须使用本次测试独有缓存，不能复用用户目录里的旧索引。
+    monkeypatch.setenv("FORGE_AGENT_CACHE_DIR", str(tmp_path / "logs" / "index-cache"))
     (tmp_path / "alpha.py").write_text("def alpha_handler():\n    return 'alpha'\n")
     (tmp_path / "beta.py").write_text("def beta_handler():\n    return 'beta'\n")
     received_system: list[str] = []

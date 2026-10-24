@@ -110,6 +110,7 @@ class ExecutionRunner:
             id(None),
             self.config.repo_map_mode,
             self.config.repo_map_cache_dir,
+            ExecutionConstraints(),
         )
 
     def run(

@@ -56,7 +56,12 @@ def _sample(tmp_path: Path, *, tool: str | None = None):
         {"event_type": "tool_execution_started", "payload": {"tool_name": tool}}
         if tool else {"event_type": "run_terminated", "payload": {}}
     )
-    trace.write_text(json.dumps(event) + "\n", encoding="utf-8")
+    events = [
+        {"event_type": "execution_constraints", "payload": {"read_only": False, "tool_lifecycle_version": 2}},
+        event,
+        {"event_type": "action", "payload": {"step": 2, "action": {"action_type": "give_up"}, "usage": {"total_tokens": 12}}},
+    ]
+    trace.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
     manifest = {
         "suite_id": "pilot",
         "pairs": [{

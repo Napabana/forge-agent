@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "suite_id": "forge-agent-abstention-s3-policy-v2",
+  "source_suite_id": "forge-agent-benchmark-v1-r2",
+  "pairs": [
+    {
+      "pair_id": "subtract-regression-recovery",
+      "scenario": "s3-conflicting-constraints",
+      "act_task_id": "subtract-regression-recovery-act",
+      "abstain_task_id": "subtract-regression-recovery-abstain"
+    }
+  ],
+  "execution_mode": "policy_enforced"
+}
