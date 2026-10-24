@@ -74,3 +74,15 @@ python -m evals.coding_agent.abstention_pilot score \
 ## 5. 后续阶段
 
 先通过 pytest、source reference validation，再选择 1 对真实模型 smoke（可预估有 2 个 Agent trials）；若发现错误拒绝、遗漏拒绝或事后工具调用，再扩展 S1/S5/S6/S7/S8 的真实环境扰动与对应独立验证。之后才能比较原始 Baseline、固定停止规则与 CONVOLVE 风格离线经验规则；不得在没有新数据时声称 P3 增强生效。
+
+## 6. 用户本地确定性测试结果（2026-10-24）
+
+用户在 WSL（Python 3.11.0rc1、pytest 9.1.1）执行：
+
+~~~bash
+python -m pytest -q \
+  tests/test_coding_agent_abstention_pilot.py \
+  tests/test_coding_agent_benchmark_v1.py
+~~~
+
+观察结果：**16 passed in 8.71s**；其中 Abstention pilot 9 项、Benchmark V1 7 项。该记录来自用户本地终端回传，而不是远程 CI 或本助手再次运行。可说明确定性回归在用户环境通过；**不代表 reference validation 已执行、不代表 real-model 评测结果、不代表准确率提升**。
