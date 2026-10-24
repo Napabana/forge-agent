@@ -1,6 +1,8 @@
 """Schema for the task-level Coding Agent Evaluation Harness."""
 from __future__ import annotations
 
+from harness.permission import ExecutionConstraints
+
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -138,6 +140,7 @@ class EvalTask:
     require_tests: bool = False
     test_cmd: str | None = None
     tags: tuple[str, ...] = ()
+    execution_constraints: ExecutionConstraints = ExecutionConstraints()
 
     def __post_init__(self) -> None:
         _validate_id(self.task_id, field_name="task_id")
@@ -171,6 +174,7 @@ class EvalTask:
             require_tests=bool(raw.get("require_tests", False)),
             test_cmd=(str(raw["test_cmd"]) if raw.get("test_cmd") is not None else None),
             tags=tuple(str(tag) for tag in raw.get("tags", ())),
+            execution_constraints=ExecutionConstraints.from_dict(raw.get("execution_constraints", {})),
             graders=tuple(GraderSpec.from_dict(item) for item in raw.get("graders", ())),
         )
 
@@ -318,6 +322,7 @@ class TrialResult:
     patch_ref: str | None = None
     final_state_ref: str | None = None
     error: str | None = None
+    execution_constraints: ExecutionConstraints = ExecutionConstraints()
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

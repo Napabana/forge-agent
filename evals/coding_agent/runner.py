@@ -327,7 +327,10 @@ class EvaluationHarness:
         started = time.perf_counter()
         cleanup_error: Exception | None = None
         try:
-            run_result = runner.run(RunRequest(task=agent_task, acceptance=acceptance, entrypoint="eval"))
+            run_result = runner.run(RunRequest(
+                task=agent_task, acceptance=acceptance, entrypoint="eval",
+                execution_constraints=task.execution_constraints,
+            ))
             elapsed = time.perf_counter() - started
             metrics = extract_metrics(run_result, wall_time_seconds=elapsed)
             outcome = cached_outcome or grade_many(_outcome_graders(task), GraderContext(repo=repo))
@@ -402,6 +405,7 @@ class EvaluationHarness:
             patch_ref=patch_path.relative_to(self.output_dir).as_posix(),
             final_state_ref=final_state_path.relative_to(self.output_dir).as_posix(),
             error=error,
+            execution_constraints=task.execution_constraints,
         )
         write_json(trial_dir / "trial.json", result.to_dict())
         return result

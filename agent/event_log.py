@@ -62,7 +62,7 @@ def _utc_now() -> str:
 def _span_type(event_type: EventType) -> str:
     if event_type.name.startswith("LLM_CALL_"):
         return "model"
-    if event_type.name.startswith("TOOL_EXECUTION_"):
+    if event_type.name.startswith("TOOL_EXECUTION_") or event_type is EventType.TOOL_INVOCATION_STARTED:
         return "tool"
     if event_type.name.startswith("CONTEXT_") or event_type.name.startswith("PREPARE_NEXT_TURN_"):
         return "context"

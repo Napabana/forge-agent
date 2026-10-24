@@ -28,7 +28,7 @@ import logging
 from typing import Any, Callable
 
 from harness.hooks import HookEvent, Hooks
-from harness.permission import PermissionDecision, PermissionManager, ToolUseBlock
+from harness.permission import ExecutionConstraints, PermissionDecision, PermissionManager, ToolUseBlock
 from tools.base import ToolErrorType, ToolRegistry, ToolResult
 from tools.shell_tool import ConfirmCallback
 
@@ -65,6 +65,7 @@ class ToolExecutor:
         confirm_callback: ConfirmCallback | None = None,
         decision_callback: DecisionCallback | None = None,
         cancel_event: object | None = None,
+        constraints: ExecutionConstraints = ExecutionConstraints(),
     ) -> None:
         self._registry = registry
         self._permission = permission
@@ -72,6 +73,10 @@ class ToolExecutor:
         self._confirm_callback = confirm_callback
         self._decision_callback = decision_callback
         self._cancel_event = cancel_event
+        self.constraints = constraints
+        self._constraint_permission = (
+            PermissionManager(constraints=constraints) if constraints.read_only else None
+        )
 
     def execute(
         self,
@@ -80,6 +85,7 @@ class ToolExecutor:
         *,
         decision_callback: DecisionCallback | None = None,
         cancel_event: object | None = None,
+        invocation_callback: Callable[[], None] | None = None,
     ) -> ToolResult:
         """按冻结生命周期执行一次工具调用。"""
         self._raise_if_canceled("before_validation", cancel_event)
@@ -115,10 +121,13 @@ class ToolExecutor:
                 )
 
         # 2. Permission：策略 deny 是正常结果；permission/confirm 子系统异常是基础设施错误。
-        if self._permission is not None:
+        if self._permission is not None or self._constraint_permission is not None:
             self._raise_if_canceled("before_permission", cancel_event)
             try:
-                decision = self._permission.check(block)
+                # 运行约束不能被自定义 Permission 或确认回调放宽。
+                decision = self._constraint_permission.check(block) if self._constraint_permission else None
+                if decision is None or decision.is_allow:
+                    decision = self._permission.check(block) if self._permission else decision
             except Exception as exc:
                 if self._is_cancel_requested(cancel_event):
                     raise ToolExecutionCanceled("permission") from exc
@@ -157,6 +166,8 @@ class ToolExecutor:
 
         # 3. Tool：这是最后一个能保证“Tool 尚未发生”的 cancel 边界。
         self._raise_if_canceled("before_tool", cancel_event)
+        if invocation_callback is not None:
+            invocation_callback()
         result = self._registry.execute_tool(name, params)
         if not result.success and result.error_type is None:
             result.error_type = _classify_tool_error(name, result)

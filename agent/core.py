@@ -252,6 +252,11 @@ class Agent:
                 del self._repo_map_cache
 
         log.log_task_start(task)
+        log.log_trace(
+            EventType.EXECUTION_CONSTRAINTS, 0,
+            read_only=self._executor.constraints.read_only,
+            tool_lifecycle_version=2,
+        )
         logger.info("Agent starting task %s", task.task_id)
         # MCP capability discovery is recorded in Trace v2, but invocation remains
         # an ordinary ToolCall that must pass ToolExecutor.
@@ -795,6 +800,11 @@ class Agent:
                         tc.params,
                         decision_callback=log_permission_decision,
                         cancel_event=self._cfg.cancel_event,
+                        invocation_callback=lambda: log.log_trace(
+                            EventType.TOOL_INVOCATION_STARTED, step,
+                            span_id=tool_span, tool_execution_id=tool_span,
+                            tool_name=tc.name,
+                        ),
                     )
                 except ToolExecutionCanceled as exc:
                     log.log_trace(
@@ -900,6 +910,12 @@ class Agent:
                 current_repo_content_state = self._get_repo_content_state(task.repo_path)
                 repository_content_changed = (
                     current_repo_content_state != last_repo_content_state
+                )
+                log.log_trace(
+                    EventType.REPOSITORY_EFFECT, step,
+                    tool_execution_id=tool_span, tool_name=tc.name,
+                    repository_changed=repository_changed,
+                    repository_content_changed=repository_content_changed,
                 )
                 if repository_content_changed:
                     last_repo_content_state = current_repo_content_state
@@ -1548,8 +1564,14 @@ class Agent:
         skill_context = self._skill_runtime.render_context() if self._skill_runtime else ""
         self._planning_context_cache = planning_context
         self._skill_context_cache = skill_context
+        constraint_context = (
+            "## Trusted execution constraints\n"
+            "Strict read_only is enabled. Repository writes, tests, unknown tools and MCP are denied. "
+            "Shell is restricted to fixed directory queries. Use GIVE_UP if completion requires a forbidden operation."
+            if self._executor.constraints.read_only else ""
+        )
         runtime_context = "\n\n".join(
-            part for part in (planning_context, recovery_context, skill_context) if part
+            part for part in (constraint_context, planning_context, recovery_context, skill_context) if part
         )
         system_content = build_system_prompt(
             repo_path=getattr(self, "_model_repo_path", "."),

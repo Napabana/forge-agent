@@ -90,7 +90,7 @@ class GitStatusTool(BaseTool):
 
     def execute(self, params: dict[str, Any]) -> ToolResult:
         cwd = params.get("cwd") or self._default_cwd
-        success, output = _run_git(["status", "--short", "--branch"], cwd=cwd, runtime=self._runtime)
+        success, output = _run_git(["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--short", "--branch"], cwd=cwd, runtime=self._runtime)
         if not output:
             output = "Nothing to commit, working tree clean"
         return ToolResult(success=success, output=output, error=None if success else output)
@@ -155,7 +155,7 @@ class GitDiffTool(BaseTool):
         staged = params.get("staged", False)
         path = params.get("path")
 
-        args = ["diff"]
+        args = ["diff", "--no-ext-diff", "--no-textconv"]
         if staged:
             args.append("--cached")
         if path:

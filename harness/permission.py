@@ -74,6 +74,39 @@ class PermissionDecision:
 ALLOW = PermissionDecision(Decision.ALLOW)
 
 
+@dataclass(frozen=True)
+class ExecutionConstraints:
+    """可信入口提供的运行约束；不从模型文本或评测标签推断。"""
+
+    read_only: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.read_only) is not bool:
+            raise ValueError("execution_constraints.read_only must be a boolean")
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "ExecutionConstraints":
+        if not isinstance(raw, dict) or set(raw) - {"read_only"}:
+            raise ValueError("invalid execution_constraints object")
+        return cls(**raw)
+
+
+_STRICT_READ_TOOLS = frozenset({
+    "file_read", "file_view", "git_status", "git_diff",
+    "search_text", "find_files", "find_symbol",
+})
+
+
+def read_only_allows(block: ToolUseBlock) -> bool:
+    """严格白名单；ToolEffect.READ_ONLY 不足以证明测试或 MCP 无副作用。"""
+    if block.name in {"shell", "bash"}:
+        # shortcut: 只接受固定查询命令，需要更多 Shell 时先审查参数及组合语义。
+        return block.input.get("cmd", block.input.get("command")) in {
+            "pwd", "ls", "ls -a", "ls -l", "ls -la",
+        }
+    return block.name in _STRICT_READ_TOOLS
+
+
 # 受 workspace 路径边界约束的文件工具（读+写）。
 # M4 决策：读工具也管，防 LLM 读 workspace 外的系统文件（/etc/passwd 等）。
 # 含别名兼容（file_read/file_view/file_edit/file_write 是 forge-agent 的工具名；
@@ -118,6 +151,7 @@ class PermissionManager:
         confirm_keywords: tuple[str, ...] | None = None,
         workspace: str | None = None,
         registry: ToolRegistry | None = None,
+        constraints: ExecutionConstraints = ExecutionConstraints(),
     ) -> None:
         extra = tuple(p for p in self._EXTRA_DENY if p not in _BLOCKED_PATTERNS)
         self.deny_patterns = deny_patterns if deny_patterns is not None \
@@ -126,6 +160,7 @@ class PermissionManager:
             else _CONFIRM_KEYWORDS
         self.workspace = workspace
         self.registry = registry
+        self.constraints = constraints
 
     # ------------------------------------------------------------------
     # 校验
@@ -139,6 +174,9 @@ class PermissionManager:
         MCP 工具：只有可信 server 明确只读的 adapter 才 ALLOW，其余 CONFIRM。
         其它：ALLOW。
         """
+        if self.constraints.read_only and not read_only_allows(block):
+            return _deny(f"read_only: tool is not in the strict read-only subset: {block.name}")
+
         # shell 命令
         if block.name in ("shell", "bash"):
             return self._check_command(block.input.get("cmd")

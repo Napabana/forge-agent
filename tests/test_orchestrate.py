@@ -40,6 +40,28 @@ from tools.base import ToolRegistry
 from tools.file_tool import FileWriteTool
 
 
+async def test_isolated_strict_read_only_reaches_executor(repo, tmp_path):
+    from harness import ExecutionConstraints
+    from tools.base import ToolErrorType
+
+    class ReadOnlyAgent:
+        def __init__(self, backend, registry, config, executor):
+            self.executor = executor
+
+        def run(self, task, log, **kwargs):
+            result = self.executor.execute("file_write", {"path": "blocked.txt", "content": "bad"})
+            assert result.error_type == ToolErrorType.PERMISSION_DENIED
+            assert not (Path(task.repo_path) / "blocked.txt").exists()
+            return RunResult(task.task_id, RunStatus.GAVE_UP, "freeze", 1)
+
+    result = await orchestrate_run(
+        backend=None, task=Task("freeze", str(repo)), engine=TaskEngine(tmp_path / "tasks.db"),
+        registry_builder=_build_registry, log_dir=str(tmp_path / "logs"),
+        agent_factory=ReadOnlyAgent, execution_constraints=ExecutionConstraints(True),
+    )
+    assert result.status == RunStatus.GAVE_UP
+
+
 # ---------------------------------------------------------------------------
 # fixtures（仿 test_worktree_session.py）
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ from context.history import ConversationHistory
 from context.repo_map import RepoMap
 from context.token_budget import TokenBudget
 from config.schema import MCPConfig
-from harness import Hooks, PermissionManager, ToolExecutor
+from harness import ExecutionConstraints, Hooks, PermissionManager, ToolExecutor
 from llm.usage import SessionUsage
 from mcp_integration.registry import attach_mcp_tools
 from runtime.worktree import WorktreeResultPolicy
@@ -68,6 +68,7 @@ class RunRequest:
     # Product entrypoints may set this explicitly. None keeps current callers
     # compatible and resolves from the existing request shape.
     entrypoint: str | None = None
+    execution_constraints: ExecutionConstraints = ExecutionConstraints()
 
 
 class ExecutionRunner:
@@ -181,6 +182,7 @@ class ExecutionRunner:
                         on_log_created=log_created,
                         on_event=on_event,
                         mcp_config=self.mcp_config,
+                        execution_constraints=request.execution_constraints,
                     ))
             except BaseException as exc:
                 if trace_path:
@@ -220,6 +222,7 @@ class ExecutionRunner:
             hooks=config.hooks,
             permission=request.permission,
             confirm_callback=self.confirm_callback,
+            constraints=request.execution_constraints,
         )
         key = (
             id(config.hooks),
@@ -228,6 +231,7 @@ class ExecutionRunner:
             id(request.permission),
             config.repo_map_mode,
             config.repo_map_cache_dir,
+            request.execution_constraints,
         )
         if key != self._agent_key:
             self.agent = Agent(self.backend, self.registry, config, executor=executor)

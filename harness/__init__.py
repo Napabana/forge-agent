@@ -14,6 +14,7 @@ from harness.hooks import HookBlockResult, HookEvent, Hooks
 from harness.permission import (
     ALLOW,
     Decision,
+    ExecutionConstraints,
     PermissionDecision,
     PermissionManager,
     ToolUseBlock,
@@ -31,6 +32,7 @@ class ToolExecutor(_RawToolExecutor):
         confirm_callback=None,
         decision_callback=None,
         cancel_event=None,
+        constraints=ExecutionConstraints(),
     ) -> None:
         super().__init__(
             registry,
@@ -39,6 +41,7 @@ class ToolExecutor(_RawToolExecutor):
             confirm_callback=confirm_callback,
             decision_callback=decision_callback,
             cancel_event=cancel_event,
+            constraints=constraints,
         )
 
 
@@ -52,6 +55,7 @@ __all__ = [
     "PermissionManager",
     "PermissionDecision",
     "Decision",
+    "ExecutionConstraints",
     "ToolUseBlock",
     "ALLOW",
 ]

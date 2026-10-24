@@ -39,7 +39,7 @@ from agent.core import Agent, AgentConfig
 from agent.event_log import EventLog
 from agent.task import EventType, RunResult, RunStatus, Task
 from harness.executor import ToolExecutor
-from harness.permission import PermissionDecision, PermissionManager
+from harness.permission import ExecutionConstraints, PermissionDecision, PermissionManager
 from ipc.bus import AgentBus
 from runtime.worktree import (
     WorktreeArtifact,
@@ -190,6 +190,7 @@ async def orchestrate_run(
     on_event: Callable[[Any], None] | None = None,
     result_policy: WorktreeResultPolicy | str = WorktreeResultPolicy.KEEP_IF_CHANGED,
     mcp_config=None,
+    execution_constraints: ExecutionConstraints = ExecutionConstraints(),
 ) -> RunResult:
     """
     在隔离的 git worktree 内跑一次完整的 ReAct 循环，全程 TaskEngine 记账 +
@@ -358,6 +359,7 @@ async def orchestrate_run(
                 registry, hooks=runtime_cfg.hooks, permission=permission,
                 confirm_callback=confirm_callback,
                 decision_callback=_on_decision,
+                constraints=execution_constraints,
             )
 
             # 创建新 Task 而不修改原对象，让 Agent 的所有相对路径都落在 worktree。
