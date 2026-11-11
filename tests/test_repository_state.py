@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 from context.repository_state import repository_content_fingerprint
 
 
@@ -27,3 +29,16 @@ def test_non_git_repository_content_fingerprint_still_tracks_real_files(tmp_path
     after = repository_content_fingerprint(tmp_path)
 
     assert after != before
+
+
+def test_git_repository_content_fingerprint_excludes_only_active_runtime_log(tmp_path):
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    active_log = tmp_path / "active-runtime-log.txt"
+    active_log.write_text('{"event":"start"}\n', encoding="utf-8")
+    before = repository_content_fingerprint(tmp_path, excluded_paths=(active_log,))
+
+    active_log.write_text('{"event":"start"}\n{"event":"step"}\n', encoding="utf-8")
+    assert repository_content_fingerprint(tmp_path, excluded_paths=(active_log,)) == before
+
+    (tmp_path / "application.txt").write_text("real repository content\n", encoding="utf-8")
+    assert repository_content_fingerprint(tmp_path, excluded_paths=(active_log,)) != before

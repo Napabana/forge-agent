@@ -62,9 +62,14 @@ class RepositoryDeleteTool(RepositoryWriteTool):
         return ToolResult(success=True, output="restored repository")
 
 
-def _run(tmp_path, script, registry, config=None, *, require_changes=False, require_tests=False):
+def _run(
+    tmp_path, script, registry, config=None, *, require_changes=False,
+    require_tests=False, git_repo=False, log_in_repo=False,
+):
     repo = tmp_path / "repo"
     repo.mkdir()
+    if git_repo:
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     task = Task(
         description="test completion guards",
         repo_path=str(repo),
@@ -72,7 +77,8 @@ def _run(tmp_path, script, registry, config=None, *, require_changes=False, requ
         require_changes=require_changes,
         require_tests=require_tests,
     )
-    log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
+    log_dir = repo / "logs" if log_in_repo else tmp_path / "logs"
+    log = EventLog.create(task, log_dir=str(log_dir))
     backend = MockBackend(script)
     try:
         result = Agent(
@@ -110,6 +116,20 @@ def test_finish_allowed_after_successful_test(tmp_path):
 
     assert result.status == RunStatus.SUCCESS
     assert events[-1].event_type == EventType.TASK_COMPLETE
+
+
+def test_active_log_inside_git_repo_does_not_invalidate_successful_test(tmp_path):
+    result, _, events = _run(
+        tmp_path,
+        [_tool_action("test"), _finish_action()],
+        ToolRegistry().register(NoopTool("test", "2 passed")),
+        require_tests=True,
+        git_repo=True,
+        log_in_repo=True,
+    )
+
+    assert result.status == RunStatus.SUCCESS
+    assert not any(event.event_type == EventType.COMPLETION_REJECTED for event in events)
 
 
 def test_inability_finish_is_rejected_then_explicit_give_up(tmp_path):

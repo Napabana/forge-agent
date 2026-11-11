@@ -817,3 +817,14 @@ pytest -q
 - 用户已有历史实验 nested repo dirty 状态、未跟踪 abstain_s3_dry_r1 / abstain_s3_real_r1 及 stash 均保留，未加入提交。`config/default.yaml`、冻结 Benchmark fixtures、历史结果文件未修改。
 - 本轮日志：`docs/changes/2026-10-24/Abstention-Reliability-Phase-ABC.md`。其下 `abstention-reliability/` 保存新单对配置和冻结 baseline 的离线 V1/V2 重评分；后者不是修复后模型能力证据。
 - 下一步：用户 Review 本地提交后自行 Push；如需真实模型验证，由用户手动运行日志中的单对 prompt-only Follow-up，输出新目录。只读工具保护不等于 OS 只读隔离；副作用指纹不覆盖完整 syscall/ignored/仓库外文件。
+
+### 最后交接（2026-11-11，Completion Guard 运行日志隔离）
+
+- 真实 Qwen smoke/仓库说明任务暴露：EventLog 位于目标 Git 仓库且未被忽略时，日志持续追加会被内容指纹误判为测试后业务修改，导致 `FINAL_STATE_UNVERIFIED` 循环。
+- `config/schema.py` 将无显式配置的日志目录改为 `~/.forge-agent/logs`，并在配置解析边界执行 `expanduser()`；用户现有 `config/default.yaml` 已使用 `/home/jfm/.forge-agent/logs`，本轮未编辑该受保护文件。
+- `repository_content_fingerprint()` 新增精确 `excluded_paths`，Git 与 filesystem fallback 语义一致；`agent/core.py` 的初始、Tool 后、测试后、no-progress 与 FINISH 内容快照只排除本次 `EventLog.path.resolve()`，不会忽略整个日志目录或真实源码变化。
+- 新增 Git/fallback 指纹、配置路径和仓库内日志 Completion Guard 回归；WSL `source ~/.venvs/forge-agent/bin/activate` 定向测试 49 passed（6.62s），相关文件 `py_compile` 与 `git diff --check` 通过。
+- 同一 WSL 环境最终全量 pytest：1081 passed、14 skipped、30 warnings，141.13s；warnings 为既有 AnyIO/Python 3.11 弃用提示。
+- 新增 `.gitattributes` 固定常用源码/文档为 LF；本地 Git 设置 `core.autocrlf=false`、`diff.ignoreSubmodules=dirty`，避免 Windows/WSL 共用工作树的 CRLF 暂存噪声并隐藏 `evals/results/**/repo` Gitlink 内部 dirty 状态。未全仓 renormalize。
+- 未调用真实 Provider，未修改 Benchmark fixture、历史 `evals/results`，未处理既有 stash。
+- 本轮更新日志：`docs/changes/2026-11-11/Completion-Guard运行日志隔离修复.md`。

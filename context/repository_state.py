@@ -158,7 +158,11 @@ def repository_fingerprint(repo_path: str | Path) -> str:
     return f"{head}:{snapshot_repository(root)}"
 
 
-def repository_content_fingerprint(repo_path: str | Path) -> str:
+def repository_content_fingerprint(
+    repo_path: str | Path,
+    *,
+    excluded_paths: tuple[str | Path, ...] = (),
+) -> str:
     """Return a checkout-content fingerprint that ignores Git metadata-only changes.
 
     This is intentionally distinct from repository_fingerprint. Completion
@@ -166,13 +170,24 @@ def repository_content_fingerprint(repo_path: str | Path) -> str:
     staging or committing those same bytes must not invalidate a successful test.
     """
     root = Path(repo_path).resolve()
+    excluded_relatives: set[str] = set()
+    for excluded_path in excluded_paths:
+        candidate = Path(excluded_path)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            excluded_relatives.add(candidate.resolve().relative_to(root).as_posix())
+        except (OSError, ValueError):
+            continue
     listed = _git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
     if listed is None:
-        return _filesystem_fingerprint(root)
+        return _filesystem_fingerprint(root, excluded_relatives=excluded_relatives)
 
     digest = hashlib.sha256()
     for relative in sorted(path for path in listed.split("\0") if path):
         normalized = relative.replace("\\", "/")
+        if normalized in excluded_relatives:
+            continue
         target = root / relative
         digest.update(normalized.encode("utf-8", errors="replace"))
         digest.update(b"\0")
@@ -288,7 +303,11 @@ def _paths_content_fingerprint(root: Path, paths: set[str]) -> str:
     return digest.hexdigest()
 
 
-def _filesystem_fingerprint(root: Path) -> str:
+def _filesystem_fingerprint(
+    root: Path,
+    *,
+    excluded_relatives: set[str] | frozenset[str] = frozenset(),
+) -> str:
     digest = hashlib.sha256()
     if not root.is_dir():
         digest.update(b"missing")
@@ -298,7 +317,11 @@ def _filesystem_fingerprint(root: Path) -> str:
             relative = path.relative_to(root)
         except ValueError:
             continue
-        if any(part in _SKIP_DIRS for part in relative.parts) or not path.is_file():
+        if (
+            relative.as_posix() in excluded_relatives
+            or any(part in _SKIP_DIRS for part in relative.parts)
+            or not path.is_file()
+        ):
             continue
         digest.update(relative.as_posix().encode("utf-8", errors="replace"))
         try:

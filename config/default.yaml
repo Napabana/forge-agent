@@ -63,20 +63,20 @@
 #   base_url: https://api.krill-code.net/coding/v1 
 #   max_tokens: 8192
 
-#可以的
-llm:
-  provider: openai
-  model: deepseek-v4.1-flash
-  api_key: ${KRILL_API_KEY}
-  base_url: https://api.krill-code.net/coding/v1 
-  # strict structured calling is opt-in until this compatible gateway is verified.
-  strict_tool_schema: auto
-  #https://api-slb.krill-ai.net/coding/v1
-  context_window: 1000000
-  model_max_output_tokens: 384000
+#1.可以的
+# llm:
+#   provider: openai
+#   model: deepseek-v4.1-flash
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api.krill-code.net/coding/v1 
+#   # strict structured calling is opt-in until this compatible gateway is verified.
+#   strict_tool_schema: auto
+#   #https://api-slb.krill-ai.net/coding/v1
+#   context_window: 1000000
+#   model_max_output_tokens: 384000
 
-  # Forge 这一次请求真正允许模型生成多少
-  max_output_tokens: 50000
+#   # Forge 这一次请求真正允许模型生成多少
+#   max_output_tokens: 50000
 
 # llm:
 #   provider: openai
@@ -94,6 +94,15 @@ llm:
 #   base_url: https://api.siliconflow.cn/v1
 #   max_tokens: 8192
 
+llm:
+  provider: openai
+  model: Qwen/Qwen3.5-4B
+  api_key: ${SILICONFLOW_API_KEY}
+  base_url: https://api.siliconflow.cn/v1
+  strict_tool_schema: auto
+  # Forge 这一次请求真正允许模型生成多少
+  max_output_tokens: 8192
+
 agent:
   max_steps: 40
   planning_mode: "off" # off | auto | always；默认保持 baseline ReAct
@@ -106,7 +115,7 @@ agent:
   skills_reference_max_chars: 8000
   context_budget_cap: 384000
   context_safety_margin_tokens: 40000
-  log_dir: ./logs
+  log_dir: /home/jfm/.forge-agent/logs
 
 # MCP 默认关闭；server env 只显式传递这里声明的键值，不继承全部宿主环境。
 mcp:

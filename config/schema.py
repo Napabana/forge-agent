@@ -9,6 +9,9 @@ from typing import Any
 import yaml
 
 
+DEFAULT_LOG_DIR = "~/.forge-agent/logs"
+
+
 class RequestTokenSpec(int):
     """兼容旧 max_tokens，同时携带已解析的请求/模型能力元数据。"""
 
@@ -65,7 +68,7 @@ class AgentCfg:
     budget_tokens: int = 80_000
     context_budget_cap: int | None = None
     context_safety_margin_tokens: int = 1024
-    log_dir: str = "./logs"
+    log_dir: str = str(Path(DEFAULT_LOG_DIR).expanduser())
     planning_mode: str = "off"
     recovery_mode: str = "off"
     recovery_max_attempts: int = 4
@@ -367,11 +370,14 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     mcp = MCPConfig(enabled=mcp_enabled, servers=tuple(mcp_servers))
 
     llm = LLMConfig(provider=llm_raw.get("provider", "anthropic"), protocol=llm_raw.get("protocol", "auto"), model=llm_raw.get("model", "claude-sonnet-4-5"), api_key=llm_raw.get("api_key", ""), base_url=llm_raw.get("base_url", "") or "", context_window=context_window, model_max_output_tokens=model_max_output_tokens, max_output_tokens=max_output_tokens, strict_tool_schema=strict_tool_schema)
+    log_dir_raw = agent_raw.get("log_dir", DEFAULT_LOG_DIR)
+    if not isinstance(log_dir_raw, str) or not log_dir_raw.strip():
+        raise ValueError("agent.log_dir must be a non-empty string")
     agent = AgentCfg(
         max_steps=int(agent_raw.get("max_steps", 40)),
         context_budget_cap=context_budget_cap,
         context_safety_margin_tokens=safety_margin,
-        log_dir=agent_raw.get("log_dir", "./logs"),
+        log_dir=str(Path(log_dir_raw.strip()).expanduser()),
         planning_mode=planning_mode,
         recovery_mode=recovery_mode,
         recovery_max_attempts=recovery_max_attempts,

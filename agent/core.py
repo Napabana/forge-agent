@@ -333,7 +333,9 @@ class Agent:
         # Progress/loop detection keeps the Git-aware repository fingerprint, while
         # completion verification separately tracks checkout-visible file content.
         initial_repo_state = self._get_repo_state(task.repo_path)
-        initial_repo_content_state = self._get_repo_content_state(task.repo_path)
+        initial_repo_content_state = self._get_repo_content_state(
+            task.repo_path, excluded_paths=(log.path.resolve(),),
+        )
         last_repo_state = initial_repo_state
         last_repo_content_state = initial_repo_content_state
         fatal_error_key: str | None = None
@@ -621,7 +623,9 @@ class Agent:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
                 final_repo_state = self._get_repo_state(task.repo_path)
-                final_repo_content_state = self._get_repo_content_state(task.repo_path)
+                final_repo_content_state = self._get_repo_content_state(
+                    task.repo_path, excluded_paths=(log.path.resolve(),),
+                )
                 rejection_code: str | None = None
                 verification_error: str | None = None
                 if fatal_error_key is not None:
@@ -907,7 +911,9 @@ class Agent:
 
                 current_repo_state = self._get_repo_state(task.repo_path)
                 repository_changed = current_repo_state != last_repo_state
-                current_repo_content_state = self._get_repo_content_state(task.repo_path)
+                current_repo_content_state = self._get_repo_content_state(
+                    task.repo_path, excluded_paths=(log.path.resolve(),),
+                )
                 repository_content_changed = (
                     current_repo_content_state != last_repo_content_state
                 )
@@ -1265,7 +1271,9 @@ class Agent:
         if steps_without_semantic_progress < self._cfg.reflection_no_edit_steps:
             return steps_without_semantic_progress, None
 
-        current_content_state = self._get_repo_content_state(task.repo_path)
+        current_content_state = self._get_repo_content_state(
+            task.repo_path, excluded_paths=(log.path.resolve(),),
+        )
         current_change_is_verified = (
             last_successful_test_content_state is not None
             and current_content_state != initial_repo_content_state
@@ -1792,8 +1800,13 @@ class Agent:
     def _get_repo_state(self, repo_path: str) -> str:
         return repository_fingerprint(repo_path)
 
-    def _get_repo_content_state(self, repo_path: str) -> str:
-        return repository_content_fingerprint(repo_path)
+    def _get_repo_content_state(
+        self,
+        repo_path: str,
+        *,
+        excluded_paths: tuple[str | Path, ...] = (),
+    ) -> str:
+        return repository_content_fingerprint(repo_path, excluded_paths=excluded_paths)
 
 
 def _default_executor(

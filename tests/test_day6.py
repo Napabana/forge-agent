@@ -66,6 +66,22 @@ class TestParseConfig:
         assert config.agent.max_steps == 20
         assert config.agent.budget_tokens == 40000
 
+    def test_log_dir_defaults_to_expanded_user_directory(self):
+        config = _parse({})
+        assert config.agent.log_dir == str(Path("~/.forge-agent/logs").expanduser())
+
+    def test_log_dir_expands_user_and_preserves_absolute_path(self, tmp_path):
+        assert _parse({"agent": {"log_dir": "~/.forge-agent/logs"}}).agent.log_dir == str(
+            Path("~/.forge-agent/logs").expanduser()
+        )
+        absolute = tmp_path / "logs"
+        assert _parse({"agent": {"log_dir": str(absolute)}}).agent.log_dir == str(absolute)
+
+    @pytest.mark.parametrize("value", [None, ""])
+    def test_log_dir_rejects_missing_path(self, value):
+        with pytest.raises(ValueError, match="agent.log_dir must be a non-empty string"):
+            _parse({"agent": {"log_dir": value}})
+
     def test_planning_mode_accepts_yaml_off_boolean(self):
         config = _parse({"agent": {"planning_mode": False}})
         assert config.agent.planning_mode == "off"
