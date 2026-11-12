@@ -15,7 +15,7 @@
 |---|---|---|---|
 | 00 | 全仓库功能清单、源码/测试映射、跨领域审计计划 | [00-研究计划与功能总清单.md](00-研究计划与功能总清单.md) | **已完成首轮盘点**，未评分 |
 | 01 | 整体架构、入口、Runner/Orchestrator、跨模块生命周期与状态所有权 | [01-整体架构与执行链路.md](01-整体架构与执行链路.md) | **已完成源码级静态对标**；待回归 |
-| 02 | Model Integration、LLM Backend、ReAct、Prompt、Tool Call、Streaming、终止 | `02-Model-Integration与Agent-Loop.md` | 未开始 |
+| 02 | Model Integration、LLM Backend、ReAct、Prompt、Tool Call、Streaming、终止 | [02-Model-Integration与Agent-Loop.md](02-Model-Integration与Agent-Loop.md) | **已完成源码级静态对标**；定向协议回归待做 |
 | 03 | 全部原生/控制/MCP 工具、Validation、Hook、Permission、Cancel | `03-Tool-System与执行治理.md` | 未开始 |
 | 04 | History、Token Budget、Compaction、Context 视图和 Session | `04-Context-Engineering.md` | 未开始 |
 | 05 | Repo Map、Tree-sitter、SQLite Schema、索引更新、检索及成本 | `05-Repo-Map深度审查.md` | 未开始 |
@@ -62,9 +62,22 @@
 - **R04–R07**：async host 兼容、入口工具和配置差异、API admission 竞态、资源清理组合仍待后续专题验证。
 - 本阶段**无新代码验证或 real-model 结果**，未宣称发现已复现 P0；只完成静态源码/公开资料比对。对照版本：Forge `3e3fc488`，Pi `b7294995`，Codex `1f1f6ebb`，Claude 2026-11-12 官方资料。
 
+## 阶段 02 结论摘要（2026-11-12）
+
+详见 **[02-Model Integration 与 Agent Loop 完整报告](02-Model-Integration与Agent-Loop.md)**，包含 B01–B12 的源码、Pi/Codex/Claude 直接对标、12 项暂评分、测试覆盖和面试问答。
+
+- **R02-01**：`LLMResponse.action` 为单 Action；Anthropic/Chat/Responses 遇多原生 Tool Call 只提取第一个，且请求侧未明确限制模型一次只调用一个工具。建议优先明确单工具契约并补离线多调用测试，**不立即实现并行工具**。
+- **R02-02**：OpenAI-compatible 非流式带 `strict=self._strict_tool_schema`；Streaming `_stream_with_tools` 未携带 strict，存在确定的配置差异。
+- **R02-03**：Streaming 只要已有 tool delta 就把 `finish_reason` 归一为 `tool_calls`；需要拒绝 `length` 截断时的工具执行（条件 P1）。
+- **R02-04**：Responses `failed/incomplete` 的 output 可能仍被解析为 TOOL_CALL，需要模拟失败状态的回归来确认安全边界（条件 P1）。
+- **R02-05**：Forge History 主要以文本化 Action/Observation 表示工具交互，不能与原生 Provider tool_call_id transcript 混为一谈；Teacher/Student SFT 输出协议需要预先冻结。
+- **保留现有强项**：Provider 错误分类、bounded retry、stream chunk 后不盲目重试、Completion Guard、Loop Detector、独立验收状态。
+- **本阶段未运行 pytest/模型实验**；评分为有源码和测试文本支持的暂评分，尚不能认定已复现 P0。
+- 对照版本不变：Forge `3e3fc488`、Pi `b7294995`、Codex `1f1f6ebb`、Claude 2026-11-12 官方文档。
+
 ## 下一步
 
-**阶段 02：Model Integration 与 Agent Loop。** 按 00 的 B01–B12 逐个核对 Provider/Schema/Stream/Action/Retry/Loop/Termination，重点审计“一次响应一个 Action 与多工具调用差异”，与 Pi/Codex/Claude 固定版本的执行模型比较。输出 `02-Model-Integration与Agent-Loop.md`，继续更新本 README 和 decisions。不要提前实现 SFT/GRPO。
+**阶段 03：Tool System 与执行治理。** 从 00 索引 C01–C14 逐项检查 registry、原生 11/13 工具/控制工具/MCP 分层、Tool Effect 和 Schema 校验、PreHook/Permission/PostHook/Cancel、文件与 Shell 安全及各入口能力矩阵，外部对标 Pi/Codex/Claude，生成 `03-Tool-System与执行治理.md`，更新本 README 与 decisions。阶段 02 新发现只登记，不直接修改生产代码。
 
 ## 最终研究决策与疑点记录
 
