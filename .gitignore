@@ -1,4 +1,5 @@
 .venv/
+.venv-docs/
 .codex/
 .pytest_cache/
 *.egg-info/
@@ -9,6 +10,7 @@ config/
 .claude
 .coverage
 htmlcov/
+site/
 .yaml
 # Secrets — never commit API keys / tokens
 .env
@@ -17,3 +19,21 @@ htmlcov/
 
 # TaskEngine state (SQLite WAL)
 .forge/
+
+# Local-only collaboration and historical documents
+/AGENTS.md
+/docs/**
+
+# Public architecture knowledge base
+!/docs/README.md
+!/docs/source-navigation.md
+!/docs/interview-review.md
+!/docs/reference.md
+!/docs/design/
+!/docs/design/**
+!/docs/includes/
+!/docs/includes/**
+!/docs/stylesheets/
+!/docs/stylesheets/**
+!/docs/javascripts/
+!/docs/javascripts/**

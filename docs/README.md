@@ -1,85 +1,97 @@
 # Forge Agent 文档索引
 
+这是 **Forge Agent — Architecture & Implementation** 的本地知识库首页。网站以当前源码为实现事实，
+以 `docs/design/` 中的 Markdown 与 Mermaid 为唯一技术正文，不替代根目录的项目介绍与使用说明。
+全文搜索覆盖 Context Compaction、Git Worktree 等跨专题概念，结果始终回到当前知识库页面。
+
+## 整体架构
+
+--8<-- "docs/includes/system-architecture.md.inc"
+
+[阅读完整系统架构](design/Forge-Agent-当前代码架构.md) ·
+[按源码符号导航](source-navigation.md)
+
+## 快速导航
+
+| 主题 | 解决的问题 | 入口 |
+|---|---|---|
+| Agent Execution | 四入口如何汇合到 Runner，direct 与 isolate 如何分叉 | [任务执行主链](design/01-任务执行主链.md) |
+| Tool Lifecycle & Security | ReAct、权限、Hooks、只读约束和 Completion Guard 如何协作 | [Agent 与 Tool](design/02-Agent与Tool生命周期.md) |
+| Context Engineering | History、Token Budget、Repo Map、Compaction 和 Session 如何分工 | [Context 与 Repo Map](design/03-Context与RepoMap.md) |
+| Planning & Recovery | typed plan、失败分类、恢复预算和 replan gate 如何运行 | [Planning 与 Recovery](design/04-Planning与Recovery.md) |
+| Skills & MCP | progressive disclosure 和外部工具桥接的边界是什么 | [Skills 与 MCP](design/05-Skills与MCP.md) |
+| Isolation & Acceptance | Worktree、Runtime、独立验收和 GitHub 交付如何隔离 | [隔离与独立验收](design/06-隔离与独立验收.md) |
+| Evaluation & Evolution | 冻结评测与离线 Candidate promotion 如何保持证据边界 | [Evaluation 与 Evolution](design/07-Evaluation与Evolution.md) |
+
+## 推荐阅读路径
+
+- **理解整个项目**：整体架构 → 任务执行主链 → Agent/Tool → Context → Planning/Recovery →
+  Skills/MCP → 隔离验收 → Evaluation/Evolution。
+- **面试前快速复习**：从[面试复习入口](interview-review.md)开始，遇到类名或函数名时进入
+  [源码导航](source-navigation.md)。
+
 本目录把“当前事实”和“历史过程”分开。开始新任务时优先阅读 source of truth；只有需要追溯
 设计决策、测试过程或实验原始证据时才进入历史日志。
 
+## 本地网站使用
+
+WSL 中一次性安装独立文档环境：
+
+```bash
+python3 -m venv ~/.venvs/forge-agent-docs
+~/.venvs/forge-agent-docs/bin/pip install -r requirements-docs.txt
+```
+
+预览和构建：
+
+```bash
+bash scripts/serve_docs.sh
+~/.venvs/forge-agent-docs/bin/python -m zensical build --clean --strict
+```
+
+静态输出位于 `site/`。offline 模式使用相对 HTML 链接与本地 worker polyfill，可直接打开
+`site/index.html`；浏览器自动化验证边界记录在阶段二变更日志中。
+
 ## Source of truth
 
-- [`../AGENTS.md`](../AGENTS.md)：本机协作约束、环境、当前状态和最后交接。
-- [`../TODO-P0-P1.md`](../TODO-P0-P1.md)：P0/P1 当前状态、真实剩余项和延期项。
-- [`../Forge-Agent-P0-P1-实施计划.md`](../Forge-Agent-P0-P1-实施计划.md)：下一批实施顺序与验收原则。
-- [`../README.md`](../README.md)：项目能力、安装与使用入口。
-- [`../USAGE.md`](../USAGE.md)：详细运行配置和命令。
+- [`TODO-P0-P1.md`](https://github.com/Napabana/forge-agent/blob/dev/TODO-P0-P1.md)：P0/P1 当前状态、真实剩余项和延期项。
+- [`Forge-Agent-P0-P1-实施计划.md`](https://github.com/Napabana/forge-agent/blob/dev/Forge-Agent-P0-P1-%E5%AE%9E%E6%96%BD%E8%AE%A1%E5%88%92.md)：下一批实施顺序与验收原则。
+- [`README.md`](https://github.com/Napabana/forge-agent/blob/dev/README.md)：项目能力、安装与使用入口。
+- [`USAGE.md`](https://github.com/Napabana/forge-agent/blob/dev/USAGE.md)：详细运行配置和命令。
 
 ## 设计文档
 
-- [`design/Forge-Agent-当前代码架构.md`](design/Forge-Agent-当前代码架构.md)：当前源码分层、调用链和边界。
+架构知识库以当前源码为事实源，推荐按以下顺序阅读：
 
-## 历史计划
+1. [`design/Forge-Agent-当前代码架构.md`](design/Forge-Agent-当前代码架构.md)：总架构、五条执行路径、任务生命周期与状态边界。
+2. [`design/01-任务执行主链.md`](design/01-任务执行主链.md)：四入口、Runner、Orchestrator 和任务生命周期。
+3. [`design/02-Agent与Tool生命周期.md`](design/02-Agent与Tool生命周期.md)：同步 ReAct、Tool lifecycle、Completion Guard 和 Trace。
+4. [`design/03-Context与RepoMap.md`](design/03-Context与RepoMap.md)：History、Token Budget、Persistent Repo Map、Compaction 和 Session。
+5. [`design/04-Planning与Recovery.md`](design/04-Planning与Recovery.md)：typed Planning、failure classification、Recovery budget 和 replan gate。
+6. [`design/05-Skills与MCP.md`](design/05-Skills与MCP.md)：progressive disclosure、MCP client/adapter 与权限边界。
+7. [`design/06-隔离与独立验收.md`](design/06-隔离与独立验收.md)：TaskEngine、Worktree、Docker、read-only、Acceptance 和 PR delivery。
+8. [`design/07-Evaluation与Evolution.md`](design/07-Evaluation与Evolution.md)：Evaluation Harness、Benchmark 与离线 Candidate promotion gate。
+9. [`design/源码索引.md`](design/源码索引.md)：功能→源码→测试和源码→功能→测试双向索引。
+10. [`design/MAINTENANCE.md`](design/MAINTENANCE.md)：开发前后影响分析、文档同步与分级验证协议。
 
-以下文件只保留原始决策与施工过程，不代表当前待办：
+这些 Markdown 与其中的 Mermaid 是本地 HTML 文档站的唯一内容源；不要另行维护一套 HTML 正文。
 
-- [`plans/archive/CONTEXT_COMPACTION_EXECUTION_PLAN.md`](plans/archive/CONTEXT_COMPACTION_EXECUTION_PLAN.md)
-- [`plans/archive/CONTEXT_COMPACTION_TODO.md`](plans/archive/CONTEXT_COMPACTION_TODO.md)
-- [`plans/archive/TODO-P0-P1-2026-09-16-before-alignment.md`](plans/archive/TODO-P0-P1-2026-09-16-before-alignment.md)
-- [`plans/archive/Forge-Agent-P0-P1-实施计划-2026-09-16-before-alignment.md`](plans/archive/Forge-Agent-P0-P1-实施计划-2026-09-16-before-alignment.md)
+## 历史计划与变更
 
-## 变更记录
+历史计划、施工日志和证据只保留在本地，不进入公开 Git 仓库、站点导航与全文搜索，也不代表当前待办：
 
-### 2026-09-14
-
-- [`changes/2026-09-14/P0-1-P0-2与Trace-v2最小闭环.md`](changes/2026-09-14/P0-1-P0-2与Trace-v2最小闭环.md)
-- [`changes/2026-09-14/P0集中边界测试与错误分类收口.md`](changes/2026-09-14/P0集中边界测试与错误分类收口.md)
-- [`changes/2026-09-14/Repo-Map引用计数热点修复与实施计划.md`](changes/2026-09-14/Repo-Map引用计数热点修复与实施计划.md)
-- [`changes/2026-09-14/Runner与可追溯Compaction实施.md`](changes/2026-09-14/Runner与可追溯Compaction实施.md)
-- [`changes/2026-09-14/Token-Usage-统计改动.md`](changes/2026-09-14/Token-Usage-统计改动.md)
-
-### 2026-09-15
-
-- Context Compaction：[`C1`](changes/2026-09-15/Context-Compaction-C1改动内容.md)、
-  [`C2`](changes/2026-09-15/Context-Compaction-C2改动内容.md)、
-  [`C3`](changes/2026-09-15/Context-Compaction-C3改动内容.md)、
-  [`C3 设计`](changes/2026-09-15/Context-Compaction-C3设计收口.md)、
-  [`C4`](changes/2026-09-15/Context-Compaction-C4改动内容.md)、
-  [`C4 设计`](changes/2026-09-15/Context-Compaction-C4设计收口.md)、
-  [`C5`](changes/2026-09-15/Context-Compaction-C5改动内容.md)、
-  [`C5 设计`](changes/2026-09-15/Context-Compaction-C5设计收口.md)、
-  [`规划收口`](changes/2026-09-15/Context-Compaction规划收口.md)、
-  [`B1 设计`](changes/2026-09-15/Context-Policy-B1设计收口.md)。
-- Runner/Session：[`Runner 独立验收`](changes/2026-09-15/Runner独立验收闭环.md)、
-  [`Session 加固与 Query-aware 评测`](changes/2026-09-15/Session加固与Query-aware评测收口.md)、
-  [`Session 双进程冲突`](changes/2026-09-15/Session双进程冲突收口.md)。
-- Repo Map：[`Query Ranking`](changes/2026-09-15/RepoMap-QueryRanking改动内容.md)、
-  [`同一 Run 写后刷新`](changes/2026-09-15/RepoMap同一Run写后刷新.md)。
-- 自动 PR：[`真实 PR`](changes/2026-09-15/pr-test真实PR改动内容.md)、
-  [`确定性交付`](changes/2026-09-15/自动PR确定性交付闭环.md)、
-  [`Token-safe clone`](changes/2026-09-15/Token安全Clone改动内容.md)、
-  [`--no-pr 契约`](changes/2026-09-15/no-pr兼容契约改动内容.md)、
-  [`合并后规划`](changes/2026-09-15/真实PR合并后续规划改动内容.md)。
-- 其他：[`EvalRunner 证据`](changes/2026-09-15/EvalRunner证据闭环.md)、
-  [`失败样本统计`](changes/2026-09-15/失败样本统计改动内容.md)、
-  [`FGH/P0-1 规划`](changes/2026-09-15/FGH与P0-1剩余工作规划.md)、
-  [`P0-1 准备`](changes/2026-09-15/P0-1下一轮准备收口.md)、
-  [`架构文档变更`](changes/2026-09-15/当前代码架构文档改动内容.md)、
-  [`项目 Plugin 精简`](changes/2026-09-15/项目级Plugin精简改动内容.md)。
-
-### 2026-09-16
-
-- [`changes/2026-09-16/B2评测与Agent终止策略收口.md`](changes/2026-09-16/B2评测与Agent终止策略收口.md)：B2 设计与验收协议。
-- [`changes/2026-09-16/B2一次性执行交接-Codex.md`](changes/2026-09-16/B2一次性执行交接-Codex.md)：一次性执行交接。
-- [`changes/2026-09-16/B2终止语义与v3评测改动内容.md`](changes/2026-09-16/B2终止语义与v3评测改动内容.md)：B2 实现、测试和 v3 结果。
-- [`changes/2026-09-16/文档与TODO状态整理改动内容.md`](changes/2026-09-16/文档与TODO状态整理改动内容.md)：状态对齐和文档归档。
-- [`changes/2026-09-16/Trace-v2收口改动内容.md`](changes/2026-09-16/Trace-v2收口改动内容.md)：P0-3 Trace v2 schema、correlation、redaction、token breakdown、兼容与本地验证命令。
-- [`changes/2026-09-16/P0-2-Tool-Hook-Permission-Cancel收口改动内容.md`](changes/2026-09-16/P0-2-Tool-Hook-Permission-Cancel收口改动内容.md)：P0-2 Tool lifecycle、错误分类、cooperative cancel、四入口/direct-isolate 一致性与 Trace v2 对齐。
+- `docs/plans/`：历史实施方案和归档计划。
+- `docs/changes/`：按日期追加的开发记录。
+- `docs/evidence/`：证据索引和可说/不可说边界。
 
 ## 评测证据
 
 评测原始输出保持在 `evals/results/`，不移动到文档目录：
 
-- [`../evals/results/context_policy_benchmark/report.json`](../evals/results/context_policy_benchmark/report.json)：B1，7 cases × 3 variants 的离线 fixture benchmark。
-- [`../evals/results/context_policy_agent_ablation_v2/report.json`](../evals/results/context_policy_agent_ablation_v2/report.json)：B2 v2 对照基线。
-- [`../evals/results/context_policy_agent_ablation_v3/report.md`](../evals/results/context_policy_agent_ablation_v3/report.md)：B2 v3 人类可读报告；同目录保留 `raw.jsonl`、`report.json` 和 traces。
-- [`../evals/results/repo_map_ablation/report.json`](../evals/results/repo_map_ablation/report.json)：Repo Map retrieval 与性能消融。
+- `evals/results/context_policy_benchmark/report.json`：B1，7 cases × 3 variants 的离线 fixture benchmark。
+- `evals/results/context_policy_agent_ablation_v2/report.json`：B2 v2 对照基线。
+- [`evals/results/context_policy_agent_ablation_v3/report.md`](https://github.com/Napabana/forge-agent/blob/dev/evals/results/context_policy_agent_ablation_v3/report.md)：B2 v3 人类可读报告；同目录保留 `raw.jsonl`、`report.json` 和 traces。
+- `evals/results/repo_map_ablation/report.json`：Repo Map retrieval 与性能消融。
 
 ## 阅读规则
 

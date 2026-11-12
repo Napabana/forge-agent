@@ -1,203 +1,165 @@
-# Forge Agent 当前代码架构与结构关系
+# Forge Agent 当前代码架构
 
-> 生成日期：2026-09-15
-> 依据：当前工作树源码（不含 `tests/`）与现有运行配置。本文记录可从代码定位的事实，不把推测写成已实现能力。
+> 审查基线：`dev@fd700bdf48ace5f03bb9feab49d72f7c12e5ddcb`
+> 验证日期：2026-11-12
+> 工作树基线：审查开始时 clean；保留既有 `stash@{0}`，未读取、未应用。
+> 事实规则：当前源码是实现事实；测试说明已固定的行为；历史文档只说明决策和实验；计划不算已实现。
 
-## 1. 阅读范围与系统定位
+## 1. 系统定位与阅读入口
 
-Forge Agent 是一个以同步 `Agent.run()` 为核心的编码代理。它通过 LLM 后端产生动作，经过工具注册表、权限管理和运行时执行工具，再把观察结果写回会话历史；事件日志、任务状态、Repo Map 和 Token Budget 为运行提供审计、持久化和上下文控制。`asyncio` 主要出现在入口编排、事件总线和运行时适配层，不改变 Agent 内核的同步主循环定位。
+Forge Agent 是以同步 `agent.core.Agent.run()` 为内核的编码 Agent。四个产品入口共享
+`agent.runner.ExecutionRunner`，但只有 `isolate=True` 的请求进入异步
+`agent.orchestrate.orchestrate_run()`；direct、Chat 和 GitHub direct 路径由 Runner 直接调用
+`Agent.run()`。这个差异是理解对象所有权、Worktree 和清理行为的第一条主线。
 
-本文件忽略 `tests/`，也不把测试夹具当作生产模块。`config/default.yaml` 只记录配置接口和默认分层，不复制任何密钥值。
+建议按以下顺序阅读：
 
-## 2. 总体分层与依赖方向
+1. 本文：先建立五条执行路径和状态边界；
+2. [01-任务执行主链](01-任务执行主链.md)：入口、Runner、Orchestrator；
+3. [02-Agent与Tool生命周期](02-Agent与Tool生命周期.md)：同步主循环、Tool lifecycle、终止；
+4. [03-Context与RepoMap](03-Context与RepoMap.md)：上下文、索引、压缩和 Session；
+5. [04-Planning与Recovery](04-Planning与Recovery.md)、[05-Skills与MCP](05-Skills与MCP.md)；
+6. [06-隔离与独立验收](06-隔离与独立验收.md)、[07-Evaluation与Evolution](07-Evaluation与Evolution.md)；
+7. [源码索引](源码索引.md)：从功能定位到符号和测试。
+
+## 2. System Architecture
+
+<!-- --8<-- [start:system-architecture] -->
+--8<-- "docs/includes/system-architecture.md.inc"
+<!-- --8<-- [end:system-architecture] -->
+
+图中的实线是当前调用或数据流；Candidate 到正式 Skill 的虚线表示只有显式、校验通过的
+promotion 才会发生。本项目没有自动 promotion，也没有第二套 Agent 主循环。
+
+## 3. 五条生命周期不能混成一条
+
+| 路径 | 汇合点 | 特有状态/分叉 | 不应误解为 |
+|---|---|---|---|
+| Production Runtime | 四入口 → `ExecutionRunner` → `Agent.run` | direct 可组合 Docker；isolate 才进入 Orchestrator/Worktree | 所有请求都经过 Worktree |
+| Chat Session | `ChatSession.run_round` → Runner direct | 共享 canonical History、`state.json`、每轮 Trace、Chat 专用 compaction callback | EventLog 可恢复 Session |
+| GitHub Delivery | Issue → Runner direct → Acceptance → delivery | Agent registry 移除自动 PR 所有权外的 Git 提交工具；交付层 commit/push/PR | Agent 自己发布 PR |
+| Evaluation | `EvaluationHarness._run_trial` → Runner | 冻结 fixture、grader、artifact、process/outcome metrics | 另一个 Agent runtime |
+| Post-run Evolution | Trace/TrialResult → mining → Candidate → gate | 离线处理；Candidate 与正式 `.agents/skills` 隔离 | 在线自我训练或自动生效 |
+
+## 4. Task Execution Lifecycle
 
 ```mermaid
 flowchart TD
-  U[CLI / Chat / API / GitHub Issue] --> R[ExecutionRunner]
-  U --> O[orchestrate_run]
-  R --> O
-  O --> A[Agent.run 同步 ReAct 主循环]
-  A --> P[Prompt + ConversationHistory]
-  A --> L[LLMBackend / Router]
-  A --> X[ToolExecutor]
-  X --> PM[PermissionManager + Hooks]
-  X --> T[ToolRegistry]
-  T --> F[File/Search/Shell/Test/Git Tools]
-  F --> RT[LocalRuntime / DockerRuntime]
-  A --> RM[RepoMap]
-  A --> C[Compaction + TokenBudget]
-  A --> E[EventLog]
-  R --> AC[Independent Acceptance]
-  O --> W[WorktreeSession]
-  O --> B[AgentBus]
-  U --> S[SessionStore / API TaskStore / SQLite TaskEngine]
-  E --> LOG[(JSONL 日志)]
+  A[入口构造 Task / RunRequest] --> B[ExecutionRunner 冻结 Acceptance 与 entrypoint]
+  B --> C{isolate?}
+  C -->|yes| D[TaskEngine claim + Worktree create]
+  D --> E{sandbox?}
+  E -->|yes| F[Docker preflight; mount worktree at /workspace]
+  E -->|no| G[LocalRuntime]
+  F --> H[workspace-bound Registry/Permission/Executor]
+  G --> H
+  C -->|no| I[direct Registry/Executor; optional long-lived MCP]
+  H --> J[Agent.run]
+  I --> J
+  J --> K[初始化 Planning/Recovery/Skills/Repo Map/History]
+  K --> L[prepare_next_turn and build model-facing messages]
+  L --> M[LLM call with retry]
+  M --> N{Action}
+  N -->|Skill/Plan control| O[更新 per-run runtime state]
+  N -->|ToolCall| P[Planning/Recovery gate]
+  P --> Q[validate → pre-hook → permission → tool → post-hook]
+  Q --> R[Observation + repository/test/MCP progress + Trace]
+  N -->|FINISH| S[Completion Guard]
+  S -->|reject| T[History feedback; optional recovery]
+  S -->|accept| U[RunStatus.SUCCESS]
+  N -->|GIVE_UP| V[RunStatus.GAVE_UP]
+  O --> L
+  R --> W{loop/no-progress/failure?}
+  W -->|recover| T
+  W -->|continue| L
+  T --> L
+  M -->|provider fatal| X[FAILED/provider_error]
+  Q -->|framework crash| Y[FAILED/infrastructure_error]
+  J -->|cancel safe boundary| Z[CANCELED]
+  J -->|max_steps| AA[INCOMPLETE/resource_exhausted]
+  U --> AB[Runner independent Acceptance]
+  V --> AB
+  X --> AB
+  Y --> AB
+  Z --> AB
+  AA --> AB
+  AB --> AC{isolated?}
+  AC -->|yes| AD[inspect/finalize Worktree]
+  AC -->|no| AE[close Trace / owned resources]
+  AD --> AE
+  AE --> AF[optional GitHub delivery]
 ```
 
-依赖方向原则：入口负责组装依赖和生命周期；`agent` 负责任务循环与编排；`context` 负责上下文；`llm` 负责协议适配；`tools` 只负责具体动作；`harness` 负责工具执行前后的治理；`runtime` 负责进程/容器边界；`task`、`session`、`event_log` 负责状态与审计。生产代码没有把测试模块反向作为运行时依赖。
+Completion Guard 在 Agent 内；Independent Acceptance 在 Agent 返回后，由 Runner 持有，隐藏
+verifier 不进入 History。Acceptance 失败不会反写主循环继续修复。
 
-## 3. 关键运行链路
+## 5. 核心状态与所有者
 
-### 3.1 本地 CLI / Chat
+| 状态 | 所有者 | 生命周期/持久化 |
+|---|---|---|
+| `Task`、`RunResult` | `agent.task` / Runner | 单次 run；Result 汇总状态、usage、Trace、Worktree、Acceptance |
+| canonical `ConversationHistory` | Agent/ChatSession | direct 单 run；Chat 跨轮并写入 Session `state.json` |
+| model-facing compacted view | `TraceableCompaction` + Agent | 下一请求的一次性 override，不覆盖 canonical History |
+| Planning/Recovery/Skill runtime | Agent | 每个 run 重建；每轮注入 system context，不依赖 History 保存 |
+| Repo Map 结构索引 | `PersistentRepoIndex` | SQLite 持久化；query 只 rerank，可靠 changed path 增量刷新 |
+| TaskEngine task state | `TaskEngine` | isolate 路径的 SQLite WAL 状态机 |
+| API task state | `ApiTaskStore` | HTTP 队列/取消/结果；与 TaskEngine 是不同状态域 |
+| Chat Session state | `JsonChatSessionStore` | 原子 JSON、revision 冲突检测、per-round logs |
+| Trace v2 | `EventLog` | append-only JSONL 审计；不是执行重放或 Session 数据库 |
+| Worktree artifact | WorktreeSession/Orchestrator | inspect 后保留或清理；保留不等于 commit/push/PR |
+| Candidate/Evaluation/Decision | `CandidateStore` | 离线 artifact；正式 Skill 需显式 promotion |
 
-1. `entry/cli.py` 读取 `config.schema.load_config()`，创建 LLM backend 与 `ToolRegistry`。
-2. `entry/cli.py` 组装 `RunRequest`，交给 `agent.runner.ExecutionRunner`。
-3. `ExecutionRunner` 调用 `agent.orchestrate.orchestrate_run()`，按配置选择本地或 Docker runtime、worktree 策略、权限管理器和事件日志。
-4. `Agent.run()` 构造系统/任务消息，调用 backend；若返回工具动作，则由 `ToolExecutor` 执行并形成 `Observation`，继续下一轮。
-5. 成功性由任务完成守卫、验收契约和 `RunResult` 表示；事件持续写入 `EventLog`。
-6. `entry/chat.py` 在交互模式下消费事件、显示步骤与 Token 用量，并通过 `session_store` 保存会话。
+## 6. 安全、隔离和完成性的正交边界
 
-### 3.2 HTTP API
+- Permission/ExecutionConstraints 决定 ToolCall 是否允许进入副作用执行；可信只读约束不能被
+  自定义 permission 或确认回调放宽。
+- Worktree 隔离 checkout、index、branch 和成果处置，不隔离进程、网络或宿主系统。
+- DockerRuntime 约束进程、网络、资源和根文件系统；挂载的仓库/Worktree 仍可写。
+- Completion Guard 验证 Agent 自己的 change/test/final-state 条件。
+- Independent Acceptance 在 Agent 外验证 required/forbidden paths 和隐藏 verifier。
+- GitHub delivery 只有在 Acceptance 通过后才进入确定性 commit/push/PR。
 
-`entry/api.py:create_app()` 注册 FastAPI 路由。请求先由 `ApiTaskStore` 持久化，再由后台线程调用 `run_agent_task()`；任务状态、取消标记、JSONL 日志和 SSE 事件流由 API 层汇总。仓库路径通过允许根目录检查，避免 API 任务越界访问。
+## 7. 同步与异步边界
 
-### 3.3 GitHub Issue 自动 PR
+`Agent.run()`、Tool API 和 MCP adapter 对 Agent 都是同步接口。异步主要用于
+`orchestrate_run()` 的 Worktree/AgentBus 生命周期、MCP manager 的专用 loop thread、FastAPI/SSE
+入口和 EventLog→AgentBus 转发。因此 cooperative cancel 只能在 Provider、Tool lifecycle 和 step
+安全边界生效，不能强杀任意正在执行的同步调用。
 
-`entry/github_issue.py:run_on_issue()` 获取 Issue、克隆目标仓库、创建分支并构建目标仓库绑定的 registry。自动 PR 模式会移除 Agent registry 中的 `git_add`/`git_commit`，由独立验收和交付层完成提交、push 与 PR；`--no-pr` 模式保留 Git 工具以维持本地兼容行为。GitHub Token 仅通过临时 Git extraHeader 传给子进程，不写入 URL、remote 或日志。
+## 8. 当前实现范围与未实现项
 
-### 3.4 上下文刷新与压缩
+已实现：四入口统一 Runner、同步 ReAct、三种 LLM backend、persistent query-aware Repo Map、
+Chat Session/Compaction、structured Planning/Recovery、Skills、MCP Tool integration、Tool lifecycle、
+Worktree/Docker、Trace v2、Independent Acceptance、Evaluation Harness 和离线 Evolution pipeline。
 
-`Agent` 维护当前 `RepoMap`、`ConversationHistory` 和 `TokenBudget`。文件写入/编辑成功后，当前 Run 的 Repo Map 摘要会失效，下一 step 重新构建消息时读取新状态。Token 超限时由 `context.compaction.TraceableCompaction` 生成带 checkpoint 的摘要并保留可追踪事件；这不是确定性重放机制。
+未实现或不应夸大：多 Agent、parallel/multi-tool call、任意同步调用强制终止、自动 merge、
+无人监督发布、分布式 Session、完整 OpenTelemetry、Context recall C6、在线 RL/参数训练、自动
+Candidate promotion。Benchmark 结果只适用于冻结协议。
 
-## 4. 逐文件职责注释（不含测试）
+## 9. 对旧架构文档的修正
 
-表中“关键符号”用于源码定位；空的 `__init__.py` 仅承担包边界，不承载业务逻辑。
+本文件替换 2026-09-15 版本，主要修正：
 
-### 4.1 Agent 核心层
+1. Runner 不是无条件调用 Orchestrator；只有 isolate 分支进入 `orchestrate_run()`。
+2. Repo Map 默认已是 `PersistentRepoMap` + SQLite 结构索引。
+3. Context Compaction 当前产品接线集中在 Chat；不是四入口默认启用。
+4. Planning/Recovery/Skills 是单一 Agent loop 内的 per-run state；MCP 是普通 Tool adapter；
+   Evaluation 和 Evolution 在主循环外。
+5. 增加可信 `ExecutionConstraints.read_only`、repository effect 和最新 Completion Guard 日志排除。
+6. API Store、TaskEngine、Chat Session 与 Trace 是四种不同状态域。
 
-| 文件                       | 代码职责注释                                                                     | 关键符号 / 关系                                                                      |
-| ------------------------ | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `agent/__init__.py`      | Agent 包标记文件。                                                               | 无运行逻辑。                                                                         |
-| `agent/task.py`          | 定义任务、动作、工具调用、观察、事件和运行结果等领域数据模型与枚举。                                         | `Task`、`Action`、`Observation`、`Event`、`RunResult`；被 Agent、工具、日志和 runner 共享。    |
-| `agent/core.py`          | 同步 ReAct 主循环；组装 prompt、调用 LLM、执行工具、完成性守卫、Reflection、循环检测、Repo Map 失效和错误分类。 | `Agent`、`AgentConfig`、`PrepareNextTurnContext`；依赖 context、llm、tools、event_log。 |
-| `agent/prompt.py`        | 生成系统提示、任务提示、工具说明和反思提示。                                                     | `build_system_prompt()`、`build_task_prompt()`；输入为工具 schema 与任务信息。              |
-| `agent/runner.py`        | 单次执行入口；封装 `RunRequest`、生命周期、独立验收、改动快照和结果归一化。                               | `ExecutionRunner`、`AcceptanceContract`；调用 `orchestrate_run()`。                 |
-| `agent/orchestrate.py`   | 编排 Agent、ToolExecutor、runtime、worktree、权限、事件总线和任务引擎；负责最终化与清理。              | `orchestrate_run()`；是跨层生命周期连接点。                                                |
-| `agent/event_log.py`     | 将任务事件、动作、观察、Token 用量和运行摘要写成 JSONL，并提供查询/汇总。                                | `EventLog`、`summarize_run()`；日志是审计记录，不是重放器。                                    |
-| `agent/loop_detector.py` | 对动作、观察和仓库快照做规范化指纹，识别重复循环与严重度。                                              | `LoopDetector`、`snapshot_repository()`；被 `Agent` 调用。                           |
-| `agent/session.py`       | 定义可持久化聊天会话、轮次、pending round 和版本化状态模型。                                      | `ChatSessionState`、`ChatRoundState`、`PendingRoundState`。                       |
-| `agent/session_store.py` | 将会话状态原子写入 JSON 文件，校验仓库归属、版本和并发冲突，并过滤敏感内容。                                  | `JsonChatSessionStore`、`repo_key_for_path()`。                                  |
+## 10. 验证与证据边界
 
-### 4.2 上下文层
+主要回归入口见 [源码索引](源码索引.md)。测试通过不等于线上可靠性，单样本也不等于总体性能。
+Benchmark V1 R2 的两个变体均为 `23/24`，Full P2 没有提高该 suite 的 observed acceptance，
+且执行成本更高；P2-5 Candidate 最终被 Gate 拒绝、未 promotion。详见
+[07-Evaluation与Evolution](07-Evaluation与Evolution.md)。
 
-| 文件                        | 代码职责注释                                           | 关键符号 / 关系                                      |
-| ------------------------- | ------------------------------------------------ | ---------------------------------------------- |
-| `context/__init__.py`     | Context 包标记文件。                                   | 无运行逻辑。                                         |
-| `context/history.py`      | 管理 LLM 消息序列、追加和截取历史。                             | `ConversationHistory`；被 Agent 与 compaction 使用。 |
-| `context/repo_map.py`     | 扫描仓库文件、提取符号/导入、计算引用与路径重要性，并支持 query-aware 摘要。    | `RepoMap`、`FileInfo`、`Symbol`；摘要被 prompt 消费。   |
-| `context/token_budget.py` | 估算文本/消息 Token，规划历史保留与截断。可选使用 tiktoken，缺失时回退估算。   | `TokenBudget`、`BudgetPlan`。                    |
-| `context/compaction.py`   | 在上下文压缩时记录仓库 revision、checkpoint、摘要和事件，提供可追踪压缩结果。 | `TraceableCompaction`、`CompactionCheckpoint`。  |
+## 11. 后续阶段复用协议
 
-### 4.3 LLM 协议层
+阶段二应直接把本目录 Markdown 作为唯一内容源：导航使用数字前缀，Mermaid 原样渲染，源码
+索引表用于搜索与交叉链接；不要复制成另一套 HTML 文案。
 
-| 文件                         | 代码职责注释                                                          | 关键符号 / 关系                                                 |
-| -------------------------- | --------------------------------------------------------------- | --------------------------------------------------------- |
-| `llm/__init__.py`          | LLM 包标记文件。                                                      | 无运行逻辑。                                                    |
-| `llm/base.py`              | 定义消息、工具 schema、响应、backend 抽象、Mock backend 和流式混入。                | `LLMBackend`、`LLMMessage`、`LLMResponse`、`StreamingMixin`。 |
-| `llm/router.py`            | 根据配置选择 Anthropic、OpenAI-compatible 或 OpenAI Responses backend。  | `create_backend()`、`create_backend_from_config()`。        |
-| `llm/errors.py`            | 将异常归类为认证、限流、超时、网络、协议或未知错误，并解析 retry-after。                      | `LLMErrorKind`、`classify_llm_error()`。                    |
-| `llm/anthropic_backend.py` | Anthropic Messages 协议适配、工具调用解析、用量统计和流式文本桥接。                     | `AnthropicBackend`。                                       |
-| `llm/openai_compat.py`     | OpenAI Chat Completions 兼容协议适配；解析原生工具调用、伪工具文本、finish/放弃文本和流式响应。 | `OpenAICompatBackend`。                                    |
-| `llm/openai_responses.py`  | OpenAI Responses 协议适配；处理 reasoning、function call、usage 与流式回退。   | `OpenAIResponsesBackend`。                                 |
-| `llm/usage.py`             | 定义单次请求和会话级 Token 用量，并提供序列化。                                     | `TokenUsage`、`SessionUsage`。                              |
-
-### 4.4 工具与执行治理层
-
-| 文件                         | 代码职责注释                                                     | 关键符号 / 关系                                                    |
-| -------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------ |
-| `tools/__init__.py`        | Tools 包标记文件。                                               | 无运行逻辑。                                                       |
-| `tools/base.py`            | 工具抽象、参数 schema 校验、结果/错误类型、注册表以及测试用 Noop/Failing 工具。        | `BaseTool`、`ToolRegistry`、`ToolResult`。                      |
-| `tools/file_tool.py`       | 在 workspace 边界内读文件、查看窗口、写文件；负责路径解析和大小/行数限制。                | `FileReadTool`、`FileViewTool`、`FileWriteTool`。               |
-| `tools/search_tool.py`     | 文本搜索、文件发现和符号发现；限制结果数量与单行长度。                                | `SearchTextTool`、`FindFilesTool`、`FindSymbolTool`。           |
-| `tools/shell_tool.py`      | 执行 shell 命令，检查阻断模式、只读命令、确认策略和输出截断。                         | `ShellTool`、`terminal_confirm()`。                            |
-| `tools/test_tool.py`       | 通过 runtime 执行 pytest，设置测试超时并格式化输出。                         | `PytestTool`。                                                |
-| `tools/git_tool.py`        | 提供 status/diff/add/commit 工具，限制 diff 输出并通过 runtime 执行 Git。 | `GitStatusTool`、`GitDiffTool`、`GitAddTool`、`GitCommitTool`。  |
-| `tools/runtime.py`         | 定义进程运行时抽象、本地 runtime、Docker runtime、容器参数和资源边界。             | `Runtime`、`LocalRuntime`、`DockerRuntime`、`create_runtime()`。 |
-| `tools/sandbox.Dockerfile` | 构建 Docker 沙箱镜像的基础定义。                                       | 被 `DockerRuntime` 使用。                                        |
-| `harness/__init__.py`      | 导出工具执行、权限和 Hook 组件。                                        | 包装层导出。                                                       |
-| `harness/executor.py`      | 统一工具调用流程：参数校验、权限决策、Hook、runtime 执行、错误分类和观察结果生成。            | `ToolExecutor`。                                              |
-| `harness/permission.py`    | 按工具与路径判定 allow/deny/confirm，防止 workspace 越界。               | `PermissionManager`、`PermissionDecision`。                    |
-| `harness/hooks.py`         | 定义工具执行前后 Hook 事件、回调和阻断结果。                                  | `Hooks`、`HookEvent`。                                         |
-
-### 4.5 运行隔离、任务与通信
-
-| 文件                    | 代码职责注释                                 | 关键符号 / 关系                                                    |
-| --------------------- | -------------------------------------- | ------------------------------------------------------------ |
-| `runtime/__init__.py` | 导出 worktree 相关类型。                      | 包边界导出。                                                       |
-| `runtime/worktree.py` | 管理隔离 worktree 的创建、变更检测、保留/丢弃策略和最终化产物。  | `WorktreeSession`、`WorktreeArtifact`、`WorktreeResultPolicy`。 |
-| `task/__init__.py`    | 导出 SQLite 任务引擎和状态常量。                   | 包边界导出。                                                       |
-| `task/engine.py`      | SQLite WAL 任务队列；实现条件认领、完成/失败状态迁移和并发保护。 | `TaskEngine`、`Task`、`STATUS_*`。                              |
-| `ipc/__init__.py`     | 导出进程内 AgentBus 类型。                     | 包边界导出。                                                       |
-| `ipc/bus.py`          | 异步 topic 总线，支持订阅、通配匹配、发布和取消。           | `AgentBus`、`Message`；由编排层转发运行事件。                             |
-
-### 4.6 入口与持久化
-
-| 文件                      | 代码职责注释                                                                      | 关键符号 / 关系                                                 |
-| ----------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `entry/cli.py`          | Click CLI；加载配置、构建 registry、启动 run/chat/log 子命令并渲染结果。                        | `_build_registry()`、`run()`、`chat()`、`log_*()`。           |
-| `entry/chat.py`         | 交互式 Chat UI；显示事件、颜色化状态、读取 revision 和调用会话。                                   | `ChatSession`、`_print_event_live()`。                      |
-| `entry/api.py`          | FastAPI 服务、任务创建/取消/查询、SSE 事件流和 dashboard。                                   | `create_app()`、`run_agent_task()`。                        |
-| `entry/api_store.py`    | API 任务的 SQLite 持久化、状态迁移和取消请求。                                               | `ApiTaskStore`、`ApiTask`。                                 |
-| `entry/github_issue.py` | GitHub Issue → 本地运行 → 独立验收 → commit/push/PR 的交付入口；含安全 clone 和 `--no-pr` 分支。 | `run_on_issue()`、`clone_repo()`、`deliver_pull_request()`。 |
-
-### 4.7 配置、评测与示例
-
-| 文件                                  | 代码职责注释                                                   | 关键符号 / 关系                                            |
-| ----------------------------------- | -------------------------------------------------------- | ---------------------------------------------------- |
-| `config/schema.py`                  | 读取 YAML、展开 `${ENV_VAR}`、构造 dataclass 配置并合并 CLI 覆盖。       | `AppConfig`、`load_config()`、`merge_cli_overrides()`。 |
-| `config/default.yaml`               | 默认 LLM、Agent、工具、上下文和 runtime 配置；敏感值通过环境变量引用。             | 运行时配置输入，保持用户文件不改。                                    |
-| `evals/__init__.py`                 | 导出评测 harness API。                                        | 包边界导出。                                               |
-| `evals/harness.py`                  | 从任务清单加载 EvalCase，物化临时仓库，执行 verifier 并汇总结果。               | `EvalCase`、`EvalResult`、`load_cases()`。              |
-| `evals/run.py`                      | 驱动多 case 执行，调用 `ExecutionRunner`，记录 patch、工具调用数和结果 JSON。 | `EvalRunner`。                                        |
-| `evals/report.py`                   | 读取评测 JSON，按 case/指标生成汇总报告。                               | `build_report()`。                                    |
-| `evals/pr_test_issue_4_verifier.py` | 面向 `Napabana/pr-test` Issue #4 的仓库外验收脚本；运行目标测试并检查关键行为。   | 独立 verifier，不是 Agent 生产依赖。                           |
-| `evals/fixtures/tasks.json`         | 固定评测任务清单。                                                | 被 `evals.harness` 读取。                                |
-| `scripts/start.sh`                  | WSL/Linux 启动辅助脚本，设置仓库、虚拟环境和环境文件。                         | shell 启动入口。                                          |
-| `scripts/m1_demo.py`                | 演示 worktree 与任务引擎协作的本地脚本。                                | 仅示例用途。                                               |
-| `scripts/m4_demo.py`                | 演示事件总线、Agent、工具和任务引擎的组合流程。                               | 仅示例用途。                                               |
-| `pyproject.toml`                    | 包元数据、依赖、入口点、pytest 和 coverage 配置。                        | `coding-agent` console script 指向 `entry.cli:main`。   |
-| `smoke_test.py`                     | 根目录冒烟示例，验证基础运行链路。                                        | 非核心生产模块。                                             |
-| `linked_list.py`                    | 教学/算法示例。                                                 | 与 Agent 运行时无依赖关系。                                    |
-| `quicksort.py`                      | 教学/算法示例。                                                 | 与 Agent 运行时无依赖关系。                                    |
-
-## 5. 状态与边界关系
-
-| 状态对象                          | 所有者                            | 持久化/传播            | 重要边界                          |
-| ----------------------------- | ------------------------------ | ----------------- | ----------------------------- |
-| `Task` / `RunResult`          | `agent.task`、`ExecutionRunner` | 内存，结果写入事件日志/调用方   | 不等于 Git commit 或 PR 合并。       |
-| `ConversationHistory`         | `Agent`                        | 会话 checkpoint 可落盘 | 压缩后只保留摘要和可追踪 checkpoint。      |
-| `RepoMap`                     | 单个 `Agent.run()`               | 内存缓存              | 写工具成功后失效，下一 step 刷新；当前不做增量索引。 |
-| `WorktreeSession`             | `orchestrate_run`              | 文件系统 Git worktree | `keep` 只表示保留变更，不代表已提交、推送或合并。  |
-| `EventLog`                    | Agent/编排层                      | JSONL             | 审计记录，不是确定性重放。                 |
-| `TaskEngine` / `ApiTaskStore` | 任务/API 入口                      | SQLite WAL        | 两者是不同用途的状态存储，不应混为一个状态机。       |
-
-## 6. 大设计或大改动的合理性门禁
-
-今后涉及跨层、大范围或改变交付语义的设计，先写出以下判断再编码：
-
-1. **问题证据**：指出当前实现、真实日志、失败案例或可复现实验；没有证据的性能/可靠性收益只能写成假设。
-2. **边界与影响面**：列出入口、Agent、工具、runtime、持久化、日志和兼容模式受影响的文件。
-3. **最小替代方案**：先评估是否能通过局部修复、现有抽象或配置解决；没有必要不引入新依赖、MCP、多 Agent、向量索引或 speculative abstraction。
-4. **状态与回滚**：说明幂等、并发、失败恢复、数据兼容、worktree/commit/PR 责任边界，以及如何撤销。
-5. **验证计划**：先定义最小定向测试或真实评测、对照组、输入任务、重复次数和原始输出目录；没有测量就不写收益结论。
-6. **用户确认门**：代码修改前列出拟修改文件及逐文件理由，等待确认；只读审计和文档更新可以先做。
-
-建议评审记录格式：
-
-```text
-问题证据：
-拟议设计：
-受影响文件：
-保留的现有契约：
-最小替代方案及未采用原因：
-失败/回滚路径：
-定向验证：
-等待确认项：
-```
-
-## 7. 当前未宣称事项
-
-* 没有基于当前固定任务声称 Agent 真实成功率、Recall@K、MRR、延迟或成本收益。
-* 没有把保留 worktree、生成 checkpoint、创建 commit、push、创建 PR、合并 PR 视为同一个动作。
-* 没有把 EventLog 当作完整重放系统。
-* Repo Map 的真实消融、Context Compaction 的端到端收益仍需先冻结实验协议，再决定是否改代码。
+阶段三建议：代码 Diff 若改变公共数据结构、对象所有权、调用方向、状态持久化、权限/副作用或
+终止语义，则更新对应专题和源码索引；只有跨专题关系变化时才更新总图。局部 bug 修复记录变更
+日志即可。每次更新记录 commit、日期，并检查相对链接、源码路径、符号和 Mermaid fence。

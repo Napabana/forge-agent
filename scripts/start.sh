@@ -10,8 +10,8 @@
 # 如需改用其它模型，编辑该 .env 的 MODEL_ID / ANTHROPIC_BASE_URL 段。
 set -euo pipefail
 
-REPO="/home/jfm/forge-agent"
-VENV="/home/jfm/.venv"
+REPO="${FORGE_AGENT_REPO:-$HOME/forge-agent}"
+VENV="${FORGE_AGENT_VENV:-$HOME/.venv}"
 ENV_FILE="${FORGE_ENV_FILE:-$HOME/learn-claude-code/.env}"
 
 # 1. 激活虚拟环境

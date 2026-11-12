@@ -1,0 +1,259 @@
+{
+  "version": 1,
+  "verified_against": "fd700bdf48ace5f03bb9feab49d72f7c12e5ddcb",
+  "last_verified": "2026-11-12",
+  "source_index": "docs/design/源码索引.md",
+  "knowledge_documents": [
+    "docs/README.md",
+    "docs/source-navigation.md",
+    "docs/interview-review.md",
+    "docs/reference.md",
+    "docs/design/Forge-Agent-当前代码架构.md",
+    "docs/design/01-任务执行主链.md",
+    "docs/design/02-Agent与Tool生命周期.md",
+    "docs/design/03-Context与RepoMap.md",
+    "docs/design/04-Planning与Recovery.md",
+    "docs/design/05-Skills与MCP.md",
+    "docs/design/06-隔离与独立验收.md",
+    "docs/design/07-Evaluation与Evolution.md",
+    "docs/design/源码索引.md",
+    "docs/design/MAINTENANCE.md"
+  ],
+  "mermaid_documents": {
+    "docs/README.md": 1,
+    "docs/design/Forge-Agent-当前代码架构.md": 2,
+    "docs/design/01-任务执行主链.md": 1,
+    "docs/design/02-Agent与Tool生命周期.md": 1,
+    "docs/design/03-Context与RepoMap.md": 1,
+    "docs/design/04-Planning与Recovery.md": 1,
+    "docs/design/05-Skills与MCP.md": 1,
+    "docs/design/06-隔离与独立验收.md": 1,
+    "docs/design/07-Evaluation与Evolution.md": 1,
+    "docs/design/MAINTENANCE.md": 1
+  },
+  "search_terms": [
+    "ReAct",
+    "ExecutionRunner",
+    "ToolExecutor",
+    "RepoMap",
+    "TokenBudget",
+    "Context Compaction",
+    "Planning",
+    "Recovery",
+    "Permission",
+    "Hooks",
+    "MCP",
+    "Skills",
+    "EvaluationHarness",
+    "PromotionGate",
+    "Git Worktree",
+    "Docker",
+    "设计取舍"
+  ],
+  "source_roots": [
+    "agent",
+    "config",
+    "context",
+    "entry",
+    "evals",
+    "experience",
+    "harness",
+    "ipc",
+    "llm",
+    "mcp_integration",
+    "runtime",
+    "skills",
+    "task",
+    "tools"
+  ],
+  "modules": [
+    {
+      "id": "task_execution",
+      "name": "Agent Execution",
+      "document": "docs/design/01-任务执行主链.md",
+      "source_patterns": [
+        "agent/runner.py",
+        "agent/orchestrate.py",
+        "agent/task.py",
+        "entry/api.py",
+        "entry/api_store.py",
+        "entry/chat.py",
+        "entry/cli.py",
+        "entry/github_issue.py",
+        "ipc/*.py",
+        "task/*.py"
+      ],
+      "related_documents": [
+        "docs/design/Forge-Agent-当前代码架构.md",
+        "docs/design/源码索引.md",
+        "docs/README.md"
+      ],
+      "cross_impacts": ["agent_tool_lifecycle", "isolation_acceptance"],
+      "symbols": [
+        {"path": "agent/runner.py", "name": "ExecutionRunner"},
+        {"path": "agent/orchestrate.py", "name": "orchestrate_run"},
+        {"path": "task/engine.py", "name": "TaskEngine"}
+      ]
+    },
+    {
+      "id": "agent_tool_lifecycle",
+      "name": "Tool Lifecycle & Security",
+      "document": "docs/design/02-Agent与Tool生命周期.md",
+      "source_patterns": [
+        "agent/core.py",
+        "agent/event_log.py",
+        "agent/loop_detector.py",
+        "agent/prompt.py",
+        "agent/trace_v2.py",
+        "config/schema.py",
+        "harness/executor.py",
+        "harness/hooks.py",
+        "harness/permission.py",
+        "llm/base.py",
+        "llm/errors.py",
+        "llm/router.py",
+        "llm/tool_schema.py",
+        "llm/usage.py",
+        "tools/base.py",
+        "tools/file_tool.py",
+        "tools/git_tool.py",
+        "tools/search_tool.py",
+        "tools/shell_tool.py",
+        "tools/test_tool.py"
+      ],
+      "related_documents": [
+        "docs/design/Forge-Agent-当前代码架构.md",
+        "docs/design/06-隔离与独立验收.md",
+        "docs/design/源码索引.md"
+      ],
+      "cross_impacts": ["planning_recovery", "context_engineering", "isolation_acceptance"],
+      "symbols": [
+        {"path": "agent/core.py", "name": "Agent.run"},
+        {"path": "harness/executor.py", "name": "ToolExecutor.execute"},
+        {"path": "harness/permission.py", "name": "PermissionManager.check"},
+        {"path": "tools/base.py", "name": "ToolRegistry"}
+      ]
+    },
+    {
+      "id": "context_engineering",
+      "name": "Context Engineering",
+      "document": "docs/design/03-Context与RepoMap.md",
+      "source_patterns": [
+        "agent/core.py",
+        "agent/session.py",
+        "agent/session_store.py",
+        "context/*.py",
+        "entry/chat.py",
+        "llm/capabilities.py"
+      ],
+      "related_documents": [
+        "docs/design/Forge-Agent-当前代码架构.md",
+        "docs/design/源码索引.md"
+      ],
+      "cross_impacts": ["agent_tool_lifecycle", "planning_recovery"],
+      "symbols": [
+        {"path": "context/history.py", "name": "ConversationHistory"},
+        {"path": "context/token_budget.py", "name": "TokenBudget"},
+        {"path": "context/repo_map.py", "name": "RepoMap.build"},
+        {"path": "context/repo_index.py", "name": "PersistentRepoIndex"},
+        {"path": "context/compaction.py", "name": "TraceableCompaction"}
+      ]
+    },
+    {
+      "id": "planning_recovery",
+      "name": "Planning & Recovery",
+      "document": "docs/design/04-Planning与Recovery.md",
+      "source_patterns": [
+        "agent/core.py",
+        "agent/planning.py",
+        "agent/recovery.py"
+      ],
+      "related_documents": [
+        "docs/design/02-Agent与Tool生命周期.md",
+        "docs/design/Forge-Agent-当前代码架构.md",
+        "docs/design/源码索引.md"
+      ],
+      "cross_impacts": ["agent_tool_lifecycle", "context_engineering", "skills_mcp"],
+      "symbols": [
+        {"path": "agent/planning.py", "name": "PlanningRuntime"},
+        {"path": "agent/recovery.py", "name": "RecoveryPolicy"},
+        {"path": "agent/recovery.py", "name": "RecoveryRuntime"}
+      ]
+    },
+    {
+      "id": "skills_mcp",
+      "name": "Skills & MCP",
+      "document": "docs/design/05-Skills与MCP.md",
+      "source_patterns": [
+        "agent/core.py",
+        "mcp_integration/*.py",
+        "skills/*.py"
+      ],
+      "related_documents": [
+        "docs/design/02-Agent与Tool生命周期.md",
+        "docs/design/Forge-Agent-当前代码架构.md",
+        "docs/design/源码索引.md"
+      ],
+      "cross_impacts": ["agent_tool_lifecycle", "planning_recovery"],
+      "symbols": [
+        {"path": "skills/catalog.py", "name": "SkillCatalog.discover"},
+        {"path": "skills/runtime.py", "name": "SkillRuntime"},
+        {"path": "mcp_integration/manager.py", "name": "MCPClientManager"},
+        {"path": "mcp_integration/adapter.py", "name": "MCPToolAdapter"}
+      ]
+    },
+    {
+      "id": "isolation_acceptance",
+      "name": "Isolation & Acceptance",
+      "document": "docs/design/06-隔离与独立验收.md",
+      "source_patterns": [
+        "agent/orchestrate.py",
+        "agent/runner.py",
+        "entry/github_issue.py",
+        "harness/permission.py",
+        "ipc/*.py",
+        "runtime/*.py",
+        "task/*.py",
+        "tools/runtime.py",
+        "tools/sandbox.Dockerfile"
+      ],
+      "related_documents": [
+        "docs/design/01-任务执行主链.md",
+        "docs/design/02-Agent与Tool生命周期.md",
+        "docs/design/Forge-Agent-当前代码架构.md",
+        "docs/design/源码索引.md"
+      ],
+      "cross_impacts": ["task_execution", "agent_tool_lifecycle"],
+      "symbols": [
+        {"path": "runtime/worktree.py", "name": "WorktreeSession"},
+        {"path": "tools/runtime.py", "name": "LocalRuntime"},
+        {"path": "tools/runtime.py", "name": "DockerRuntime"},
+        {"path": "agent/runner.py", "name": "AcceptanceContract"},
+        {"path": "agent/runner.py", "name": "_apply_independent_acceptance"}
+      ]
+    },
+    {
+      "id": "evaluation_evolution",
+      "name": "Evaluation & Evolution",
+      "document": "docs/design/07-Evaluation与Evolution.md",
+      "source_patterns": [
+        "evals/coding_agent/*.py",
+        "experience/*.py",
+        "scripts/report_coding_agent_benchmark_v1.py",
+        "scripts/run_real_skill_evolution_eval.py",
+        "scripts/run_skill_evolution.py"
+      ],
+      "related_documents": [
+        "docs/design/Forge-Agent-当前代码架构.md",
+        "docs/design/源码索引.md",
+        "docs/reference.md"
+      ],
+      "cross_impacts": ["task_execution", "skills_mcp"],
+      "symbols": [
+        {"path": "evals/coding_agent/runner.py", "name": "EvaluationHarness"},
+        {"path": "experience/promotion.py", "name": "PromotionGate"},
+        {"path": "experience/promotion.py", "name": "PromotionManager"}
+      ]
+    }
+  ]
+}

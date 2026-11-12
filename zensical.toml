@@ -1,0 +1,73 @@
+[project]
+site_name = "Forge Agent — Architecture & Implementation"
+site_description = "基于当前源码核查的 Forge Agent 架构、实现流程、源码索引与设计证据。"
+docs_dir = "docs"
+site_dir = "site"
+use_directory_urls = false
+extra_css = ["stylesheets/extra.css"]
+nav = [
+  { "首页" = "README.md" },
+  { "系统架构" = [
+    { "整体架构" = "design/Forge-Agent-当前代码架构.md" },
+    { "任务执行主链" = "design/01-任务执行主链.md" },
+    { "模块与源码索引" = "design/源码索引.md" },
+  ] },
+  { "核心机制" = [
+    { "Agent 与 Tool Lifecycle" = "design/02-Agent与Tool生命周期.md" },
+    { "Context Engineering" = "design/03-Context与RepoMap.md" },
+    { "Planning 与 Recovery" = "design/04-Planning与Recovery.md" },
+    { "Skills 与 MCP" = "design/05-Skills与MCP.md" },
+    { "隔离与独立验收" = "design/06-隔离与独立验收.md" },
+    { "Evaluation 与 Evolution" = "design/07-Evaluation与Evolution.md" },
+  ] },
+  { "源码导航" = "source-navigation.md" },
+  { "面试复习" = "interview-review.md" },
+  { "维护协议" = "design/MAINTENANCE.md" },
+  { "参考资料" = "reference.md" },
+]
+
+[project.theme]
+language = "zh"
+font = false
+features = [
+  "navigation.sections",
+  "navigation.path",
+  "navigation.top",
+  "toc.follow",
+  "content.code.copy",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "indigo"
+accent = "indigo"
+toggle.icon = "lucide/sun"
+toggle.name = "切换到暗色模式"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "indigo"
+accent = "indigo"
+toggle.icon = "lucide/moon"
+toggle.name = "切换到亮色模式"
+
+[project.markdown_extensions]
+attr_list = {}
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.snippets = {}
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+
+[project.plugins.offline]
+
+[project.plugins.exclude]
+glob = ["changes/**", "evidence/**", "plans/**", "todo/**"]
+
+[project.extra]
+polyfills = ["javascripts/iframe-worker-shim.js"]
