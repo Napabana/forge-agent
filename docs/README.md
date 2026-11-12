@@ -76,6 +76,15 @@ bash scripts/serve_docs.sh
 
 这些 Markdown 与其中的 Mermaid 是本地 HTML 文档站的唯一内容源；不要另行维护一套 HTML 正文。
 
+## 架构审计与开源实现对标
+
+[Forge Agent Architecture Audit 研究总索引](research/architecture-audit/README.md) ·
+[阶段 0：112 项功能与源码审计清单](research/architecture-audit/00-研究计划与功能总清单.md) ·
+[审计决策记录](research/architecture-audit/decisions/审计决策记录.md)。
+
+此目录逐阶段保存源码级横向研究、评分、实习项目适用性及 Benchmark/训练准入判断；
+它不替代上述 `docs/design/` 的当前架构事实。未验证的外部对比或改进假设不得写成已实现能力。
+
 ## 历史计划与变更
 
 历史计划、施工日志和证据只保留在本地，不进入公开 Git 仓库、站点导航与全文搜索，也不代表当前待办：
