@@ -37,3 +37,7 @@ site/
 !/docs/stylesheets/**
 !/docs/javascripts/
 !/docs/javascripts/**
+
+# Versioned architecture audit reports
+!/docs/research/
+!/docs/research/**
