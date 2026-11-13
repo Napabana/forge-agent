@@ -1088,11 +1088,12 @@ isolate+sandbox 在调用 LLM 之前检查：
 
 ```text
 git --version
-<tools.test.python_executable 或默认 python3> -m pytest --version
+python3 -m pytest --version
 git rev-parse --is-inside-work-tree
 test -w .
 ```
 
+第二条实际使用 `tools.test.python_executable` 配置的解释器；未配置时默认使用 `python3`。
 如果失败，应看到 infrastructure failure，而不是继续花模型 token。
 
 ### 9.5 默认断网的影响
