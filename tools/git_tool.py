@@ -16,7 +16,6 @@ Git 操作工具，四个 action：
 
 from __future__ import annotations
 
-import subprocess
 from typing import Any
 
 from tools.base import BaseTool, ToolEffect, ToolResult
@@ -37,10 +36,7 @@ def _run_git(
     """
     from tools.runtime import LocalRuntime
     rt = runtime or LocalRuntime()
-    cmd = "git " + " ".join(
-        f'"{a}"' if " " in a else a for a in args
-    )
-    result = rt.exec(cmd, cwd=cwd, timeout=30)
+    result = rt.exec_args(["git", *args], cwd=cwd, timeout=30)
     output = result.output.strip()
     return result.success, output
 
@@ -227,7 +223,7 @@ class GitAddTool(BaseTool):
         if not paths:
             paths = ["."]
 
-        success, output = _run_git(["add"] + paths, cwd=cwd, runtime=self._runtime)
+        success, output = _run_git(["add", "--"] + paths, cwd=cwd, runtime=self._runtime)
         if success:
             return ToolResult(success=True, output=f"Staged: {', '.join(paths)}")
         return ToolResult(success=False, output=output, error=output)
