@@ -52,7 +52,8 @@ def test_e09_05_natural_finish_but_verifier_fail_is_failure():
     assert d.natural_finish and d.scoreable and d.scoreable_success is False
 
 
-def test_e09_06_pilot_timeout_reward_one_is_explicitly_scoreable_under_policy():
+def test_e09_06_hypothetical_timeout_reward_one_is_scoreable_under_policy():
+    # Hypothetical trusted classification; this is NOT the real Pilot's fault domain.
     d = decide_trial(trial(rollout_status=RolloutStatus.TIMEOUT,
                            failure_domain=FailureDomain.MODEL), POLICY)
     assert d.verifier_passed is True
