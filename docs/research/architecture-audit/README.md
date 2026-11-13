@@ -21,7 +21,7 @@
 | 05 | Repo Map、Tree-sitter、SQLite Schema、索引更新、检索及成本 | `05-Repo-Map深度审查.md` | 未开始 |
 | 06 | Planning、Recovery、Loop、Progress、Replan Gate | `06-Planning与Failure-Recovery.md` | 未开始 |
 | 07 | TaskEngine、Worktree、Local/Docker、取消与资源清理 | `07-Execution-Runtime与Isolation.md` | 未开始 |
-| 08 | Completion Guard、Acceptance、Tests、GitHub Delivery | [08-Testing与Acceptance.md](08-Testing与Acceptance.md) | **已完成 G01–G09 源码级横向审查与测试方案**；离线回归/实现待办 |
+| 08 | Completion Guard、Acceptance、Tests、GitHub Delivery | [08-Testing与Acceptance.md](08-Testing与Acceptance.md)、[离线验证记录](08-离线验证记录.md) | **源码审查完成，19 个独立原型用例已运行；3 个 Forge 行为刻画用例待真实仓库验证** |
 | 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | `09-Trace与Evaluation.md` | 未开始 |
 | 10 | Skills、MCP、Trajectory、Evolution、Teacher/Student 与 RL readiness | `10-Extension与RL-Readiness.md` | 未开始 |
 | 11 | 全功能评分、P0/P1/P2/P3 路线、Baseline 准入、面试 Q&A | `11-综合评分与改进路线.md` | 未开始 |
@@ -157,3 +157,10 @@
 - 核心事实：Pilot R1 没有 FINISH 或 `completion_rejected`，不能将超时归因于 Completion Guard 误拒绝。Step 18 的 focused PASS 之前已有 Step 16 的未跟踪临时文件，不能据此自动提交；`last_test_passed` 是全局最近 test 布尔值，缺少可信测试来源和快照绑定。
 - 新增可验证风险：`_apply_no_progress_guard` 对已验证不变的仓库状态重置计数，可能使多余只读检查不触发无进展提醒；`deliver_pull_request` 使用 `git add --all`，路径合同未禁止时临时文件可能进入 PR。
 - 暂不实施 `pytest PASS → SUCCESS`、不取消 Completion Guard、不修改 Runner hidden verifier 跳过规则。首选候选是 **CompletionCandidate / WrapUpRequired + TestEvidence provenance + 独立 outcome**，先跑离线 S08/A08 反例；目前**只有设计/现有测试阅读，没有新执行 pytest 或付费模型**。
+
+
+## 2026-11-14 阶段 08 离线原型进展
+
+- [阶段 08 离线验证记录](08-离线验证记录.md)：通过独立纯函数原型 `evals/completion_candidate_probe.py` 定义 NotReady / WrapUpRequired / CandidateReady；`tests/test_completion_candidate_probe.py` 在 Python 3.13.5、pytest 9.0.2 环境运行 **19 passed**，不依赖真实模型与项目生产接口。
+- 在 `tests/test_agent_completion_guards.py` 追加 3 个现状刻画用例，分别覆盖后续诊断测试覆盖先前 focused pass、未跟踪临时文件未被 Agent Guard 阻挡、已测试状态中的无进展判定。因当前工作环境无仓库 checkout（git clone DNS 失败），**未执行这 3 个与原有 Forge 全套测试**。
+- 本轮不改变 Agent Loop、Permission、Runner、Harbor、Prompt 或 Token Budget；原型通过率不能替代真实 Forge 代码回归，更不能推断 Benchmark 成功率。后续可直接在用户本地 Python 环境执行上述记录提供的无 API 测试命令。
