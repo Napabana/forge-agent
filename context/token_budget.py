@@ -357,8 +357,6 @@ class TokenBudget:
                 raise ValueError("model_context_window must be positive")
             if context_budget_cap is not None and context_budget_cap <= 0:
                 raise ValueError("context_budget_cap must be positive")
-            if repo_map_cap is not None and repo_map_cap <= 0:
-                raise ValueError("repo_map_cap must be positive")
             if model_context_window is None:
                 if context_budget_cap is None:
                     raise ValueError(
