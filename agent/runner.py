@@ -29,6 +29,22 @@ from tools.base import ToolRegistry
 logger = logging.getLogger(__name__)
 
 
+def _merge_context_policy_usage(result: RunResult, callback) -> None:
+    """Include semantic-compaction side calls in the run's provider usage totals."""
+    consume = getattr(callback, "consume_usage", None)
+    if not callable(consume):
+        return
+    side_usage = consume()
+    if side_usage is None or (
+        not side_usage.llm_calls and not side_usage.total_tokens
+    ):
+        return
+    if result.usage is None:
+        result.usage = SessionUsage()
+    result.usage.add(side_usage)
+    result.total_tokens = result.usage.total_tokens
+
+
 @dataclass(frozen=True)
 class AcceptanceContract:
     require_changes: bool = False
@@ -109,6 +125,7 @@ class ExecutionRunner:
             id(self.config.prepare_next_turn),
             id(None),
             self.config.repo_map_mode,
+            self.config.repo_map_budget,
             self.config.repo_map_cache_dir,
             ExecutionConstraints(),
         )
@@ -196,6 +213,7 @@ class ExecutionRunner:
                     )
                 raise
 
+            _merge_context_policy_usage(result, config.prepare_next_turn)
             _normalize_isolated_failure(result)
             result.trace_path = trace_path
             _apply_independent_acceptance(
@@ -231,6 +249,7 @@ class ExecutionRunner:
             id(config.prepare_next_turn),
             id(request.permission),
             config.repo_map_mode,
+            config.repo_map_budget,
             config.repo_map_cache_dir,
             request.execution_constraints,
         )
@@ -264,6 +283,7 @@ class ExecutionRunner:
                 if preparation_result is not None
                 else self.agent.run(task, log, history=request.history)
             )
+            _merge_context_policy_usage(result, config.prepare_next_turn)
             result.trace_path = str(log.path)
             _apply_independent_acceptance(
                 acceptance,
@@ -345,7 +365,10 @@ class ExecutionRunner:
             if hasattr(self.agent, "_repo_map_cache"):
                 del self.agent._repo_map_cache
 
-        token_budget = TokenBudget(total=config.budget_tokens)
+        token_budget = TokenBudget(
+            total=config.budget_tokens,
+            repo_map_cap=config.repo_map_budget,
+        )
         repo_map = getattr(self.agent, "_repo_map_instance", None)
         if repo_map is None:
             repo_map = self.agent._new_repo_map(task.repo_path)
