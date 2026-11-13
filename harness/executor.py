@@ -149,6 +149,18 @@ class ToolExecutor:
                     error_type=ToolErrorType.PERMISSION_DENIED,
                 )
             if decision.is_confirm:
+                if self._confirm_callback is None:
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error=(
+                            "Permission confirmation is required, but no interactive "
+                            "approval channel is available. The operation was not executed. "
+                            "Do not retry the same operation; continue only with actions "
+                            "permitted by the current policy."
+                        ),
+                        error_type=ToolErrorType.PERMISSION_DENIED,
+                    )
                 try:
                     confirmed = self._confirm_prompt_ok(decision, block)
                 except Exception as exc:
