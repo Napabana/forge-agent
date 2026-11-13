@@ -22,7 +22,7 @@
 | 06 | Planning、Recovery、Loop、Progress、Replan Gate | `06-Planning与Failure-Recovery.md` | 未开始 |
 | 07 | TaskEngine、Worktree、Local/Docker、取消与资源清理 | `07-Execution-Runtime与Isolation.md` | 未开始 |
 | 08 | Completion Guard、Acceptance、Tests、GitHub Delivery | [08-Testing与Acceptance.md](08-Testing与Acceptance.md)、[离线验证记录](08-离线验证记录.md) | **源码审查完成，19 个独立原型用例已运行；3 个 Forge 行为刻画用例待真实仓库验证** |
-| 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | `09-Trace与Evaluation.md` | 未开始 |
+| 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | [09-Trace与Evaluation.md](09-Trace与Evaluation.md) | **H0/H1 关键路径初审**，H01–H10 其余专题与测试仍待完成 |
 | 10 | Skills、MCP、Trajectory、Evolution、Teacher/Student 与 RL readiness | `10-Extension与RL-Readiness.md` | 未开始 |
 | 11 | 全功能评分、P0/P1/P2/P3 路线、Baseline 准入、面试 Q&A | `11-综合评分与改进路线.md` | 未开始 |
 
@@ -164,3 +164,10 @@
 - [阶段 08 离线验证记录](08-离线验证记录.md)：通过独立纯函数原型 `evals/completion_candidate_probe.py` 定义 NotReady / WrapUpRequired / CandidateReady；`tests/test_completion_candidate_probe.py` 在 Python 3.13.5、pytest 9.0.2 环境运行 **19 passed**，不依赖真实模型与项目生产接口。
 - 在 `tests/test_agent_completion_guards.py` 追加 3 个现状刻画用例，分别覆盖后续诊断测试覆盖先前 focused pass、未跟踪临时文件未被 Agent Guard 阻挡、已测试状态中的无进展判定。因当前工作环境无仓库 checkout（git clone DNS 失败），**未执行这 3 个与原有 Forge 全套测试**。
 - 本轮不改变 Agent Loop、Permission、Runner、Harbor、Prompt 或 Token Budget；原型通过率不能替代真实 Forge 代码回归，更不能推断 Benchmark 成功率。后续可直接在用户本地 Python 环境执行上述记录提供的无 API 测试命令。
+
+
+## 2026-11-14 阶段 09 H0/H1 初审
+
+- [Stage 09 当前源码问题与测试方案](09-Trace与Evaluation.md)：源码确认 `evals/coding_agent/runner.py::_run_trial` 捕获异常后仍可构造 `real_model_executed=True` / `execution_status=executed` 的失败行，而 `report.py::build_report` 会将全部 real-model rows 纳入观测成功率分母；另确认 eval factory 与 CLI 的 Repo Map / Context Policy / Test Interpreter 配置不一致。
+- 在 `tests/test_coding_agent_eval.py` 追加两个当前行为刻画测试（Runner 异常被计为模型失败、Runner 工厂异常中断整个 suite），**尚未在完整 Forge 仓库中执行**。Stage 09 仍是关键路径初审，不能声称全部 H01–H10 或外部 Pi/Codex Trace 对标已完成。
+- 优先级保持：先冻结 scoreability/failure domain/Verifier 结果，后解决 Eval 和生产配置复用，再开展多任务 A/B。
