@@ -144,9 +144,19 @@ class TestCallWithRetry:
         assert call_count == 1
 
     def test_exponential_backoff(self, tmp_path):
-        """验证重试间隔指数增长。"""
-        sleep_calls = []
+        """验证重试间隔指数增长，不拦截进程级 time.sleep。"""
         call_count = 0
+
+        class RecordingCancelEvent:
+            def __init__(self):
+                self.wait_calls = []
+
+            def is_set(self):
+                return False
+
+            def wait(self, timeout):
+                self.wait_calls.append(timeout)
+                return False
 
         class FlakyBackend(MockBackend):
             def complete(self, messages, tools):
@@ -158,14 +168,19 @@ class TestCallWithRetry:
 
         script = [Action(ActionType.FINISH, "done", message="ok")]
         backend = FlakyBackend(script)
-        config = AgentConfig(llm_max_retries=3, llm_retry_delay=1.0)
+        cancel_event = RecordingCancelEvent()
+        config = AgentConfig(
+            llm_max_retries=3,
+            llm_retry_delay=1.0,
+            llm_retry_jitter=0.0,
+            cancel_event=cancel_event,
+        )
         agent = self._make_agent(backend, config)
 
-        with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
-            agent._call_with_retry([LLMMessage(role="user", content="go")], [])
+        agent._call_with_retry([LLMMessage(role="user", content="go")], [])
 
-        assert len(sleep_calls) == 2
-        assert sleep_calls[1] == sleep_calls[0] * 2   # 指数退避
+        assert call_count == 3
+        assert cancel_event.wait_calls == [1.0, 2.0]   # 指数退避
 
 
 # ===========================================================================
