@@ -346,3 +346,21 @@ def test_docker_preflight_uses_the_configured_python_executable(monkeypatch, tmp
     assert "'/opt/custom venv/bin/python' -m pytest --version" in captured["cmd"]
     assert captured["cwd"] == str(tmp_path)
     assert captured["timeout"] == 30
+
+
+def test_context_config_defaults_are_aligned_for_production_entries():
+    config = _minimal_config()
+
+    assert config.context.repo_map_mode == "incremental"
+    assert config.context.repo_map_budget == 12_000
+    assert config.context.compaction_mode == "traceable"
+    assert config.context.compaction_threshold == 0.70
+    assert config.context.compaction_target_ratio == 0.50
+    assert config.context.compaction_keep_recent_tokens == 8_000
+
+
+def test_runtime_python_defaults_are_environment_specific():
+    import sys
+
+    assert LocalRuntime().python_executable == sys.executable
+    assert DockerRuntime(repo_path=".").python_executable == "python3"
