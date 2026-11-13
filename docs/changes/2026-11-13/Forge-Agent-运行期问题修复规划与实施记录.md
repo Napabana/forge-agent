@@ -32,7 +32,7 @@ effective_repo_map_budget = min(available_input_tokens * 0.15, repo_map_budget)
 - 保留原 15% 动态分配，避免配置 cap 大于当前预算时挤占其他分区。
 - 通过显式 `TokenBudget(repo_map_cap=...)` 传递，不把 Repo Map 策略塞入 `ContextBudgetSpec`。
 - Runner Agent cache key 纳入 `repo_map_budget`，避免配置变化后复用错误 Agent。
-- 默认硬上限统一为 12000 tokens。
+- 生产配置 `ContextConfig.repo_map_budget` 默认硬上限为 12000 tokens；`AgentConfig` 的程序化默认值保持 `None`，避免改变既有独立调用和冻结的 benchmark 行为。
 
 ### 2.2 Context Budget 与 Compaction
 
@@ -138,7 +138,9 @@ python -m pytest -q \
   tests/test_structured_compaction.py \
   tests/test_prepare_next_turn.py \
   tests/test_tool_lifecycle_p0_2.py \
-  tests/test_execution_constraints.py
+  tests/test_execution_constraints.py \
+  tests/test_sandbox.py \
+  tests/test_trace_v2.py
 ```
 
 最后执行：
@@ -159,6 +161,8 @@ Docker 验收需另外确认本机 Docker daemon 可用，并执行 isolate+sand
 - [x] Runtime argv、Pytest interpreter、GitTool argv 实现。
 - [x] CONFIRM 无交互通道提示修复。
 - [x] 新增专项回归测试文件。
+- [x] 扩充 Repo Map 模式校验、Runtime 子类兼容性以及 Trace 新字段的回归覆盖。
+- [x] 程序化 AgentConfig 保持旧 budget 语义；在生产入口显式施加 Repo Map cap。
 - [x] 更新使用手册和架构设计文档。
 - [ ] 本地 pytest 专项/全量测试：待维护者拉取后执行。
 - [ ] Docker E2E：待维护者本地 Docker 环境执行。
