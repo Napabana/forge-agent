@@ -380,6 +380,8 @@ class TokenBudget:
 
         if effective <= 0:
             raise ValueError("effective context window must be positive")
+        if repo_map_cap is not None and repo_map_cap <= 0:
+            raise ValueError("repo_map_cap must be positive")
         if safety_margin_tokens < 0:
             raise ValueError("safety_margin_tokens cannot be negative")
         if reserved_output + safety_margin_tokens + legacy_reserve >= effective:
