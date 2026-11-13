@@ -281,7 +281,11 @@ def run(
     confirm_cb = terminal_confirm if confirm else None
     #runtime是执行器实例， 有生命周期，后续还需要清理
     runtime = (
-        create_runtime(sandbox=True, repo_path=str(repo_path))
+        create_runtime(
+            sandbox=True,
+            repo_path=str(repo_path),
+            python_executable=config.tools.test.python_executable,
+        )
         if sandbox and not isolate
         else None
     )
@@ -542,7 +546,15 @@ def chat(
 
     from tools.shell_tool import terminal_confirm
     from tools.runtime import CONTAINER_WORKDIR, create_runtime
-    runtime = create_runtime(sandbox=sandbox, repo_path=str(repo_path)) if sandbox else None
+    runtime = (
+        create_runtime(
+            sandbox=sandbox,
+            repo_path=str(repo_path),
+            python_executable=config.tools.test.python_executable,
+        )
+        if sandbox
+        else None
+    )
     if sandbox:
         click.echo(dim(f"  Sandbox: Docker ({runtime.name})"))
     registry = _build_registry(
