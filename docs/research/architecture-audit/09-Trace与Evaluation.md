@@ -90,3 +90,18 @@
 | E09-T10 | Trace 缺失/截断 | 不发出没有证据的过程评分 |
 
 **不应现在直接改动历史成功率或 H0/H1 生产代码**。按 E09-T01..10 设计离线异常注入测试，再定义报告 schema 兼容策略和最小功能改动。Stage 09 余下 H01–H10 各主题及 Pi/Codex 等项目的全量 Trace/Eval 横向对照仍需单独完成。
+
+## 6. 2026-11-14 新增现状刻画测试（待真实仓库执行）
+
+在 `tests/test_coding_agent_eval.py` 追加了两个测试：
+
+1. `test_characterization_runner_exception_is_counted_in_real_model_rate`：以模拟 Provider/Runner 异常触发 `EvaluationHarness._run_trial` 的 except 分支，检查当前 `execution_status=executed`、`real_model_executed=True` 和 `observed_success_rate=0.0` 的行为。这是证明**当前统计协议的风险**，并不主张这是未来应该保留的正确分母。
+2. `test_characterization_runner_factory_exception_aborts_suite`：模拟工厂在 `runner.run` 前抛异常，检查当前 suite 异常中断、未形成 `trial.json` 的行为。
+
+上述两项已做独立 Python 代码片段语法检查，**尚未在完整 Forge 项目中运行 pytest**（当前容器无法 DNS 解析 GitHub 进行 clone）。它们是后续修正 H0 前的 characterization tests，不代表已经改进分类器或成功率报告。
+
+无付费 API 的本地验证命令：
+
+~~~bash
+python -m pytest -q tests/test_coding_agent_eval.py tests/test_completion_candidate_probe.py
+~~~
