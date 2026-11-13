@@ -195,7 +195,7 @@ Docker 验收需另外确认本机 Docker daemon 可用，并执行 isolate+sand
 - [x] 将测试改为注入 `RecordingCancelEvent`，仅记录当前 Agent 的 `wait()` 调用。
 - [x] 显式设置 `llm_retry_jitter=0.0`，消除随机抖动对断言的影响。
 - [x] 精确断言等待序列为 `[1.0, 2.0]`，并断言 Backend 调用三次。
-- [ ] 单测、Day 7 测试文件及全量 pytest 重新执行，结果待维护者确认。
+- [x] 维护者确认重试单测、Day 7 测试文件及全量 pytest 复测全部通过。
 
 复测命令：
 
@@ -206,3 +206,11 @@ python -m pytest -q
 ```
 
 AnyIO 的 `Task.cancel(msg)` / `Future.cancel(msg)` 弃用警告来自当前测试环境依赖栈，不是这次唯一失败的原因；本轮先记录，不扩大修改范围。
+
+最终复测结果（维护者于 2026-11-13 本地确认）：
+
+- `tests/test_day7.py::TestCallWithRetry::test_exponential_backoff`：通过。
+- `tests/test_day7.py`：通过。
+- `python -m pytest -q`：全量通过。
+
+本次确认未提供复测的精确 passed/skipped/warning 数量，因此本记录只登记通过结论，不补写未经提供的统计数字。首次全量执行中的 AnyIO 弃用警告仍作为依赖环境提示保留，不阻塞本轮验收。
