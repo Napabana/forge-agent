@@ -10,8 +10,8 @@ Git 操作工具，四个 action：
 设计决策：
 - 不封装 git push / PR 创建，这些由 entry/github_issue.py 负责
 - git_diff 做输出截断，大型重构的 diff 可能很长
-- 所有操作都通过 subprocess 调 git CLI，不用 gitpython
-  （减少依赖，git CLI 输出 agent 更容易理解）
+- 所有操作都通过 Runtime.exec_args(argv) 调 git CLI，不用 gitpython
+  （减少依赖，避免 Git 参数经过 Shell 二次解析）
 """
 
 from __future__ import annotations
