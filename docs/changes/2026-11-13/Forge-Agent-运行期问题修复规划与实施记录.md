@@ -3,7 +3,7 @@
 > 日期：2026-11-13  
 > 实施基线：GitHub `dev` 初始 HEAD `46aa2b4d4f10a871013936636814603186b4dcbf`  
 > 目标：修复真实 Qwen3.5-4B 仓库任务暴露的 Context 配置/接线缺陷，以及 Runtime 命令参数边界问题。  
-> 状态：代码与文档已推送；本地 pytest、Docker E2E 和真实模型回归待仓库维护者拉取后执行。
+> 状态：运行期修复已推送。维护者首次全量 pytest 为 1117 passed、14 skipped、1 failed；失败为既有指数退避测试的全局 `time.sleep` patch 不稳定。已改为注入 `cancel_event.wait` 记录等待，待再次执行专项与全量 pytest。Docker E2E 和真实模型回归仍待执行。
 
 ## 1. 背景与审查结论
 
@@ -169,3 +169,40 @@ Docker 验收需另外确认本机 Docker daemon 可用，并执行 isolate+sand
 - [ ] Qwen3.5-4B 真实仓库回归：待维护者安排；本轮没有调用 Provider。
 
 本轮不能将“文件已写入 GitHub”描述为“测试全部通过”。最终验证结果应由拉取后的实际测试输出补充。
+
+
+## 6. 首次本地全量回归后的跟进
+
+维护者首次拉取后执行全量测试，结果：
+
+- 1117 passed
+- 14 skipped
+- 1 failed
+- 30 warnings
+- 总耗时约 7 分 54 秒
+
+唯一失败：`tests/test_day7.py::TestCallWithRetry::test_exponential_backoff`。失败断言为第二次等待时间不等于第一次的两倍；实际捕获值分别为约 `1.00039` 和 `2.13495` 秒。
+
+源码核对结论：
+
+1. `Agent._call_with_retry` 的重试实现与本轮修复前的基线提交 `46aa2b4d` 完全一致；本轮没有修改指数退避算法。
+2. 首次修复提交集合没有修改 `tests/test_day7.py`。
+3. 旧测试通过全局 `patch("time.sleep")` 记录等待。全局替换可能捕获同一进程其他线程的 sleep，不能可靠隔离当前 Agent 的退避等待。
+4. 重试实现已经支持通过 `cancel_event.wait(delay)` 执行可取消等待，因此测试可以注入一个记录型 Event，而无需替换全局函数。
+
+跟进修复：
+
+- [x] 将测试改为注入 `RecordingCancelEvent`，仅记录当前 Agent 的 `wait()` 调用。
+- [x] 显式设置 `llm_retry_jitter=0.0`，消除随机抖动对断言的影响。
+- [x] 精确断言等待序列为 `[1.0, 2.0]`，并断言 Backend 调用三次。
+- [ ] 单测、Day 7 测试文件及全量 pytest 重新执行，结果待维护者确认。
+
+复测命令：
+
+```bash
+python -m pytest -q tests/test_day7.py::TestCallWithRetry::test_exponential_backoff
+python -m pytest -q tests/test_day7.py
+python -m pytest -q
+```
+
+AnyIO 的 `Task.cancel(msg)` / `Future.cancel(msg)` 弃用警告来自当前测试环境依赖栈，不是这次唯一失败的原因；本轮先记录，不扩大修改范围。
