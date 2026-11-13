@@ -12,12 +12,11 @@ pytest 执行工具，返回结构化的测试结果。
 from __future__ import annotations
 
 import re
-import subprocess
-import sys
+import shlex
 from pathlib import Path
 from typing import Any
 
-from tools.base import BaseTool, ToolEffect, ToolResult
+from tools.base import BaseTool, ToolEffect, ToolErrorType, ToolResult
 from tools.runtime import LocalRuntime, Runtime
 
 
@@ -35,10 +34,16 @@ class PytestTool(BaseTool):
         cwd (str):   工作目录（默认当前目录）
     """
 
-    def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
+    def __init__(
+        self,
+        runtime: Runtime | None = None,
+        default_cwd: str | None = None,
+        python_executable: str | None = None,
+    ) -> None:
         self._runtime = runtime or LocalRuntime()
         # LLM 未传 cwd 时的默认目录（orchestrator 注入 worktree 路径，M4 第二波）。
         self._default_cwd = default_cwd
+        self._python_executable = python_executable
 
     @property
     def effect(self) -> ToolEffect:
@@ -81,40 +86,77 @@ class PytestTool(BaseTool):
         cwd = params.get("cwd", None) or self._default_cwd
         cwd_path = Path(cwd) if cwd else Path.cwd()
 
-        # 决定测试路径
         test_path = params.get("path", "")
         if not test_path:
-            if (cwd_path / "tests").exists():
-                test_path = "tests/"
-            else:
-                test_path = "."
+            test_path = "tests/" if (cwd_path / "tests").exists() else "."
+        if not isinstance(test_path, str) or not test_path.strip():
+            return ToolResult(
+                success=False,
+                output="",
+                error="pytest path must be a non-empty string",
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
+        test_path = test_path.strip()
+        if test_path.startswith("-"):
+            return ToolResult(
+                success=False,
+                output="",
+                error="pytest path must not start with '-' (option-like paths are rejected)",
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
 
         extra_args = params.get("args", "")
+        if not isinstance(extra_args, str):
+            return ToolResult(
+                success=False,
+                output="",
+                error="pytest args must be a string",
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
+        try:
+            parsed_extra_args = shlex.split(extra_args)
+        except ValueError as exc:
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"invalid pytest args: {exc}",
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
 
-        # 组装命令：--tb=short 足够 agent 理解，--no-header 减少噪音
-        python_bin = sys.executable if isinstance(self._runtime, LocalRuntime) else "python3"
+        python_bin = self._python_executable or self._runtime.python_executable
+        if not isinstance(python_bin, str) or not python_bin.strip():
+            return ToolResult(
+                success=False,
+                output="",
+                error="pytest Python executable is not configured",
+                error_type=ToolErrorType.INVALID_ARGUMENTS,
+            )
         cmd_parts = [
-            python_bin, "-m", "pytest",
-            test_path,
+            python_bin,
+            "-m",
+            "pytest",
+            *parsed_extra_args,
             "--tb=short",
             "--no-header",
-            "-q",               # 安静模式：只输出失败详情和最终统计
+            "-q",
+            "--",
+            test_path,
         ]
-        if extra_args:
-            cmd_parts.extend(extra_args.split())
-
-        cmd_str = " ".join(cmd_parts)
-        run_result = self._runtime.exec(cmd_str, cwd=cwd, timeout=PYTEST_TIMEOUT)
+        run_result = self._runtime.exec_args(
+            cmd_parts,
+            cwd=cwd,
+            timeout=PYTEST_TIMEOUT,
+        )
         if "timed out" in run_result.stderr.lower():
             return ToolResult(
                 success=False,
                 output="",
                 error=f"pytest timed out after {PYTEST_TIMEOUT}s",
+                error_type=ToolErrorType.TIMEOUT,
             )
         raw = run_result.output
         success = run_result.returncode == 0
 
-        # 解析并格式化输出
         output = _format_pytest_output(raw, success)
 
         return ToolResult(
