@@ -34,6 +34,7 @@ def analyze_trace(path: str | Path) -> dict[str, Any]:
     models: set[str] = set()
     terminal: dict[str, Any] | None = None
     totals = {key: 0 for key in _USAGE_KEYS}
+    missing_usage_keys: set[str] = set()
     events_seen = 0
 
     with path.open(encoding="utf-8") as stream:
@@ -88,6 +89,7 @@ def analyze_trace(path: str | Path) -> dict[str, Any]:
                         for key in totals:
                             value = usage.get(key)
                             if value is None:
+                                missing_usage_keys.add(key)
                                 continue
                             if type(value) is not int or value < 0:
                                 raise ValueError(f"invalid provider usage {key} at line {line_no}")
@@ -117,7 +119,11 @@ def analyze_trace(path: str | Path) -> dict[str, Any]:
         "terminal": terminal,
         "trace_complete": terminal is not None and not pending,
         "observed_finished_usage": totals,
-        "usage_is_lower_bound": bool(pending),
+        "usage_fields_missing": sorted(missing_usage_keys),
+        "usage_is_lower_bound": bool(
+            pending or counters["llm_call_failed"] or counters["llm_call_retry"]
+            or missing_usage_keys
+        ),
     }
 
 
