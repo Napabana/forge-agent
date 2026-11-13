@@ -43,13 +43,7 @@ from context.history import ConversationHistory
 from context.incremental_repo_map import PersistentRepoMap
 from context.repo_map import RepoMap
 from context.repository_state import repository_content_fingerprint, repository_fingerprint
-from context.token_budget import (
-    TokenBudget,
-    estimate_message_tokens,
-    estimate_messages_tokens,
-    estimate_tokens,
-    estimate_tool_schemas_tokens,
-)
+from context.token_budget import LegacyTokenCounter, TokenBudget
 from agent.prompt import (
     build_system_prompt,
     build_task_prompt,
@@ -144,6 +138,8 @@ class AgentConfig:
     # Production defaults to persistent incremental Repo Map. Other modes are
     # retained as controlled ablation variants.
     repo_map_mode: str = "incremental"
+    repo_map_budget: int = 12_000
+    test_python_executable: str | None = None
     repo_map_cache_dir: str | None = None
 
 
@@ -317,7 +313,10 @@ class Agent:
                 content=build_task_prompt(task.description, self._model_repo_path, task.issue_url),
             ))
 
-        token_budget = TokenBudget(total=self._cfg.budget_tokens)
+        token_budget = TokenBudget(
+            total=self._cfg.budget_tokens,
+            repo_map_cap=self._cfg.repo_map_budget,
+        )
         repo_map = getattr(self, "_repo_map_instance", RepoMap(task.repo_path))
         usage = SessionUsage()
         total_tokens = 0
@@ -373,7 +372,10 @@ class Agent:
                 injected_messages.append(warning)
             tools = list(self._active_tool_schemas())
             token_breakdown = self._trace_token_breakdown(
-                messages, tools, injected_messages=injected_messages,
+                messages,
+                tools,
+                injected_messages=injected_messages,
+                token_budget=token_budget,
             )
             llm_started = time.perf_counter()
             llm_span = log.log_trace(
@@ -1629,8 +1631,11 @@ class Agent:
         tools: list[LLMToolSchema],
         *,
         injected_messages: list[LLMMessage] | None = None,
-    ) -> dict[str, int]:
-        """Estimate why a provider request is large without claiming billing truth."""
+        token_budget: TokenBudget | None = None,
+    ) -> dict[str, int | str | bool]:
+        """Estimate request composition with the same counter used by TokenBudget."""
+
+        counter = token_budget.counter if token_budget is not None else LegacyTokenCounter()
 
         def as_dict(message: LLMMessage) -> dict:
             data = {"role": message.role, "content": message.content}
@@ -1640,24 +1645,24 @@ class Agent:
 
         message_dicts = [as_dict(message) for message in messages]
         system_message_tokens = (
-            estimate_message_tokens(message_dicts[0]) if message_dicts else 0
+            counter.count_message(message_dicts[0]) if message_dicts else 0
         )
-        repo_map_tokens = estimate_tokens(getattr(self, "_repo_map_cache", ""))
+        repo_map_tokens = counter.count_text(getattr(self, "_repo_map_cache", ""))
         repo_map_tokens = min(repo_map_tokens, system_message_tokens)
         planning_context = getattr(self, "_planning_context_cache", "")
         planning_tokens = (
             min(
-                estimate_tokens(planning_context),
+                counter.count_text(planning_context),
                 max(0, system_message_tokens - repo_map_tokens),
             )
             if planning_context
             else 0
         )
         system_tokens = max(0, system_message_tokens - repo_map_tokens - planning_tokens)
-        tool_schema_tokens = estimate_tool_schemas_tokens(tools)
+        tool_schema_tokens = counter.count_tool_schemas(tools)
         injected_dicts = [as_dict(message) for message in (injected_messages or [])]
-        injected_tokens = estimate_messages_tokens(injected_dicts)
-        non_system_tokens = estimate_messages_tokens(message_dicts[1:])
+        injected_tokens = counter.count_messages(injected_dicts)
+        non_system_tokens = counter.count_messages(message_dicts[1:])
         history_tokens = max(0, non_system_tokens - injected_tokens)
         pending_tokens = 0
         context_tokens = history_tokens + injected_tokens + pending_tokens
@@ -1678,6 +1683,11 @@ class Agent:
             "pending_tokens": pending_tokens,
             "injected_tokens": injected_tokens,
             "estimated_input_tokens": estimated_input_tokens,
+            "counter_name": counter.name,
+            "counter_estimated": bool(counter.estimated),
+            "capability_fallback": (
+                token_budget.capability_fallback if token_budget is not None else False
+            ),
         }
 
     def _format_action_for_history(self, action: Action) -> str:
