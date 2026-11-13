@@ -185,6 +185,11 @@ class LocalRuntime(Runtime):
         normalized = [str(arg) for arg in args]
         if not normalized or any("\x00" in arg for arg in normalized):
             return RunResult(returncode=-1, stdout="", stderr="Invalid empty command or NUL argument")
+        # Existing Runtime subclasses may override exec() to intercept commands.
+        # Preserve that extension point while the concrete LocalRuntime remains
+        # strictly argv-based (shell=False).
+        if type(self).exec is not LocalRuntime.exec:
+            return self.exec(shlex.join(normalized), cwd=cwd, timeout=timeout)
         try:
             proc = subprocess.run(
                 normalized,
