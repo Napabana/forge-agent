@@ -106,6 +106,10 @@ def _build_registry(
 
     process_cwd = str(default_cwd) if default_cwd else None
     fs_workspace = str(workspace) if workspace else None
+    test_config = getattr(getattr(cfg, "tools", None), "test", None)
+    python_executable = getattr(cfg, "test_python_executable", None)
+    if python_executable is None:
+        python_executable = getattr(test_config, "python_executable", None)
 
     registry = (
         ToolRegistry()
@@ -121,7 +125,11 @@ def _build_registry(
         .register(SearchTextTool(workspace=fs_workspace))
         .register(FindFilesTool(workspace=fs_workspace))
         .register(FindSymbolTool(workspace=fs_workspace))
-        .register(PytestTool(runtime=runtime, default_cwd=process_cwd))
+        .register(PytestTool(
+            runtime=runtime,
+            default_cwd=process_cwd,
+            python_executable=python_executable,
+        ))
         .register(GitStatusTool(runtime=runtime, default_cwd=process_cwd))
         .register(GitDiffTool(runtime=runtime, default_cwd=process_cwd))
     )
@@ -298,6 +306,9 @@ def run(
     except ImportError:
         is_tiktoken_available = lambda: False
 
+    from entry.context_common import build_context_policy
+    context_policy = build_context_policy(config, backend)
+
     resolved_reasoning_stream = stream if reasoning_stream is None else reasoning_stream
     renderer = RunEventRenderer()
 
@@ -319,6 +330,10 @@ def run(
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
         history_max_messages=config.context.history_window * 2,
+        repo_map_mode=config.context.repo_map_mode,
+        repo_map_budget=config.context.repo_map_budget,
+        test_python_executable=config.tools.test.python_executable,
+        prepare_next_turn=context_policy,
         planning_mode=config.agent.planning_mode,
         recovery_mode=config.agent.recovery_mode,
         recovery_max_attempts=config.agent.recovery_max_attempts,
@@ -481,7 +496,7 @@ def chat(
     import logging
     from agent.session import ChatSessionConflict, ChatSessionError
     from agent.session_store import JsonChatSessionStore
-    from context.compaction import TraceableCompaction
+    from entry.context_common import build_context_policy
     from entry.chat import ChatSession
 
     if continue_session and resume_session:
@@ -542,7 +557,7 @@ def chat(
         if no_session
         else JsonChatSessionStore(Path(config.agent.log_dir) / "chat")
     )
-    context_policy = TraceableCompaction()
+    context_policy = build_context_policy(config, backend)
     initial_session_id = resume_session
     continued_existing = False
     try:
