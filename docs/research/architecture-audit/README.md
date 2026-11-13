@@ -143,3 +143,10 @@
 - Qwen3.8-27B 的 29 个完成调用为 868,723 total tokens；按 2026-11-13 SiliconFlow 价格快照估算约 ¥2.78。Provider 实际 cost 字段为空，第 30 次 started 请求是否计费未知，故不声明精确扣费。
 - Pilot 使用独立 config 和与 v7 相同的 wheel，没有修改仓库默认模型配置。完整报告及脱敏 Trace/console/result/Verifier/config/command/manifest 见 [Pilot R1 归档](../harbor-typer-1788-qwen38-27b-pilot-r1/报告.md)。
 - 当前不自动进入 12-task Pilot，也不开展 SFT/GRPO。若未来继续 Harness 评测，先修复并冻结 Harbor task timeout 与 adapter timeout 的双层配置；单次模型对比不构成总体成功率或 Harness 因果结论。
+
+## 2026-11-14：Pilot R1 专项横向对标（研究中）
+
+- [专项-Pilot-R1-停止权限与Token成本对标.md](专项-Pilot-R1-停止权限与Token成本对标.md) 已将 Typer 1788 的完整 Trace 同 Pi Agent turn-end hook、Codex 命令解析/沙箱审批、Aider 动态 Repo Map 的固定源码进行逐项对照。
+- 核心事实：Step 13 改对、Step 18 focused test 通过、Harbor reward=1.0；之后继续 11 次模型调用且无 FINISH、无 completion_rejected，最终 Harbor AgentTimeoutError；测试通过后的 375,818 tokens 约占总数 43.3%。
+- 待决策：不直接删 Completion Guard，不直接允许所有 Shell，不直接将 Repo Map 设为 1K。优先做结果状态真值表、Completion Evidence/测试 provenance 离线回归、凭据隔离审查、Repo Map counter/预算消融。
+- 本专项是 08/03/04/05/09 的跨阶段增量审计，**不代表 112 项已完成或任何修复已执行**；暂不修改功能代码、不调用真实模型 API。
