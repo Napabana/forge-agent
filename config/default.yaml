@@ -100,6 +100,8 @@ llm:
   api_key: ${SILICONFLOW_API_KEY}
   base_url: https://api.siliconflow.cn/v1
   strict_tool_schema: auto
+  # SiliconFlow 当前部署的实际窗口尚未在本仓库中核实，不伪造模型能力。
+  # context_window 留空时，Forge 使用下面的 context_budget_cap 作为保守 fallback。
   # Forge 这一次请求真正允许模型生成多少
   max_output_tokens: 8192
 
@@ -113,8 +115,8 @@ agent:
   skills_max_loaded: 3
   skills_max_chars: 12000
   skills_reference_max_chars: 8000
-  context_budget_cap: 384000
-  context_safety_margin_tokens: 40000
+  context_budget_cap: 131072 # Forge 运行期输入预算上限；不代表服务端原生窗口
+  context_safety_margin_tokens: 8192
   log_dir: /home/jfm/.forge-agent/logs
 
 # MCP 默认关闭；server env 只显式传递这里声明的键值，不继承全部宿主环境。
@@ -128,7 +130,14 @@ tools:
     max_output_tokens: 10000 # 截断长度
   file:
     max_view_lines: 100 # view 命令每次显示行数
+  test:
+    python_executable: null # null: LocalRuntime 使用当前 Python；DockerRuntime 使用 python3
 
 context:
-  repo_map_budget: 12000 # repo-map 最大 token 数
-  history_window: 20 # 保留最近 N 轮对话
+  repo_map_mode: incremental # none | static | query_aware | incremental
+  repo_map_budget: 12000 # Repo Map 硬上限，实际预算为 min(可用预算 * 15%, 此值)
+  compaction_mode: traceable # off | traceable；所有生产入口统一使用
+  compaction_threshold: 0.70
+  compaction_target_ratio: 0.50
+  compaction_keep_recent_tokens: 8000
+  history_window: 20 # deprecated：仅保留兼容，不会按消息数删除 canonical history
