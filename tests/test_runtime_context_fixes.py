@@ -364,3 +364,30 @@ def test_runtime_python_defaults_are_environment_specific():
 
     assert LocalRuntime().python_executable == sys.executable
     assert DockerRuntime(repo_path=".").python_executable == "python3"
+
+
+def test_programmatic_agent_config_does_not_change_legacy_repo_map_budget():
+    # Product entrypoints explicitly forward ContextConfig.repo_map_budget.
+    # Standalone AgentConfig users and existing frozen ablations keep old behavior.
+    assert AgentConfig().repo_map_budget is None
+    assert _minimal_config().context.repo_map_budget == 12_000
+
+
+def test_local_runtime_subclass_exec_override_is_respected(monkeypatch, tmp_path):
+    seen = []
+
+    class InterceptRuntime(LocalRuntime):
+        def exec(self, cmd, cwd=None, timeout=30):
+            seen.append((cmd, cwd, timeout))
+            return RunResult(0, "ok", "")
+
+    result = InterceptRuntime().exec_args(
+        ["git", "status", "--short", "file;name.py"],
+        cwd=str(tmp_path),
+    )
+
+    assert result.success
+    assert len(seen) == 1
+    assert seen[0][0].startswith("git status --short ")
+    assert "'file;name.py'" in seen[0][0]
+    assert seen[0][1] == str(tmp_path)
