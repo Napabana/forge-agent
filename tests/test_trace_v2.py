@@ -121,7 +121,13 @@ def test_trace_v2_records_prepare_llm_tool_and_configured_hooks(tmp_path):
         "pending_tokens",
         "injected_tokens",
         "estimated_input_tokens",
+        "counter_name",
+        "counter_estimated",
+        "capability_fallback",
     }
+    assert isinstance(breakdown["counter_name"], str)
+    assert breakdown["counter_estimated"] is True
+    assert isinstance(breakdown["capability_fallback"], bool)
     assert breakdown["estimated_input_tokens"] == (
         breakdown["system_tokens"]
         + breakdown["tool_schema_tokens"]
