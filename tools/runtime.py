@@ -30,9 +30,11 @@ Runtime 负责实际执行——本地 subprocess 或 Docker 容器。
 
 from __future__ import annotations
 
-import subprocess
 import logging
 import os
+import shlex
+import subprocess
+import sys
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -93,6 +95,23 @@ class Runtime(ABC):
         """
         ...
 
+    def exec_args(
+        self,
+        args: list[str],
+        cwd: str | None = None,
+        timeout: int = 30,
+    ) -> RunResult:
+        """Execute an argv vector; legacy Runtime subclasses get safely quoted fallback."""
+        normalized = [str(arg) for arg in args]
+        if not normalized or any("\\x00" in arg for arg in normalized):
+            return RunResult(returncode=-1, stdout="", stderr="Invalid empty command or NUL argument")
+        return self.exec(shlex.join(normalized), cwd=cwd, timeout=timeout)
+
+    @property
+    def python_executable(self) -> str:
+        """Interpreter available inside this runtime."""
+        return "python3"
+
     def cleanup(self) -> None:
         """释放 runtime 持有的资源（容器、连接等）。默认无操作。"""
 
@@ -123,6 +142,10 @@ class LocalRuntime(Runtime):
     def name(self) -> str:
         return "local"
 
+    @property
+    def python_executable(self) -> str:
+        return sys.executable
+
     def exec(
         self,
         cmd: str,
@@ -151,6 +174,39 @@ class LocalRuntime(Runtime):
             )
         except Exception as e:
             return RunResult(returncode=-1, stdout="", stderr=str(e))
+
+    def exec_args(
+        self,
+        args: list[str],
+        cwd: str | None = None,
+        timeout: int = 30,
+    ) -> RunResult:
+        """Run an argv vector locally without invoking a shell."""
+        normalized = [str(arg) for arg in args]
+        if not normalized or any("\\x00" in arg for arg in normalized):
+            return RunResult(returncode=-1, stdout="", stderr="Invalid empty command or NUL argument")
+        try:
+            proc = subprocess.run(
+                normalized,
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd,
+            )
+            return RunResult(
+                returncode=proc.returncode,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+            )
+        except subprocess.TimeoutExpired:
+            return RunResult(
+                returncode=-1,
+                stdout="",
+                stderr=f"Command timed out after {timeout}s: {shlex.join(normalized)}",
+            )
+        except Exception as exc:
+            return RunResult(returncode=-1, stdout="", stderr=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -356,12 +412,40 @@ class DockerRuntime(Runtime):
         return f"docker({self._image})"
 
     @property
+    def python_executable(self) -> str:
+        return "python3"
+
+    @property
     def container_id(self) -> str | None:
         return self._container_id
 
     @property
     def is_running(self) -> bool:
         return self._container_id is not None
+
+    def _resolve_container_workdir(self, cwd: str | None) -> str:
+        if not cwd:
+            return CONTAINER_WORKDIR
+        host_cwd = Path(cwd).resolve()
+        roots = (
+            (self._worktree_host, self._worktree_container),
+            (self._repo_path, CONTAINER_WORKDIR),
+        )
+        for host_root, container_root in roots:
+            if not host_root or not container_root:
+                continue
+            try:
+                relative = host_cwd.relative_to(Path(host_root))
+            except ValueError:
+                continue
+            suffix = relative.as_posix()
+            return (
+                f"{container_root}/{suffix}"
+                if suffix and suffix != "."
+                else container_root
+            )
+        # Already-container paths and explicitly external paths retain their value.
+        return str(cwd)
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -380,23 +464,7 @@ class DockerRuntime(Runtime):
                 # 启动失败，返回错误
                 return startup_result
 
-        # 确定容器内工作目录
-        if cwd:
-            # 如果 cwd 是宿主机路径，转换为容器内路径
-            host_cwd = str(Path(cwd).resolve())
-            if self._worktree_host and self._worktree_container and host_cwd.startswith(self._worktree_host):
-                relative = host_cwd[len(self._worktree_host):].lstrip("/")
-                container_cwd = (
-                    f"{self._worktree_container}/{relative}"
-                    if relative else self._worktree_container
-                )
-            elif host_cwd.startswith(self._repo_path):
-                relative = host_cwd[len(self._repo_path):].lstrip("/")
-                container_cwd = f"{CONTAINER_WORKDIR}/{relative}" if relative else CONTAINER_WORKDIR
-            else:
-                container_cwd = cwd   # 可能是容器内的绝对路径
-        else:
-            container_cwd = CONTAINER_WORKDIR
+        container_cwd = self._resolve_container_workdir(cwd)
 
         docker_cmd = [
             "docker", "exec",
@@ -425,6 +493,51 @@ class DockerRuntime(Runtime):
             )
         except Exception as e:
             return RunResult(returncode=-1, stdout="", stderr=str(e))
+
+    def exec_args(
+        self,
+        args: list[str],
+        cwd: str | None = None,
+        timeout: int = 30,
+    ) -> RunResult:
+        """Execute a container command as argv; no bash -c re-parsing is involved."""
+        normalized = [str(arg) for arg in args]
+        if not normalized or any("\\x00" in arg for arg in normalized):
+            return RunResult(returncode=-1, stdout="", stderr="Invalid empty command or NUL argument")
+        if not self.is_running:
+            startup_result = self._start_container()
+            if startup_result is not None:
+                return startup_result
+        assert self._container_id is not None
+        docker_cmd = [
+            "docker",
+            "exec",
+            "--workdir",
+            self._resolve_container_workdir(cwd),
+            self._container_id,
+            *normalized,
+        ]
+        try:
+            proc = subprocess.run(
+                docker_cmd,
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout + 5,
+            )
+            return RunResult(
+                returncode=proc.returncode,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+            )
+        except subprocess.TimeoutExpired:
+            return RunResult(
+                returncode=-1,
+                stdout="",
+                stderr=f"Command timed out after {timeout}s in container: {shlex.join(normalized)}",
+            )
+        except Exception as exc:
+            return RunResult(returncode=-1, stdout="", stderr=str(exc))
 
     def preflight(self, cwd: str | None = None) -> RunResult:
         """Verify baseline tools and git-worktree visibility before calling the LLM."""
