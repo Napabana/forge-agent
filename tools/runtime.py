@@ -369,6 +369,7 @@ class DockerRuntime(Runtime):
         mem_limit:    --memory 值，默认 "1g"。
         nano_cpus:    --nano-cpus 值，默认 2_000_000_000（2 核）。
         network:      True 则允许网络（不加 --network none）。默认 False 断网。
+        python_executable: 容器内 Python 解释器，默认 python3。
     """
 
     def __init__(
@@ -731,6 +732,7 @@ def create_runtime(
         worktree_mount: 透传给 DockerRuntime（始终 :rw 的 worktree 挂载）
         mem_limit:  透传给 DockerRuntime（--memory，默认 1g）
         nano_cpus:  透传给 DockerRuntime（--nano-cpus，默认 2 核）
+        python_executable: 透传给 DockerRuntime 的 Python 解释器
         python_executable: Docker 容器内的 Python 解释器；默认 python3
 
     Returns:
