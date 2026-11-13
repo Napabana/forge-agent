@@ -21,7 +21,7 @@
 | 05 | Repo Map、Tree-sitter、SQLite Schema、索引更新、检索及成本 | `05-Repo-Map深度审查.md` | 未开始 |
 | 06 | Planning、Recovery、Loop、Progress、Replan Gate | `06-Planning与Failure-Recovery.md` | 未开始 |
 | 07 | TaskEngine、Worktree、Local/Docker、取消与资源清理 | `07-Execution-Runtime与Isolation.md` | 未开始 |
-| 08 | Completion Guard、Acceptance、Tests、GitHub Delivery | `08-Testing与Acceptance.md` | 未开始 |
+| 08 | Completion Guard、Acceptance、Tests、GitHub Delivery | [08-Testing与Acceptance.md](08-Testing与Acceptance.md) | **已完成 G01–G09 源码级横向审查与测试方案**；离线回归/实现待办 |
 | 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | `09-Trace与Evaluation.md` | 未开始 |
 | 10 | Skills、MCP、Trajectory、Evolution、Teacher/Student 与 RL readiness | `10-Extension与RL-Readiness.md` | 未开始 |
 | 11 | 全功能评分、P0/P1/P2/P3 路线、Baseline 准入、面试 Q&A | `11-综合评分与改进路线.md` | 未开始 |
@@ -90,7 +90,7 @@
 
 ## 下一步
 
-**阶段 04：Context / History / Token Budget / Compaction。** 按 00 索引 D01–D12 核查 canonical History、消息角色与 event refs、token counter、model capability/request budget、tool pruning、semantic packet、structured compaction、prepare_next_turn 与 Session persistence；重点验证工具结果压缩是否保留足够执行证据、是否错误提升不可信工具输出，以及 Teacher→Student trajectory 是否可重建。生成 `04-Context-Engineering.md`，更新本 README 与 decisions。阶段 03 的 P0 单独拆为安全修复任务，不在本阶段研究中直接修改生产代码。
+**当前首要执行：阶段 08 的离线状态回放与设计验证（不调用 LLM API），同时准备阶段 09 结果分层协议。** 完整的 G01–G09 对照、单任务 Trace 归因和 S08/A08 验收矩阵见 [08-Testing与Acceptance.md](08-Testing与Acceptance.md)。原阶段 04/05 仍保留，并在停止/测试协议可验证后继续。此前的阶段 04：Context / History / Token Budget / Compaction 规划： 按 00 索引 D01–D12 核查 canonical History、消息角色与 event refs、token counter、model capability/request budget、tool pruning、semantic packet、structured compaction、prepare_next_turn 与 Session persistence；重点验证工具结果压缩是否保留足够执行证据、是否错误提升不可信工具输出，以及 Teacher→Student trajectory 是否可重建。生成 `04-Context-Engineering.md`，更新本 README 与 decisions。阶段 03 的 P0 单独拆为安全修复任务，不在本阶段研究中直接修改生产代码。
 
 ## 最终研究决策与疑点记录
 
@@ -150,3 +150,10 @@
 - 核心事实：Step 13 改对、Step 18 focused test 通过、Harbor reward=1.0；之后继续 11 次模型调用且无 FINISH、无 completion_rejected，最终 Harbor AgentTimeoutError；测试通过后的 375,818 tokens 约占总数 43.3%。
 - 待决策：不直接删 Completion Guard，不直接允许所有 Shell，不直接将 Repo Map 设为 1K。优先做结果状态真值表、Completion Evidence/测试 provenance 离线回归、凭据隔离审查、Repo Map counter/预算消融。
 - 本专项是 08/03/04/05/09 的跨阶段增量审计，**不代表 112 项已完成或任何修复已执行**；暂不修改功能代码、不调用真实模型 API。
+
+## 2026-11-14 阶段 08 收口：Completion / Testing / Acceptance / Delivery
+
+- [阶段 08 完整报告](08-Testing与Acceptance.md) 已完成原阶段 00 的 G01–G09 全项目静态审计，梳理 Agent FINISH Guard、测试结果、内容指纹、独立 verifier、Worktree 清理、PR 交付以及失败 Trace；固定运行源码 `ca396ce6`，对照 Pi/Codex/Claude/Aider。
+- 核心事实：Pilot R1 没有 FINISH 或 `completion_rejected`，不能将超时归因于 Completion Guard 误拒绝。Step 18 的 focused PASS 之前已有 Step 16 的未跟踪临时文件，不能据此自动提交；`last_test_passed` 是全局最近 test 布尔值，缺少可信测试来源和快照绑定。
+- 新增可验证风险：`_apply_no_progress_guard` 对已验证不变的仓库状态重置计数，可能使多余只读检查不触发无进展提醒；`deliver_pull_request` 使用 `git add --all`，路径合同未禁止时临时文件可能进入 PR。
+- 暂不实施 `pytest PASS → SUCCESS`、不取消 Completion Guard、不修改 Runner hidden verifier 跳过规则。首选候选是 **CompletionCandidate / WrapUpRequired + TestEvidence provenance + 独立 outcome**，先跑离线 S08/A08 反例；目前**只有设计/现有测试阅读，没有新执行 pytest 或付费模型**。
