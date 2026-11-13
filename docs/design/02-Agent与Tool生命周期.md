@@ -88,7 +88,9 @@ FINISH 依次检查：未解决 fatal infrastructure、required change、是否�
 - Tool 已开始后收到 cancel 不强杀：保留 ToolResult、post-hook、Observation，再在 Agent 安全边界取消。
 - GitTool 与 PytestTool 通过 `Runtime.exec_args(argv)` 执行结构化参数；LocalRuntime 使用
   `subprocess.run(..., shell=False)`，DockerRuntime 使用 `docker exec ... COMMAND ARG...`，
-  不对这些参数再做 Shell 解析。ShellTool 仍是显式 shell 能力，继续由 PermissionManager 管理。
+  不对这些参数再做 Shell 解析。PytestTool 支持显式目标项目 Python；测试断言失败映射为
+  `TOOL_EXECUTION`，pytest/解释器不可用或 pytest internal/usage error 映射为 `INFRASTRUCTURE`，
+  timeout 保持 `TIMEOUT`。ShellTool 仍是显式 shell 能力，继续由 PermissionManager 管理。
 - CONFIRM 在没有交互审批 callback 时 fail closed，并返回“没有审批通道、操作未执行、不要重试”
   的明确 Observation，避免模型把权限拒绝误判成工具执行失败。
 - `TOOL_INVOCATION_STARTED` 与 `REPOSITORY_EFFECT` 区分“尝试”“实际调用”“实际仓库变化”，
@@ -104,7 +106,8 @@ Independent Acceptance。Trace 是 append-only 审计而非 replay，换来实�
 ## 9. 测试与验证
 
 `tests/test_tool_lifecycle_p0_2.py` 固定顺序和故障语义；`tests/test_runtime_context_fixes.py`
-覆盖 argv、解释器选择和无交互 CONFIRM；`tests/test_failure_harness.py` 覆盖
+覆盖 argv、目标解释器选择、pytest outcome/infrastructure 分类和无交互 CONFIRM；
+`tests/test_failure_harness.py` 覆盖
 provider/hook/permission/tool/cancel/termination；`tests/test_agent_completion_guards.py`、
 `tests/test_repository_state.py` 覆盖最终状态；`tests/test_loop_detector.py`、
 `tests/test_trace_v2.py`、`tests/test_execution_constraints.py` 覆盖循环、Trace、只读约束。

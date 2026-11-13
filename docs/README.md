@@ -97,6 +97,8 @@ bash scripts/serve_docs.sh
 
 ## 评测证据
 
+- [Harbor × Forge：Typer 1788 实验报告](research/Harbor-Typer-1788实验报告.md)：区分 Provider failure、Harness 污染、可评分 max-steps 结果及 SFT/GRPO 证据边界。
+
 评测原始输出保持在 `evals/results/`，不移动到文档目录：
 
 - `evals/results/context_policy_benchmark/report.json`：B1，7 cases × 3 variants 的离线 fixture benchmark。
