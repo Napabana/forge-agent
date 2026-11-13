@@ -420,6 +420,8 @@ def run_on_issue(
         return 1
 
     from entry.cli import _build_registry
+    from entry.context_common import build_context_policy
+    context_policy = build_context_policy(config, backend)
     # GitHub Issue 的所有仓库工具默认在目标仓库执行，避免误用 Forge 进程目录。
     registry = _build_registry(
         config,
@@ -440,6 +442,10 @@ def run_on_issue(
     agent_config = AgentConfig(
         max_steps=config.agent.max_steps,
         budget_tokens=config.agent.budget_tokens,
+        repo_map_mode=config.context.repo_map_mode,
+        repo_map_budget=config.context.repo_map_budget,
+        test_python_executable=config.tools.test.python_executable,
+        prepare_next_turn=context_policy,
         planning_mode=config.agent.planning_mode,
         recovery_mode=config.agent.recovery_mode,
         recovery_max_attempts=config.agent.recovery_max_attempts,
