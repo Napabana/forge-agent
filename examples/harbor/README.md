@@ -85,8 +85,26 @@ usage_helper_path=/absolute/path/to/forge_usage_extract.py
 | `success` | 正常进入 verifier | 可评分模型结果 |
 | `incomplete` | 即使 CLI 非零也进入 verifier | 可评分模型结果，如 `max_steps` |
 | `gave_up` | 即使 CLI 非零也进入 verifier | 可评分模型结果 |
-| `failed` | 抛 adapter exception | Provider/基础设施等失败，不计模型 reward |
-| `canceled` | 抛 adapter exception | 取消，不计模型 reward |
-| 缺少 `run_terminated` | fail closed | 不可信终态，不计模型 reward |
+| `failed` | adapter 非零且不可评分终态时抛异常 | Provider/基础设施故障需单独归因；不能由 adapter 状态推断 Harbor 最终 reward |
+| `canceled` | adapter 非零时抛异常 | 标记取消；外部 Verifier 是否执行须以 Harbor 结果为准 |
+| 缺少 `run_terminated`，但 adapter 仍获得执行返回 | 默认拒绝当作正常 Forge 终态 | 不能据此宣称 Agent SUCCESS |
 
 完整实验结论见 `docs/research/Harbor-Typer-1788实验报告.md`。
+
+
+### Harbor 外层超时：单独核对 Trace 和 Verifier
+
+注意：**Harbor 外层超时和 Forge 正常返回后的非零终态，是两条不同控制路径**。如果 Harbor 在 `environment.exec(...)` 等待期间发起超时取消，`forge_harbor_agent.py` 中排在该调用之后的用量提取与 `context.metadata` 更新可能没有机会执行。即使如此，Harbor 的独立 Verifier 仍可能给出非零 reward。
+
+2026-11-13 Typer 1788 / Qwen3.8-27B Pilot R1 就出现了：Forge Trace 30 次 `llm_call_started`、29 次 `llm_call_finished`、没有 `run_terminated`；Harbor 报 `AgentTimeoutError`，Agent Usage 为 null，而 Harbor Verifier 的 `reward=1.0`。**这不是一次自然 FINISH**。不能将 null Token 当成零，也不能把 reward 1.0 改写成 Agent 正常结束。
+
+用只读诊断工具检查已归档的两个原始证据层（不需要 LLM API）：
+
+```bash
+python -m examples.harbor.trace_evidence \
+  --trace docs/research/harbor-typer-1788-qwen38-27b-pilot-r1/trace.sanitized.jsonl \
+  --harbor-result docs/research/harbor-typer-1788-qwen38-27b-pilot-r1/harbor-result.sanitized.json \
+  --verifier-details docs/research/harbor-typer-1788-qwen38-27b-pilot-r1/verifier-reward-details.json
+```
+
+该工具只输出结构化调用计数、已完成调用的 Provider Usage、Harbor 异常与奖励；不会计算 Benchmark `scoreable` 或实际账单费用，避免未经实验合同确认就改动成功率分母。测试见 `tests/test_trace_evidence.py`。
