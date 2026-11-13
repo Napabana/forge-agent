@@ -385,9 +385,11 @@ class DockerRuntime(Runtime):
         network: bool = False,
         user_uid: int | None = None,
         user_gid: int | None = None,
+        python_executable: str | None = None,
     ) -> None:
         self._repo_path = str(Path(repo_path).resolve())
         self._image = image
+        self._python_executable = python_executable or "python3"
         self._extra_mounts = extra_mounts or []
         self._setup_cmds = setup_cmds or []
         self._readonly_root = readonly_root
@@ -413,7 +415,7 @@ class DockerRuntime(Runtime):
 
     @property
     def python_executable(self) -> str:
-        return "python3"
+        return self._python_executable
 
     @property
     def container_id(self) -> str | None:
@@ -541,9 +543,10 @@ class DockerRuntime(Runtime):
 
     def preflight(self, cwd: str | None = None) -> RunResult:
         """Verify baseline tools and git-worktree visibility before calling the LLM."""
+        python_cmd = f"{shlex.quote(self.python_executable)} -m pytest --version"
         return self.exec(
             "git --version"
-            " && python3 -m pytest --version"
+            f" && {python_cmd}"
             " && git rev-parse --is-inside-work-tree"
             " && test -w .",
             cwd=cwd,
@@ -714,6 +717,7 @@ def create_runtime(
     worktree_mount: tuple[str, str] | None = None,
     mem_limit: str = DEFAULT_MEM_LIMIT,
     nano_cpus: int = DEFAULT_NANO_CPUS,
+    python_executable: str | None = None,
 ) -> Runtime:
     """
     根据配置创建合适的 Runtime。
@@ -745,4 +749,5 @@ def create_runtime(
         worktree_mount=worktree_mount,
         mem_limit=mem_limit,
         nano_cpus=nano_cpus,
+        python_executable=python_executable,
     )
