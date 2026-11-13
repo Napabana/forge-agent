@@ -96,3 +96,38 @@
 
 - [审计决策记录](decisions/审计决策记录.md)：记录决策和未解决假设，禁止把假设说成缺陷。
 - 正式设计资料仍以 [Forge 当前代码架构](../../design/Forge-Agent-当前代码架构.md) 和 [源码索引](../../design/源码索引.md) 为准。
+
+
+## 研究方向调整（2026-11-13）：Forge 作为 Harness Evaluation Platform
+
+> 当前审查参考：`dev@ca396ce6f14b88dd439bebdcb3b9634645017034`；本节仅更新研究方法和顺序，不修改任何生产代码或历史实验。原 00–11 阶段编号与 112 项审查对象继续有效。
+
+### 背景及目标边界
+
+用户根据 Harbor Typer 1788 的 Qwen3.5-4B v5/v6/v7 运行结果，决定 Forge Agent 主要用于 Harness 设计验证和外部 Benchmark；Teacher/Student SFT、GRPO 转到独立项目。三次运行混有 Provider TPM 错误、目标 pytest 环境污染、取消及一次干净的 max_steps 失败，不能合并计算模型成功率。
+
+**横向设计审查不取消、不重置**。原目标中「训练数据和 RL 准备」不再作为 Forge 的主交付，改为检查 Trace/Eval/外部工具是否具备独立、可靠、可审计的接口。Forge 的研究问题从「为了训练 Student 怎样改 Agent」转为「哪些 Harness 设计在相同模型和任务下确实提高可靠性/安全性/效果，收益是否值得额外成本」。
+
+### 已完成报告与当前源码同步
+
+- 01–03 继续保留为历史有版本的源码级横向审查，不静默改写旧证据和旧评分。
+- 阶段 03 记录的 Git/Pytest 拼接 Shell 命令风险，已在 11 月 13 日生产修复中采用 Runtime.exec_args 和路径分离；现有修复与回归证据见 `docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md`。是否覆盖所有工具及工作区安全边界仍须 03 增量复核 + 07 安全测试，不将历史 P0 原样宣称为当前缺陷。
+- 新增 Harbor Adapter 与 Typer 1788 真实试验：`examples/harbor/`、`docs/research/Harbor-Typer-1788实验报告.md`。这两处是后续阶段 07/09 的新证据；旧 01–03 固定 SHA 并未涵盖它们。
+- 阶段 09 应审查 `evals/coding_agent/runner.py` 的 Runner 异常转 TrialResult、`report.py` 的成功率分母，以及 `__main__.py` 与生产 Context/Repo Map 配置接线；这些属于当前源码可定位的评测协议问题，不应混进模型失败率。
+
+### 新执行次序（保留原编号）
+
+1. **09 先行**：梳理任务成功与 Agent SUCCESS、独立 Grader、Provider/Infrastructure/Cancelled 终态；先确保模型成功率分母和实验配置可复现，避免后续 A/B 结论错误。
+2. **07 + 08**：对比 Pi/Codex/Claude 的执行隔离、权限、取消、独立验收；复核 Harbor Adapter 的生命周期、Python 3.11 兼容、wheelhouse 依赖、trace fail-closed 行为（问题必须验证后修复）。
+3. **04 + 05**：对比 History/Compaction/Repo Map 算法与预算，对现存专项基准复核后设计同模型 A/B。
+4. **06**：对比 Planning/Recovery 控制策略；当前 Benchmark V1 R2 baseline vs Full P2 各 23/24，Full P2 额外成本高，但样本很小且配置联合改变，不能直接归因，需拆分消融。
+5. **10**：对比 Skills/MCP 与轨迹可审计性；Evolution 作为可选后处理，不把 SFT/GRPO 实现塞回 Forge。
+6. **11**：综合设计评分、证据置信度、改进 ROI、Harness Evaluation Baseline 准入决策和面试材料。00–03 不再执行一次，仅做当前 dev 差异更新。
+
+### 两种证据分开
+
+**设计横向审查**：每项要说明 Forge 当前文件/符号、Pi 或 Codex 的公开代码、Claude 的公开行为、设计取舍、风险、适用条件、实现成本及置信度；不同实现不自动代表缺陷。
+
+**Harness 实证评测**：Model/Provider、版本、任务 SHA、Tool Manifest、权限、预算、重试、上下文、seed/repeats 固定；按 independent verifier 评分，同时分开 model outcome、provider failure、infrastructure failure、cancellation；提供成功率及 steps/tokens/latency 的配对代价。
+
+任何跨项目比较都不直接用品牌整体成功率判断 Forge 某一模块好坏；外部 Benchmark 优先验证本项目实验结论能否迁移，不替代源码设计审查。
