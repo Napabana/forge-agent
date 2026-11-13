@@ -1,6 +1,6 @@
 # 03 Context Engineering、Repo Map 与 Session
 
-> 基线：`dev@fd700bdf48ace5f03bb9feab49d72f7c12e5ddcb`，2026-11-12
+> 运行期修复基线：`dev`，2026-11-13；对应实施记录见 `docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md`。
 
 ## 1. 功能目标
 
@@ -11,7 +11,8 @@ Context 层在模型窗口内保留任务约束、最近证据和相关仓库结
 
 `ConversationHistory` 只存完整逻辑消息；`TokenBudget` 规划请求；Repo Map 提供结构导航；
 `TraceableCompaction` 生成一次性 model-facing override；`JsonChatSessionStore` 才是 Chat 恢复
-真相源。Provider usage 是请求后事实，本地 TokenCounter 只是请求前估算。
+真相源。Provider usage 是请求后事实，本地 TokenCounter 只是请求前估算。`history_window`
+目前仅为兼容字段，不执行 canonical History 的消息数量裁剪。
 
 ## 3. 数据流
 
@@ -35,14 +36,22 @@ flowchart LR
 
 ## 4. 关键执行流程
 
-Repo Map 默认 `incremental`：`PersistentRepoMap.sync()` 读取 index 和之前的
-`RepositoryState`，捕获当前状态并检测变更；不可靠时 full rebuild，可靠 changed paths 只重新
-解析目标文件；query 改变只在 `RepoMap.build(query=...)` 重排。
+Repo Map 由 `ContextConfig.repo_map_mode` 控制，默认 `incremental`。支持 `none`、`static`、
+`query_aware`、`incremental`。其实际构建预算为
+`min(available_input_tokens * 0.15, ContextConfig.repo_map_budget)`；默认硬上限 12000 tokens。
+`PersistentRepoMap.sync()` 读取 index 和之前的 `RepositoryState`，捕获当前状态并检测变更；
+不可靠时 full rebuild，可靠 changed paths 只重新解析目标文件；query 改变只在
+`RepoMap.build(query=...)` 重排。
 
 `Agent._build_messages` 组合稳定 system/tool schema、Planning/Recovery/Skill runtime context、
-Repo Map 与 History。Chat 在已有历史的下一轮/step 调 `TraceableCompaction`：先计算完整请求压力，
-Stage A 剪枝旧工具输出；仍超阈值才建立 deterministic evidence 和 semantic packet，调用 summarizer；
-失败用 structured fallback。结果通过 `PrepareNextTurnResult.history_override` 仅影响下一模型视图。
+Repo Map 与 History。Repo Map 已嵌入 system prompt，因此 `request_pressure` 的 system_tokens
+已经包含它；独立 repo_map_tokens 只用于诊断，不重复累加。
+
+CLI run、CLI chat、API、GitHub Issue 通过 `entry/context_common.py::build_context_policy`
+创建各自独立的 `TraceableCompaction`。每次后续模型调用前先计算完整请求压力，Stage A 剪枝旧工具输出；
+仍超阈值才建立 deterministic evidence 和 semantic packet，调用 summarizer；失败用 structured
+fallback。结果通过 `PrepareNextTurnResult.history_override` 仅影响下一模型视图，不覆盖 canonical
+History。Chat 的已有 shared history 仍在新 round 首次模型调用前执行 preflight。
 
 Chat 每轮开始前写 `pending_round` checkpoint，完成/中断后原子更新 `state.json`；每轮 JSONL
 只负责审计。仓库 revision 改变会让 Repo Map cache 失效。
@@ -76,21 +85,25 @@ Chat 每轮开始前写 `pending_round` checkpoint，完成/中断后原子更�
 - 文件工具成功且 path 已知时调用 `update_paths`；shell/git 或不确定变更请求下一轮 `sync`。
 - query relevance 综合 path、symbol 和 source terms；结构索引与 query view 分离。
 - Stage A 保护 recent history units；semantic packet 优先最近用户证据，选中后恢复时间顺序。
-- compaction side-call usage 单独累计后合并 RunResult；其失败记录 Trace，不删除 canonical History。
+- compaction side-call usage 由 ExecutionRunner 在正常返回路径合并进 RunResult；Chat 中断路径由
+  ChatSession 消费未归集 usage。Semantic side-call 失败记录 Trace，不删除 canonical History。
+- Trace Token Breakdown 与 TokenBudget 复用同一个 Counter；Provider Usage 仍是请求后统计真值。
 - Session save 对 secret pattern 递归 redaction，以 revision + 文件锁拒绝 stale writer。
 
 ## 8. 设计取舍
 
 持久化结构索引降低 warm/incremental 成本，但 cold build 可能比 legacy 更慢；这是现有 benchmark
 明确观察，不应宣称所有场景加速。保留 canonical History 增加磁盘/内存占用，但让压缩可追溯且
-Session 可恢复。Compaction 当前产品 wiring 主要在 Chat，direct/API/GitHub 不应被描述为默认启用。
+Session 可恢复。Compaction 现在由统一工厂接入 CLI run/chat、API 和 GitHub Issue；每个 run/session
+使用独立 Policy，避免 checkpoint lineage、active view 和 side-call usage 在任务间共享。
 
 ## 9. 测试与验证
 
 Repo Map：`tests/test_repo_map_improvements.py`、`tests/test_repo_map_persistent*.py`、
 `tests/test_repo_map_product_behavior.py`、`tests/test_repo_map_reference_semantics.py`。Context：
 `tests/test_model_aware_token_budget.py`、`tests/test_tool_pruning.py`、`tests/test_structured_compaction.py`、
-`tests/test_prepare_next_turn.py`。Session：`tests/test_session_store.py`、`tests/test_chat.py`。
+`tests/test_prepare_next_turn.py`、`tests/test_runtime_context_fixes.py`。Session：
+`tests/test_session_store.py`、`tests/test_chat.py`。
 
 冻结证据只证明对应协议：12-case query-aware MRR/recall、persistent strict equivalence 和 phase timing；
 reference-count 71.26× 是子步骤，不是 Agent E2E。
