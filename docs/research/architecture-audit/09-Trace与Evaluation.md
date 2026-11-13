@@ -105,3 +105,13 @@
 ~~~bash
 python -m pytest -q tests/test_coding_agent_eval.py tests/test_completion_candidate_probe.py
 ~~~
+
+## 7. 2026-11-14：H0 独立评分合同原型验证增量
+
+详见 [09-离线评分合同验证记录.md](09-离线评分合同验证记录.md)。本报告上述“尚未运行”的描述属于**源码初审时点**，不是当前进度。
+
+- 新增 `evals/trial_outcome_probe.py`，以 `TrialEvidence` + 预冻结 `ScoringPolicy` 评估 `scoreable`，保留原始 verifier、自然 FINISH、rollout 和故障域等分离字段；策略内容 SHA-256 绑定每条 Trial 决策，避免同名策略下变更分母条件造成结果混用。
+- 新增 `tests/test_trial_outcome_probe.py`，含 21 条离线测试。本地重新执行 Stage08 的 19 条测试，合计 **40 passed in 0.08s**（Python 3.13.5、pytest 9.0.2）。这是**研究原型回归**，不是原有 `EvaluationHarness` 行为通过，也不是 Benchmark 的 success rate。
+- `tests/test_coding_agent_eval.py` 的 2 个真实 Forge Evaluation 行为刻画用例**依然未运行**；当前容器无法通过 DNS 拉取完整 Github repo，因此留给有完整 checkout 的本地环境进行无 API 的 pytest。
+- **H0 未完成生产接入**：原型中的 `model_call_started`、`failure_domain`、`snapshot_within_deadline` 均需要可信来源，现有 `TrialResult` 不能直接提供，不能从异常消息或配置标志推断。严禁把独立原型的分母公式替换到生产报表后直接报告模型能力。
+- Stage09 仍为 H0/H1 源码关键路径初审，不是 H01–H10 全部完成；H1 配置漂移与 Stage03/07 执行凭据隔离保持待办。
