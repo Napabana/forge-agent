@@ -91,14 +91,27 @@ class FileToolConfig:
 
 
 @dataclass
+class TestToolConfig:
+    # None selects the Runtime default (sys.executable locally, python3 in Docker).
+    python_executable: str | None = None
+
+
+@dataclass
 class ToolsConfig:
     shell: ShellToolConfig = field(default_factory=ShellToolConfig)
     file: FileToolConfig = field(default_factory=FileToolConfig)
+    test: TestToolConfig = field(default_factory=TestToolConfig)
 
 
 @dataclass
 class ContextConfig:
-    repo_map_budget: int = 8_000
+    repo_map_mode: str = "incremental"
+    repo_map_budget: int = 12_000
+    compaction_mode: str = "traceable"
+    compaction_threshold: float = 0.70
+    compaction_target_ratio: float = 0.50
+    compaction_keep_recent_tokens: int = 8_000
+    # Deprecated compatibility hint. Canonical history is not trimmed by message count.
     history_window: int = 20
     semantic_packet_max_tokens: int = 16_000
 
@@ -225,6 +238,37 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     semantic_packet_max_tokens = int(context_raw.get("semantic_packet_max_tokens", 16_000))
     if semantic_packet_max_tokens <= 0:
         raise ValueError("context.semantic_packet_max_tokens must be positive")
+
+    repo_map_mode_raw = context_raw.get("repo_map_mode", "incremental")
+    if not isinstance(repo_map_mode_raw, str):
+        raise ValueError("context.repo_map_mode must be one of: none, static, query_aware, incremental")
+    repo_map_mode = repo_map_mode_raw.strip().lower()
+    if repo_map_mode not in {"none", "static", "query_aware", "incremental"}:
+        raise ValueError("context.repo_map_mode must be one of: none, static, query_aware, incremental")
+    repo_map_budget = _optional_positive_int(context_raw, "repo_map_budget") or 12_000
+
+    compaction_mode_raw = context_raw.get("compaction_mode", "traceable")
+    if compaction_mode_raw is False:
+        compaction_mode = "off"
+    elif isinstance(compaction_mode_raw, str):
+        compaction_mode = compaction_mode_raw.strip().lower()
+    else:
+        raise ValueError("context.compaction_mode must be one of: off, traceable")
+    if compaction_mode not in {"off", "traceable"}:
+        raise ValueError("context.compaction_mode must be one of: off, traceable")
+    try:
+        compaction_threshold = float(context_raw.get("compaction_threshold", 0.70))
+        compaction_target_ratio = float(context_raw.get("compaction_target_ratio", 0.50))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("context compaction ratios must be numeric") from exc
+    if not 0 < compaction_target_ratio < compaction_threshold <= 1:
+        raise ValueError(
+            "context compaction ratios must satisfy "
+            "0 < compaction_target_ratio < compaction_threshold <= 1"
+        )
+    compaction_keep_recent_tokens = (
+        _optional_positive_int(context_raw, "compaction_keep_recent_tokens") or 8_000
+    )
 
     legacy_max_tokens = _optional_positive_int(llm_raw, "max_tokens")
     max_output_tokens = _optional_positive_int(llm_raw, "max_output_tokens") or legacy_max_tokens or 4096
@@ -389,8 +433,31 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     )
     shell_raw = tools_raw.get("shell", {})
     file_raw = tools_raw.get("file", {})
-    tools = ToolsConfig(shell=ShellToolConfig(timeout=int(shell_raw.get("timeout", 30)), max_output_tokens=int(shell_raw.get("max_output_tokens", 8_000))), file=FileToolConfig(max_view_lines=int(file_raw.get("max_view_lines", 100))))
-    context = ContextConfig(repo_map_budget=int(context_raw.get("repo_map_budget", 8_000)), history_window=int(context_raw.get("history_window", 20)), semantic_packet_max_tokens=semantic_packet_max_tokens)
+    test_raw = tools_raw.get("test", {})
+    if not isinstance(test_raw, dict):
+        raise ValueError("tools.test must be an object")
+    python_executable_raw = test_raw.get("python_executable")
+    if python_executable_raw is None:
+        python_executable = None
+    elif isinstance(python_executable_raw, str) and python_executable_raw.strip():
+        python_executable = python_executable_raw.strip()
+    else:
+        raise ValueError("tools.test.python_executable must be a non-empty string or null")
+    tools = ToolsConfig(
+        shell=ShellToolConfig(timeout=int(shell_raw.get("timeout", 30)), max_output_tokens=int(shell_raw.get("max_output_tokens", 8_000))),
+        file=FileToolConfig(max_view_lines=int(file_raw.get("max_view_lines", 100))),
+        test=TestToolConfig(python_executable=python_executable),
+    )
+    context = ContextConfig(
+        repo_map_mode=repo_map_mode,
+        repo_map_budget=repo_map_budget,
+        compaction_mode=compaction_mode,
+        compaction_threshold=compaction_threshold,
+        compaction_target_ratio=compaction_target_ratio,
+        compaction_keep_recent_tokens=compaction_keep_recent_tokens,
+        history_window=int(context_raw.get("history_window", 20)),
+        semantic_packet_max_tokens=semantic_packet_max_tokens,
+    )
     config = AppConfig(llm=llm, agent=agent, tools=tools, context=context, mcp=mcp)
     _refresh_budget_bridges(config)
     return config
