@@ -286,7 +286,6 @@ class ChatSession:
                 # 实时打印只观察 EventLog；共享记忆由 Agent.run(history=...) 传入。
                 try:
                     result = self._run_with_live_print(task, log)
-                    self._merge_context_policy_usage(result)
                 except BaseException as exc:
                     self._merge_interrupted_context_usage()
                     if self._state is not None:
@@ -538,17 +537,6 @@ class ChatSession:
             if checkpoint.checkpoint_id not in known
         )
         self._session_store.save(self._state)
-
-    def _merge_context_policy_usage(self, result) -> None:
-        """把 semantic compaction side-call 的 token 计入本轮 RunResult。"""
-        consume = getattr(self._prepare_next_turn, "consume_usage", None)
-        if not callable(consume):
-            return
-        side_usage = consume()
-        if not side_usage.llm_calls and not side_usage.total_tokens:
-            return
-        result.usage.add(side_usage)
-        result.total_tokens = result.usage.total_tokens
 
     def _merge_interrupted_context_usage(self) -> None:
         """中断时也保存已发生的 semantic side-call usage，避免统计泄漏。"""
