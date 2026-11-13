@@ -11,6 +11,10 @@ config/
 .coverage
 htmlcov/
 site/
+/build/
+/dist/
+*.whl
+/NUL
 .yaml
 # Secrets — never commit API keys / tokens
 .env

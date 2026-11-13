@@ -105,7 +105,7 @@ class LoopDetector:
         如果发现 Agent 陷入重复循环，就返回 LoopSignal；
         如果没有发现循环，就返回 None。
         """
-        
+
         # 1. 先判断仓库状态或测试状态有没有变化。
         # 如果变化了，说明 Agent 实际上有进展，
         # 那么之前累计的“循环出现次数”清零。
@@ -126,13 +126,13 @@ class LoopDetector:
         # 5. 标记：
         # 是否出现了“行为重复，但是执行结果有变化”的情况。
         progress_candidate = False
-        
+
         # 6. 尝试检测不同长度的循环。
         #
         # max_period = 3 时：
         # period = 1：检测 A A A
         # period = 2：检测 A B A B A B
-        # period = 3：检测 A B C A B C A B C        
+        # period = 3：检测 A B C A B C A B C
         for period in range(1, self.max_period + 1):
             needed = period * self.repeats
             if len(self._records) < needed:
