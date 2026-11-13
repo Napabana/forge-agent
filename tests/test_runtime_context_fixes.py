@@ -57,6 +57,20 @@ def test_context_config_parses_repo_map_and_compaction_policies():
     assert config.tools.test.python_executable == "/opt/venv/bin/python"
 
 
+@pytest.mark.parametrize(
+    "mode",
+    ["none", "static", "query_aware", "incremental"],
+)
+def test_repo_map_mode_accepts_all_supported_modes(mode):
+    assert _minimal_config({"repo_map_mode": mode}).context.repo_map_mode == mode
+
+
+@pytest.mark.parametrize("mode", ["off", "persistent", 0, True])
+def test_repo_map_mode_rejects_unsupported_modes(mode):
+    with pytest.raises(ValueError, match="context.repo_map_mode"):
+        _minimal_config({"repo_map_mode": mode})
+
+
 def test_context_config_accepts_explicit_compaction_off_and_rejects_bad_ratios():
     config = _minimal_config({"compaction_mode": False})
     assert config.context.compaction_mode == "off"
