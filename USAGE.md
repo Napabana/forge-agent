@@ -107,12 +107,17 @@ llm:
 agent:
   max_steps: 40
   context_budget_cap: 80000
-  context_safety_margin_tokens: 1024
+  context_safety_margin_tokens: 8192
   log_dir: ./logs
 
 context:
-  repo_map_budget: 8000
-  history_window: 20
+  repo_map_mode: incremental
+  repo_map_budget: 12000
+  compaction_mode: traceable
+  compaction_threshold: 0.70
+  compaction_target_ratio: 0.50
+  compaction_keep_recent_tokens: 8000
+  history_window: 20 # deprecated；不按消息数删除 canonical history
   semantic_packet_max_tokens: 16000
 
 tools:
@@ -121,6 +126,8 @@ tools:
     max_output_tokens: 8000
   file:
     max_view_lines: 100
+  test:
+    python_executable: null # 本地默认 sys.executable；Docker 默认 python3
 ```
 
 调用时全局指定：
@@ -145,7 +152,40 @@ agent:
 
 此时 80k 是 Forge 自己的输入预算 cap fallback，不代表模型真实 Context Window。
 
-### 2.2 编辑工具选择
+### 2.2 Repo Map 与 Context Compaction
+
+`context.repo_map_mode` 控制 Repo Map：
+- `none`：不向模型注入 Repo Map；
+- `static`：构建静态结构视图；
+- `query_aware`：按当前任务相关性组织视图；
+- `incremental`：默认模式，复用持久化索引并按仓库变化增量更新。
+
+`context.repo_map_budget` 是硬上限。实际 Repo Map build budget 为：
+
+```text
+min(available_input_tokens * 0.15, context.repo_map_budget)
+```
+
+`context.compaction_mode` 支持 `off` 和 `traceable`。默认 `traceable`，并在 CLI run/chat、
+API、GitHub Issue 入口使用同一配置。默认 threshold=0.70、target_ratio=0.50、
+keep_recent_tokens=8000。先执行确定性旧工具输出剪枝，压力仍高时才调用 semantic summarizer。
+
+Compaction 只改变下一次模型请求的可见 History，不覆盖 canonical History。Semantic side-call
+usage 会计入 RunResult；本地 TokenCounter 是请求前估算，Provider usage 才是请求后统计。
+
+`history_window` 仅为兼容字段，当前不执行消息数量裁剪；上下文长度由 TokenBudget 和 Compaction 管理。
+
+自定义 Docker 镜像若 Python 不在默认 `python3` 路径，可配置：
+
+```yaml
+tools:
+  test:
+    python_executable: /opt/venv/bin/python
+```
+
+未配置时 LocalRuntime 使用当前 Python 解释器，DockerRuntime 使用 `python3`。
+
+### 2.3 编辑工具选择
 
 对于已有文件的小范围修改，优先让 Agent 使用：
 
@@ -743,7 +783,7 @@ Chat 的重点不是“把 run 放进 REPL”，而是：
 - Session state 持久化；
 - 每轮单独 EventLog；
 - repository revision 变化时刷新 Repo Map；
-- 高 Context pressure 时启用 `TraceableCompaction`。
+- 高 Context pressure 时启用配置化 `TraceableCompaction`；CLI run/chat、API 和 GitHub Issue 使用相同策略工厂。
 
 ### 7.1 启动
 
@@ -848,7 +888,8 @@ agent --config ~/forge-agent-local.yaml chat \
 
 ### 7.7 Context Compaction 怎么验证
 
-正常的小仓库/短会话不一定触发 compaction。它只在完整下一请求的 pressure 达到阈值后工作。
+正常的小仓库/短会话不一定触发 compaction。CLI run/chat、API 和 GitHub Issue 都使用同一
+Context Policy 配置；它只在完整下一请求的 pressure 达到阈值后工作。
 
 触发时终端可能看到：
 
@@ -1264,7 +1305,8 @@ Chat `/stats` 与 Trace 会区分：
 
 ## 14. Repo Map 怎么观察
 
-默认 `AgentConfig.repo_map_mode="incremental"`。
+`context.repo_map_mode` 默认 `incremental`；`context.repo_map_budget` 默认硬上限为 12000 tokens。
+实际 build budget 取可用输入预算的 15% 与该 cap 中较小值。
 
 第一次针对一个仓库运行时会建立持久化结构索引；同仓库后续运行会尝试 warm reuse。任务 query 变化时，结构索引可以复用，排序重新计算；仓库文件变化后会按 repository fingerprint / known changed path 刷新。
 
