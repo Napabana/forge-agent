@@ -72,7 +72,7 @@ class RunResult:
 class Runtime(ABC):
     """
     命令执行抽象基类。
-    所有工具通过 runtime.exec() 执行命令，不直接调 subprocess。
+    Shell 字符串通过 runtime.exec() 执行；Git/Pytest 等结构化命令通过 runtime.exec_args() 执行。
     """
 
     @abstractmethod
@@ -731,6 +731,7 @@ def create_runtime(
         worktree_mount: 透传给 DockerRuntime（始终 :rw 的 worktree 挂载）
         mem_limit:  透传给 DockerRuntime（--memory，默认 1g）
         nano_cpus:  透传给 DockerRuntime（--nano-cpus，默认 2 核）
+        python_executable: Docker 容器内的 Python 解释器；默认 python3
 
     Returns:
         Runtime 实例
