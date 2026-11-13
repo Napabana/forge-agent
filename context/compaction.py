@@ -92,7 +92,7 @@ class TraceableCompaction:
     def __init__(
         self,
         *,
-        threshold: float = 0.8,
+        threshold: float = 0.70,
         target_ratio: float = 0.5,
         keep_recent_tokens: int = 8_000,
         max_summary_chars: int = 2_000,
