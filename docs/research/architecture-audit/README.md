@@ -22,7 +22,7 @@
 | 06 | Planning、Recovery、Loop、Progress、Replan Gate | `06-Planning与Failure-Recovery.md` | 未开始 |
 | 07 | TaskEngine、Worktree、Local/Docker、取消与资源清理 | `07-Execution-Runtime与Isolation.md` | 未开始 |
 | 08 | Completion Guard、Acceptance、Tests、GitHub Delivery | [08-Testing与Acceptance.md](08-Testing与Acceptance.md)、[离线验证记录](08-离线验证记录.md) | **源码审查完成，19 个独立原型用例已运行；3 个 Forge 行为刻画用例待真实仓库验证** |
-| 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | [09-Trace与Evaluation.md](09-Trace与Evaluation.md)、[H0 离线记录](09-离线评分合同验证记录.md) | **H0/H1 源码初审 + 21 个离线评分合同用例通过**；生产接线和其余专题待完成 |
+| 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | [09-Trace与Evaluation.md](09-Trace与Evaluation.md)、[H0 离线记录](09-离线评分合同验证记录.md)、[Trace/Harbor 证据](09-H0-Trace与Harbor证据来源核查.md) | **H0 证据来源核查与只读工具 + 离线原型测试**；生产接线、H1 及其余专题待完成 |
 | 10 | Skills、MCP、Trajectory、Evolution、Teacher/Student 与 RL readiness | `10-Extension与RL-Readiness.md` | 未开始 |
 | 11 | 全功能评分、P0/P1/P2/P3 路线、Baseline 准入、面试 Q&A | `11-综合评分与改进路线.md` | 未开始 |
 
@@ -177,3 +177,10 @@
 
 - [09-离线评分合同验证记录.md](09-离线评分合同验证记录.md)：新增研究模块 `evals/trial_outcome_probe.py` 和 21 条测试 `tests/test_trial_outcome_probe.py`，与 Stage08 原型 19 条测试在本地累计 **40 passed in 0.08s**；`scoreable`、自然结束、Verifier 原始结果和故障归属分别表示，策略有内容指纹以冻结分母口径。
 - 以上均为**未接入生产的纯函数原型**；原有 Forge Runner/Eval/Harbor 行为不变，5 条 production characterization 用例仍需完整仓库环境执行；Stage09 全部 H01–H10 尚未完成。下阶段优先解决可信字段来源与测试验证，而非直接改 report denominator。
+
+
+## 2026-11-14：真实 Typer Trace 与 Harbor 证据来源核查
+
+- [09-H0-Trace与Harbor证据来源核查.md](09-H0-Trace与Harbor证据来源核查.md)：源码和 324 条真实 Trace 事件表明 30 次调用开始、29 次完成、Step 30 未收口；29 次 completed usage=868,723 Tokens。Harbor 因 `AgentTimeoutError` 没有记录 Agent Usage（null），但独立 verifier 给出 reward=1.0；不能将这些事实合并为自然 FINISH/实际账单。
+- 新增 `examples/harbor/trace_evidence.py`（只读 Trace+Harbor 检查器）和 `tests/test_trace_evidence.py`。在本地合成数据下新增 11 个通过，和前两项原型合计 **51 passed**；另 2 个直接读取归档及 Manifest 的 Python 回归测试已提交，但当前容器缺完整 repo checkout，**未执行**。
+- Harbor 示例 README 已明确外层超时不会保证 Adapter 收尾后续 Usage 采集执行；因此不允许把 Harbor Usage null 当零。相关结果仅为 H0 证据来源审查，不代表 Stage 09 全面结束或生产 Evaluator 已修复。
