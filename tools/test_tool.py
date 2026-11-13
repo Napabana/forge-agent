@@ -24,6 +24,19 @@ PYTEST_TIMEOUT = 120        # pytest 默认超时，比 shell 工具更长
 MAX_OUTPUT_CHARS = 6_000    # 测试输出比普通 shell 输出更容易很长
 
 
+def _classify_pytest_failure(returncode: int, raw: str) -> tuple[ToolErrorType, str]:
+    """区分真实测试失败与 pytest/解释器基础设施故障。"""
+    lowered = raw.lower()
+    if returncode < 0:
+        return ToolErrorType.INFRASTRUCTURE, "pytest process could not be started"
+    if "no module named pytest" in lowered:
+        return ToolErrorType.INFRASTRUCTURE, "pytest is not installed in the configured test Python"
+    # pytest: 1=tests failed，5=no tests collected；其余标准退出码表示执行环境/调用损坏。
+    if returncode in {2, 3, 4}:
+        return ToolErrorType.INFRASTRUCTURE, f"pytest runtime failed with exit code {returncode}"
+    return ToolErrorType.TOOL_EXECUTION, f"pytest exited with code {returncode}"
+
+
 class PytestTool(BaseTool):
     """
     运行 pytest 并返回结构化结果。
@@ -171,10 +184,12 @@ class PytestTool(BaseTool):
 
         output = _format_pytest_output(raw, success)
 
+        error_type, error = _classify_pytest_failure(run_result.returncode, raw)
         return ToolResult(
             success=success,
             output=output,
-            error=None if success else f"pytest exited with code {run_result.returncode}",
+            error=None if success else error,
+            error_type=None if success else error_type,
         )
 
 

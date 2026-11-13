@@ -122,9 +122,9 @@ class AgentConfig:
     skills_max_chars: int = 12_000
     skills_reference_max_chars: int = 8_000
     llm_max_retries: int = 3
-    llm_retry_delay: float = 2.0
-    llm_retry_max_delay: float = 30.0
-    llm_retry_jitter: float = 0.0
+    llm_retry_delay: float = 65.0
+    llm_retry_max_delay: float = 90.0
+    llm_retry_jitter: float = 0.1
     stream: bool = False
     stream_callback: object = None
     thought_callback: object = None
