@@ -406,3 +406,14 @@ A：Pi 的宿主 `finishTurn`、Codex 的模型停机+Stop hook、Claude Code �
 3. Stage 09 固定独立 grader/outcome/分母协议，Stage 04/05 按计划做 Repo Map 成本分析；等机制可测后才开新的真实 API run。
 
 **来源**：本报告所有 Forge 结论来自固定 SHA 的源码/现有测试与 Pilot R1 Trace；Pi/Codex 来自上述公开固定源码；Claude/Aider 来自官方公开文档。代码未公开的行为不作推断。
+
+## 13. 2026-11-14 离线研究原型增量验证（本报告静态审查之后）
+
+参见 [08-离线验证记录.md](08-离线验证记录.md)。本报告第 8/12 节的“本阶段没有运行 pytest”描述的是**此前静态审查时点**；其后已完成以下有限验证：
+
+- 新增 `evals/completion_candidate_probe.py`：只读 `EvidenceSnapshot` / `CheckEvidence` → `NOT_READY`、`WRAP_UP_REQUIRED`、`CANDIDATE_READY`。不接入 Forge 正式 `Agent.run`，不产生 `RunStatus.SUCCESS`。
+- 新增 `tests/test_completion_candidate_probe.py`：19 条纯离线原型用例已在 Python 3.13.5 + pytest 9.0.2 本地执行，结果 `19 passed in 0.06s`；其中两例基于 Pilot R1 Step 18/22 的事实构造状态映射，不是完整 Trace 自动重放，也不评估 hidden test 成功率。
+- `tests/test_agent_completion_guards.py` 新增 3 个当前 Forge 行为刻画用例，但**尚未在完整 Forge 仓库中运行**：当前容器无法 DNS 解析 GitHub，无法 clone 本仓库；只完成代码片段语法检查与源码接口静态核查。
+- 原先设计的 S08/A08 大部分端到端/集成用例尚未实施；特别是 Agent Loop、Runner、Harbor、Delivery 的实际行为没有因这个原型而改变。不能据 19/19 推断 Forge 已解决停机问题。
+
+**下一个必要事实门槛**：在具备完整 Forge checkout 的本地运行 `python -m pytest -q tests/test_completion_candidate_probe.py tests/test_agent_completion_guards.py tests/test_runner.py tests/test_repository_state.py tests/test_harbor_examples.py`（MockBackend/离线测试，不需调用 SiliconFlow）。若 3 个行为刻画用例通过，再讨论将 CompletionCandidate 转成低干扰的 post-tool 收尾信号；此前不自动增加新状态到生产 `RunStatus`。
