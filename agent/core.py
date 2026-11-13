@@ -138,7 +138,9 @@ class AgentConfig:
     # Production defaults to persistent incremental Repo Map. Other modes are
     # retained as controlled ablation variants.
     repo_map_mode: str = "incremental"
-    repo_map_budget: int = 12_000
+    # None preserves legacy programmatic/benchmark budgeting; product entrypoints
+    # explicitly forward ContextConfig.repo_map_budget as a hard cap.
+    repo_map_budget: int | None = None
     test_python_executable: str | None = None
     repo_map_cache_dir: str | None = None
 
