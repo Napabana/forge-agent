@@ -313,6 +313,7 @@ class TokenBudget:
         model_max_output_tokens: int | None = None,
         request_max_output_tokens: int | None = None,
         context_budget_cap: int | None = None,
+        repo_map_cap: int | None = None,
         safety_margin_tokens: int = 0,
         token_counter: TokenCounter | None = None,
         capability_fallback: bool = False,
@@ -356,6 +357,8 @@ class TokenBudget:
                 raise ValueError("model_context_window must be positive")
             if context_budget_cap is not None and context_budget_cap <= 0:
                 raise ValueError("context_budget_cap must be positive")
+            if repo_map_cap is not None and repo_map_cap <= 0:
+                raise ValueError("repo_map_cap must be positive")
             if model_context_window is None:
                 if context_budget_cap is None:
                     raise ValueError(
@@ -385,6 +388,7 @@ class TokenBudget:
         self._total = effective
         self._model_context_window = model_context_window
         self._context_budget_cap = context_budget_cap
+        self._repo_map_cap = int(repo_map_cap) if repo_map_cap is not None else None
         self._reserved_output_tokens = int(reserved_output)
         self._safety_margin_tokens = int(safety_margin_tokens)
         self._legacy_reserve_tokens = int(legacy_reserve)
@@ -443,6 +447,9 @@ class TokenBudget:
             + self._legacy_reserve_tokens
         )
         available = self._total - reserve
+        repo_map_budget = int(available * 0.15)
+        if self._repo_map_cap is not None:
+            repo_map_budget = min(repo_map_budget, self._repo_map_cap)
         return BudgetPlan(
             total=self._total,
             reserve=reserve,
@@ -450,7 +457,7 @@ class TokenBudget:
             safety_margin_tokens=self._safety_margin_tokens,
             legacy_reserve_tokens=self._legacy_reserve_tokens,
             system_core=int(available * 0.10),
-            repo_map=int(available * 0.15),
+            repo_map=repo_map_budget,
             history=int(available * 0.50),
             observation=int(available * 0.25),
         )
