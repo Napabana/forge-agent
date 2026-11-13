@@ -103,7 +103,7 @@ class Runtime(ABC):
     ) -> RunResult:
         """Execute an argv vector; legacy Runtime subclasses get safely quoted fallback."""
         normalized = [str(arg) for arg in args]
-        if not normalized or any("\\x00" in arg for arg in normalized):
+        if not normalized or any("\x00" in arg for arg in normalized):
             return RunResult(returncode=-1, stdout="", stderr="Invalid empty command or NUL argument")
         return self.exec(shlex.join(normalized), cwd=cwd, timeout=timeout)
 
@@ -183,7 +183,7 @@ class LocalRuntime(Runtime):
     ) -> RunResult:
         """Run an argv vector locally without invoking a shell."""
         normalized = [str(arg) for arg in args]
-        if not normalized or any("\\x00" in arg for arg in normalized):
+        if not normalized or any("\x00" in arg for arg in normalized):
             return RunResult(returncode=-1, stdout="", stderr="Invalid empty command or NUL argument")
         try:
             proc = subprocess.run(
@@ -502,7 +502,7 @@ class DockerRuntime(Runtime):
     ) -> RunResult:
         """Execute a container command as argv; no bash -c re-parsing is involved."""
         normalized = [str(arg) for arg in args]
-        if not normalized or any("\\x00" in arg for arg in normalized):
+        if not normalized or any("\x00" in arg for arg in normalized):
             return RunResult(returncode=-1, stdout="", stderr="Invalid empty command or NUL argument")
         if not self.is_running:
             startup_result = self._start_container()
