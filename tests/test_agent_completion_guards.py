@@ -581,3 +581,97 @@ def test_openai_stop_text_action_is_recovered_as_tool_call():
     assert action.tool_call is not None
     assert action.tool_call.name == "file_write"
     assert action.tool_call.params["path"] == "calculator.py"
+
+
+# Stage 08: characterization of current production behavior.
+# These are not assertions about desired future completion policy.
+def test_characterization_later_diagnostic_test_failure_overrides_focused_pass(tmp_path):
+    class SequentialTestTool(BaseTool):
+        def __init__(self):
+            self.calls = 0
+
+        @property
+        def name(self):
+            return "test"
+
+        @property
+        def description(self):
+            return "focused test succeeds, diagnostic test fails"
+
+        @property
+        def parameters_schema(self):
+            return {"type": "object", "properties": {}}
+
+        def execute(self, params):
+            self.calls += 1
+            return ToolResult(
+                success=self.calls == 1,
+                output="27 passed" if self.calls == 1 else "2 failed",
+            )
+
+    registry = (
+        ToolRegistry()
+        .register(RepositoryWriteTool("file_write", tmp_path / "repo" / "source.py"))
+        .register(SequentialTestTool())
+    )
+    result, _, events = _run(
+        tmp_path,
+        [_tool_action("file_write"), _tool_action("test"),
+         _tool_action("test"), _finish_action()],
+        registry,
+        require_changes=True,
+        require_tests=True,
+    )
+    # Known current behavior. Future provenance-aware guard should replace
+    # this contract after defining how to resolve diagnostic failures.
+    assert result.status is RunStatus.INCOMPLETE
+    assert any(
+        e.event_type is EventType.COMPLETION_REJECTED
+        and e.payload.get("code") == "LATEST_TEST_FAILED"
+        for e in events
+    )
+
+
+def test_characterization_untracked_debug_file_is_not_a_finish_blocker(tmp_path):
+    registry = (
+        ToolRegistry()
+        .register(RepositoryWriteTool("edit_source", tmp_path / "repo" / "source.py"))
+        .register(RepositoryWriteTool("write_debug", tmp_path / "repo" / "repro_issue.py"))
+        .register(NoopTool("test", "27 passed"))
+    )
+    result, _, _ = _run(
+        tmp_path,
+        [_tool_action("edit_source"), _tool_action("write_debug"),
+         _tool_action("test"), _finish_action()],
+        registry,
+        require_changes=True,
+        require_tests=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert (tmp_path / "repo" / "repro_issue.py").exists()
+    # This is an Agent-level guard, not a delivery allowlist or independent verifier.
+
+
+def test_characterization_no_progress_does_not_interrupt_verified_readonly_loop(tmp_path):
+    registry = (
+        ToolRegistry()
+        .register(RepositoryWriteTool("edit_source", tmp_path / "repo" / "source.py"))
+        .register(NoopTool("test", "27 passed"))
+        .register(NoopTool("inspect_a", "read-only"))
+        .register(NoopTool("inspect_b", "read-only"))
+    )
+    result, _, events = _run(
+        tmp_path,
+        [_tool_action("edit_source"), _tool_action("test"),
+         _tool_action("inspect_a"), _tool_action("inspect_b"), _finish_action()],
+        registry,
+        AgentConfig(reflection_no_edit_steps=1, loop_detection_window=12),
+        require_changes=True,
+        require_tests=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert not any(
+        e.event_type is EventType.REFLECTION
+        and e.payload.get("reason") == "no_edit"
+        for e in events
+    )
