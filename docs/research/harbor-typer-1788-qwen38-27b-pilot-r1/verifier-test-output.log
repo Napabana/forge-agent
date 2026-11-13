@@ -1,0 +1,40 @@
++ cd /workspace
++ python -m pytest -v tests/test_others.py
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /workspace
+configfile: pyproject.toml
+plugins: sugar-1.1.1, cov-7.1.0, xdist-3.8.0
+collecting ... collected 28 items
+
+tests/test_others.py::test_help_from_info PASSED                         [  3%]
+tests/test_others.py::test_defaults_from_info PASSED                     [  7%]
+tests/test_others.py::test_too_many_parsers PASSED                       [ 10%]
+tests/test_others.py::test_valid_parser_permutations PASSED              [ 14%]
+tests/test_others.py::test_install_invalid_shell SKIPPED (Test requi...) [ 17%]
+tests/test_others.py::test_callback_too_many_parameters PASSED           [ 21%]
+tests/test_others.py::test_callback_2_untyped_parameters PASSED          [ 25%]
+tests/test_others.py::test_bad_parameter_callback[--name-option_decls0-Invalid value for --name] PASSED [ 28%]
+tests/test_others.py::test_bad_parameter_callback[None-option_decls1-Invalid value for '--name' / '-n'] PASSED [ 32%]
+tests/test_others.py::test_bad_parameter_main PASSED                     [ 35%]
+tests/test_others.py::test_missing_parameter_msg[kw0-Missing parameter '--name' / '-n'.] PASSED [ 39%]
+tests/test_others.py::test_missing_parameter_msg[kw1-Missing value.] PASSED [ 42%]
+tests/test_others.py::test_missing_parameter_callback_msg PASSED         [ 46%]
+tests/test_others.py::test_missing_parameter_str PASSED                  [ 50%]
+tests/test_others.py::test_click_exception_show_default_file PASSED      [ 53%]
+tests/test_others.py::test_no_args_is_help_show PASSED                   [ 57%]
+tests/test_others.py::test_callback_3_untyped_parameters PASSED          [ 60%]
+tests/test_others.py::test_callback_4_list_none PASSED                   [ 64%]
+tests/test_others.py::test_multiple_bool_flags PASSED                    [ 67%]
+tests/test_others.py::test_empty_list_default_generator PASSED           [ 71%]
+tests/test_others.py::test_option_uses_envvar_when_required PASSED       [ 75%]
+tests/test_others.py::test_completion_argument PASSED                    [ 78%]
+tests/test_others.py::test_completion_untyped_parameters PASSED          [ 82%]
+tests/test_others.py::test_completion_untyped_parameters_different_order_correct_names PASSED [ 85%]
+tests/test_others.py::test_autocompletion_too_many_parameters PASSED     [ 89%]
+tests/test_others.py::test_forward_references PASSED                     [ 92%]
+tests/test_others.py::test_context_settings_inheritance_single_command PASSED [ 96%]
+tests/test_others.py::test_options_metadata_typer_default PASSED         [100%]
+
+======================== 27 passed, 1 skipped in 5.71s =========================

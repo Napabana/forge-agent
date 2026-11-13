@@ -7,7 +7,7 @@
 
 ## 目的与完成定义
 
-在开展 Teacher→Student→SFT→GRPO 前，对 Forge Agent **全架构**进行源码审计、与 Pi Agent/Codex CLI/Claude Code 等成熟实现横向对比，给出可复现的 baseline 准入判断和适合实习项目的改进路线。完成标准是：**功能覆盖可核查、每项有源码/测试/对照依据、改进有成本和优先级、面试追问可复述、结论不夸大**。不以新功能数量或复刻商业系统作为目标。
+对 Forge Agent **全架构**进行源码审计、与 Pi Agent/Codex CLI/Claude Code 等成熟实现横向对比，给出可复现的 Harness/Evaluation baseline 判断和适合实习项目的改进路线。早期研究曾把 Teacher→Student→SFT→GRPO 作为候选后续方向；当前决策是不开展这些训练工作，仅保留相关章节作为历史问题与证据边界。完成标准是：**功能覆盖可核查、每项有源码/测试/对照依据、改进有成本和优先级、面试追问可复述、结论不夸大**。不以新功能数量或复刻商业系统作为目标。
 
 ## 进度与产物
 
@@ -70,7 +70,7 @@
 - **R02-02**：OpenAI-compatible 非流式带 `strict=self._strict_tool_schema`；Streaming `_stream_with_tools` 未携带 strict，存在确定的配置差异。
 - **R02-03**：Streaming 只要已有 tool delta 就把 `finish_reason` 归一为 `tool_calls`；需要拒绝 `length` 截断时的工具执行（条件 P1）。
 - **R02-04**：Responses `failed/incomplete` 的 output 可能仍被解析为 TOOL_CALL，需要模拟失败状态的回归来确认安全边界（条件 P1）。
-- **R02-05**：Forge History 主要以文本化 Action/Observation 表示工具交互，不能与原生 Provider tool_call_id transcript 混为一谈；Teacher/Student SFT 输出协议需要预先冻结。
+- **R02-05**：Forge History 主要以文本化 Action/Observation 表示工具交互，不能与原生 Provider tool_call_id transcript 混为一谈；当前不产出 SFT 数据，该项只保留为历史协议风险。
 - **保留现有强项**：Provider 错误分类、bounded retry、stream chunk 后不盲目重试、Completion Guard、Loop Detector、独立验收状态。
 - **本阶段未运行 pytest/模型实验**；评分为有源码和测试文本支持的暂评分，尚不能认定已复现 P0。
 - 对照版本不变：Forge `3e3fc488`、Pi `b7294995`、Codex `1f1f6ebb`、Claude 2026-11-12 官方文档。
@@ -104,7 +104,7 @@
 
 ### 背景及目标边界
 
-用户根据 Harbor Typer 1788 的 Qwen3.5-4B v5/v6/v7 运行结果，决定 Forge Agent 主要用于 Harness 设计验证和外部 Benchmark；Teacher/Student SFT、GRPO 转到独立项目。三次运行混有 Provider TPM 错误、目标 pytest 环境污染、取消及一次干净的 max_steps 失败，不能合并计算模型成功率。
+用户根据 Harbor Typer 1788 的 Qwen3.5-4B v5/v6/v7 运行结果，决定 Forge Agent 主要用于 Harness 设计验证和外部 Benchmark；随后进一步明确当前不开展 Teacher/Student SFT 或 GRPO。三次运行混有 Provider TPM 错误、目标 pytest 环境污染、取消及一次干净的 max_steps 失败，不能合并计算模型成功率。
 
 **横向设计审查不取消、不重置**。原目标中「训练数据和 RL 准备」不再作为 Forge 的主交付，改为检查 Trace/Eval/外部工具是否具备独立、可靠、可审计的接口。Forge 的研究问题从「为了训练 Student 怎样改 Agent」转为「哪些 Harness 设计在相同模型和任务下确实提高可靠性/安全性/效果，收益是否值得额外成本」。
 
@@ -137,8 +137,9 @@
 本轮进一步收敛执行范围，详见 [Python-only Harbor 与 Qwen3.8-27B 试验实施规划](../../changes/2026-11-13/Forge-Harness评测与Python-only试验实施规划.md)。
 
 - Harbor 外部 Benchmark 本轮只保留 Python 任务；Go 任务及跨语言 Test Tool 暂不实施。此前记录的 63 个 Python 任务数须以当前 manifest 和实际 task 目录重新核验。
-- 在 12-task Pilot 或全量 Python Benchmark 前，先对历史任务 `default/tiangolo__typer-1788` 做一次 Qwen3.8-27B 单任务对比。任务仓库 commit 固定为 `959a356fec72cedcfd4ee3f84790789f8e961989`，Baseline ReAct、max_steps=40，Planning/Recovery/Skills/MCP 关闭。
+- `default/tiangolo__typer-1788` 的 Qwen3.8-27B 单任务 Pilot R1 已执行一次：任务 commit 固定为 `959a356fec72cedcfd4ee3f84790789f8e961989`，Baseline ReAct、35 max steps，Planning/Recovery/Skills/MCP 关闭。35 steps 是用户根据 ¥5 预算明确选择的实验参数，不冒充与 v7 的严格同预算对照。
+- Qwen3.8-27B 在 Step 13 正确修改生产代码，trial 内独立 Verifier 为 reward 1.0、F2P 1/1、P2P 22/22、无 regression；但第 30 次模型调用期间被 Harbor 外层 1800 秒 timeout 取消，Trace 没有 `run_terminated`。因此该结果是“功能通过、rollout 非自然终止”，不是完整 Forge SUCCESS。
 - 历史 Qwen3.5-4B v7 是一次基础设施干净的 max_steps 未完成样本：40 steps、1,764,554 total tokens、Provider cost 未记录、历史 job 未执行 Harbor verifier。v5 Provider 429、v6 环境污染后取消，均不可计入模型成功率。
-- Qwen3.8-27B 价格按 2026-11-13 SiliconFlow 价格页快照：输入 ¥3/M、输出 ¥12/M；实际费用以 Provider usage 和账户账单为准。历史 4B 运行没有可用 cost 记录，不推断其费用。
-- 当前 GitHub `dev` 的 `config/default.yaml` 和 `examples/harbor/r2e_forge_runtime.yaml` 仍显示 Qwen3.5-4B。Harbor Adapter 默认上传 `r2e_forge_runtime.yaml`，所以运行前必须确认实际 `config_path` 与有效 model，不能只检查 Forge 其他入口的默认配置。
-- 单任务结果可信后再进入 12-task Python Pilot；H0/H1 评测可信性和配置复用、H2 Python Adapter、H3 Docker/Verifier 仍按实施规划推进。单次模型对比不构成总体成功率或 Harness 因果结论。
+- Qwen3.8-27B 的 29 个完成调用为 868,723 total tokens；按 2026-11-13 SiliconFlow 价格快照估算约 ¥2.78。Provider 实际 cost 字段为空，第 30 次 started 请求是否计费未知，故不声明精确扣费。
+- Pilot 使用独立 config 和与 v7 相同的 wheel，没有修改仓库默认模型配置。完整报告及脱敏 Trace/console/result/Verifier/config/command/manifest 见 [Pilot R1 归档](../harbor-typer-1788-qwen38-27b-pilot-r1/报告.md)。
+- 当前不自动进入 12-task Pilot，也不开展 SFT/GRPO。若未来继续 Harness 评测，先修复并冻结 Harbor task timeout 与 adapter timeout 的双层配置；单次模型对比不构成总体成功率或 Harness 因果结论。

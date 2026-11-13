@@ -97,7 +97,8 @@ bash scripts/serve_docs.sh
 
 ## 评测证据
 
-- [Harbor × Forge：Typer 1788 实验报告](research/Harbor-Typer-1788实验报告.md)：区分 Provider failure、Harness 污染、可评分 max-steps 结果及 SFT/GRPO 证据边界。
+- [Harbor × Forge：Typer 1788 历史 v5/v6/v7 实验报告](research/Harbor-Typer-1788实验报告.md)：区分 Provider failure、Harness 污染与可评分 max-steps 结果。
+- [Qwen3.8-27B Typer 1788 单次 Pilot R1](research/harbor-typer-1788-qwen38-27b-pilot-r1/报告.md)：trial 内 Verifier 通过但 Agent 被 Harbor 外层 timeout 取消；同目录公开脱敏后的完整 Trace、console、result、Verifier、配置、启动命令与 manifest。当前只将其用作 Harness/Evaluation 审计证据，不开展 SFT 或 GRPO。
 
 评测原始输出保持在 `evals/results/`，不移动到文档目录：
 

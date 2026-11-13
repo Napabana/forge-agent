@@ -1,0 +1,6 @@
+Run-specific allowlist host(s) ['api.siliconflow.cn'] are ignored because the effective network policy is public.
+Run-specific allowlist host(s) ['api.siliconflow.cn'] are ignored because the effective network policy is public.
+Skipping image OS validation for hb__31c39ea773c0bffe2014c64e31096efa: docker inspect returned 1
+Run-specific allowlist host(s) ['api.siliconflow.cn'] are ignored because the effective network policy is public.
+Collecting main service artifacts
+Run-specific allowlist host(s) ['api.siliconflow.cn'] are ignored because the effective network policy is public.

@@ -11,8 +11,7 @@
 | v6 | Harbor `CancelledError`，reward/verifier 均为空 | 得到正确单行 patch | Test Tool 使用 Forge 私有 venv，缺少 pytest；随后外部取消，轨迹受 Harness 污染 |
 | v7 | Forge `INCOMPLETE / resource_exhausted / max_steps` | 无修改 | pytest 与 Provider retry 均正常，是本组首个基础设施干净的模型失败 |
 
-v6 证明模型能够定位并修复该问题；v7 证明同一小模型轨迹并不稳定。当前证据支持先构造高质量 SFT
-轨迹，不能从这三个不同条件的 run 计算成功率，也不支持直接启动 GRPO。
+v6 证明模型能够定位并修复该问题；v7 证明同一小模型轨迹并不稳定。不能从这三个不同条件的 run 计算成功率。当前项目决策已更新为只继续 Forge Harness/Evaluation 审计，**不开展 SFT 或 GRPO**；本报告中的轨迹只作为失败分层和工具链证据。
 
 ## 固定任务事实
 
@@ -68,7 +67,7 @@ No module named pytest
 目标 task image 的项目依赖和 pytest 实际安装在系统 `python3`。模型后续尝试通过 shell/pip 绕过，均被权限策略拒绝，
 最终持久化 Harbor 状态为 `CancelledError`，reward 和 verifier 均为空。
 
-v6 的 locate/edit 片段可以人工整理为 SFT expert trajectory，但取消后的整个 trial 不能作为 reward 样本，也不能当作自然模型终态。
+v6 的 locate/edit 片段可用于分析理想 Agent 路径，但取消后的整个 trial 不能作为 reward 样本，也不能当作自然模型终态。当前不将其整理为训练数据。
 
 ## v7：基础设施干净的模型失败
 
@@ -156,16 +155,11 @@ adapter.3 依据可信 Trace v2 `run_terminated` 分类，而不是只依据 CLI
 
 wheel、完整 Trace、console log、task checkout 与 secret 文件只保留在本地，不进入 Git。
 
-## 训练建议
+## 当前后续方向
 
-优先用 v6 的正确路径构造短 SFT 轨迹：
+当前不开展 SFT、GRPO、preference optimization 或 Agent RL。v6/v7 只用于 Forge Harness 与 Evaluation 的错误分层、Test Tool 环境、Provider retry、Completion Guard 和终态映射审计。
 
-```text
-读取失败意图 → 搜索 value_from_envvar → 识别缺失 return → 单行编辑 → focused test → FINISH
-```
-
-v7 可作为“搜索/编辑效率不足”的诊断案例，但不应仅凭一次 reward=0 直接用于 GRPO。进入 preference optimization 或
-Agent RL 前，至少应积累多仓库、基础设施干净、终态可信、包含成功与失败差异的样本，并按 repository 划分 train/dev/test。
+后续若继续本项目，优先修复或验证实验协议本身，例如 task-level timeout 与 adapter timeout 的一致性、独立 Verifier provenance、不可评分 failure 的分母隔离，以及 focused test 通过后的停止行为；不把这些轨迹转成训练数据。
 
 ## 证据边界
 

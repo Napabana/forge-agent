@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "archive_kind": "sanitized_real_model_trial_evidence",
+  "task_id": "default/tiangolo__typer-1788",
+  "task_repository_ref": "959a356fec72cedcfd4ee3f84790789f8e961989",
+  "model": "Qwen/Qwen3.8-27B",
+  "provider": "openai_compatible_siliconflow",
+  "harbor_version": "0.25.0",
+  "job_name": "typer-1788-qwen38-27b-pilot-r1",
+  "trial_id": "tiangolo__typer-1788__2hqxjmQ",
+  "trace_file": "c3f93ed2_20261113_152814.jsonl",
+  "forge_source_commit": "ca396ce6f14b88dd439bebdcb3b9634645017034",
+  "wheel_sha256": "237521f488d541919855f834cfa344e4081744318b8ba7c3e7aaf11d938c167c",
+  "runtime_config_sha256": "943eafc05b38a5b86d08dce19ca5637aa70036e6a5c8954342bf75d16d5a955b",
+  "outcome": {
+    "harbor_reward": 1.0,
+    "resolved": true,
+    "f2p": "1/1",
+    "p2p": "22/22",
+    "regressions": [],
+    "harbor_exception": "AgentTimeoutError",
+    "forge_terminal_event_present": false,
+    "interpretation": "functional_success_with_independent_verifier; rollout_not_naturally_terminated"
+  },
+  "usage_completed_calls_only": {
+    "llm_calls_started": 30,
+    "llm_calls_finished": 29,
+    "input_tokens": 849931,
+    "output_tokens": 18792,
+    "reasoning_tokens": 15264,
+    "cache_tokens": 0,
+    "total_tokens": 868723,
+    "estimated_cny": 2.78,
+    "provider_billed_cost_known": false
+  },
+  "sanitization": {
+    "raw_artifacts_modified": false,
+    "replaced": [
+      "local username/home path",
+      "host workspace absolute paths",
+      "secret env-file location"
+    ],
+    "secret_values_checked_without_printing": true,
+    "excluded": [
+      "API key values",
+      "wheel binary",
+      "complete Harbor job directory",
+      "Docker artifacts",
+      "Provider account data"
+    ],
+    "event_sequence_preserved": true
+  },
+  "files": [
+    {
+      "path": "agent-install-check.sanitized.txt",
+      "bytes": 396,
+      "sha256": "f54f819df924db31dcc98a8ff4a9b16aeedf2362a079f0a1d445470df3fc1cc2",
+      "source_artifact_sha256": "f54f819df924db31dcc98a8ff4a9b16aeedf2362a079f0a1d445470df3fc1cc2",
+      "sanitized": false
+    },
+    {
+      "path": "console.sanitized.txt",
+      "bytes": 9887,
+      "sha256": "c903014b900b6fb5819974fb670523e6bc54e9aa1969b5ac4f798d9a35244f6e",
+      "source_artifact_sha256": "c903014b900b6fb5819974fb670523e6bc54e9aa1969b5ac4f798d9a35244f6e",
+      "sanitized": false
+    },
+    {
+      "path": "exception.sanitized.txt",
+      "bytes": 3550,
+      "sha256": "f309e39c6f22af484f6964f03c209bd0090d907613d0311207c80d14826205d2",
+      "source_artifact_sha256": "f5a56bf1db9757390f76099297b876ce8f90be5538004b044ad346694151cc7b",
+      "sanitized": true
+    },
+    {
+      "path": "harbor-artifacts-manifest.sanitized.json",
+      "bytes": 175,
+      "sha256": "a2d6f66d545a09b9110b4ed84222030b77da51bde34a61ce9b0ca18e4d51586f",
+      "source_artifact_sha256": "a2d6f66d545a09b9110b4ed84222030b77da51bde34a61ce9b0ca18e4d51586f",
+      "sanitized": false
+    },
+    {
+      "path": "harbor-config.sanitized.json",
+      "bytes": 616,
+      "sha256": "56cceef63355b94103f9e58b64857146896eb4319b7f543c14fee59e9ee8b0de",
+      "source_artifact_sha256": "d149fe398e5581bcac80a40bc2ff4c83f1e28fd7002f6e9638fe65037662c975",
+      "sanitized": true
+    },
+    {
+      "path": "harbor-lock.sanitized.json",
+      "bytes": 1208,
+      "sha256": "6914ec90ae15ff8705709cbafb2443a9af7a207d15e6e3e3628cf284fd3e2664",
+      "source_artifact_sha256": "888ebaf98aa32331bf591ab0f677f822a7388c02d71d2ed44ba8e72e1ccbd63f",
+      "sanitized": true
+    },
+    {
+      "path": "harbor-result.sanitized.json",
+      "bytes": 8169,
+      "sha256": "c6207eebfc55aba7165d099780cbe3a9f8535a68f7fb79fc0585086f81369d0e",
+      "source_artifact_sha256": "9ea3d7ccb859e3cf68db6b67dd07c60c1746e402810bea13dc5052e4b7c35c90",
+      "sanitized": true
+    },
+    {
+      "path": "harbor-trial.sanitized.log",
+      "bytes": 587,
+      "sha256": "4551477600c16f08a150d3ff3ed117885469c3ef8e32b46591e48d2f555327d9",
+      "source_artifact_sha256": "4551477600c16f08a150d3ff3ed117885469c3ef8e32b46591e48d2f555327d9",
+      "sanitized": false
+    },
+    {
+      "path": "launch-command.sanitized.sh",
+      "bytes": 671,
+      "sha256": "6f7ff8c7f840a04a6a04fb128e097ac779ba7359b5164f76289dc25622003c0e",
+      "source_artifact_sha256": "4b870921146b24d7cec3c134be1471c92723eb481a425cc18e73dd0ad69ed05b",
+      "sanitized": true
+    },
+    {
+      "path": "runtime-config.sanitized.yaml",
+      "bytes": 700,
+      "sha256": "943eafc05b38a5b86d08dce19ca5637aa70036e6a5c8954342bf75d16d5a955b",
+      "source_artifact_sha256": "943eafc05b38a5b86d08dce19ca5637aa70036e6a5c8954342bf75d16d5a955b",
+      "sanitized": false
+    },
+    {
+      "path": "trace.sanitized.jsonl",
+      "bytes": 286696,
+      "sha256": "d4345c7bcf0f14322d877a2b15284d08223bc2d1f74d4a49c82742bdaebd0bbc",
+      "source_artifact_sha256": "d4345c7bcf0f14322d877a2b15284d08223bc2d1f74d4a49c82742bdaebd0bbc",
+      "sanitized": false
+    },
+    {
+      "path": "verifier-reward-details.json",
+      "bytes": 345,
+      "sha256": "c2bfe67f7e7dc58912820ba20b24f0530b1e0d29125cf0c752fe7ceced39b4f4",
+      "source_artifact_sha256": "c2bfe67f7e7dc58912820ba20b24f0530b1e0d29125cf0c752fe7ceced39b4f4",
+      "sanitized": false
+    },
+    {
+      "path": "verifier-reward.txt",
+      "bytes": 9,
+      "sha256": "50d3a69b930457282debea3d352ae49803a15f0843ae1699399ef4de2f4f7cdd",
+      "source_artifact_sha256": "50d3a69b930457282debea3d352ae49803a15f0843ae1699399ef4de2f4f7cdd",
+      "sanitized": false
+    },
+    {
+      "path": "verifier-test-output.log",
+      "bytes": 2820,
+      "sha256": "b88133e4a02aec6b74521fa804b988dd99aaca7da4beba18c8e08279c6b9f2f7",
+      "source_artifact_sha256": "b88133e4a02aec6b74521fa804b988dd99aaca7da4beba18c8e08279c6b9f2f7",
+      "sanitized": false
+    },
+    {
+      "path": "verifier-test-stdout.txt",
+      "bytes": 3923,
+      "sha256": "80f2a09b3e2a850d1d41c60525f3674b6015f5f47ba61f96d48019248f82f45b",
+      "source_artifact_sha256": "80f2a09b3e2a850d1d41c60525f3674b6015f5f47ba61f96d48019248f82f45b",
+      "sanitized": false
+    },
+    {
+      "path": "报告.md",
+      "bytes": 9940,
+      "sha256": "03a1d5482f361e2d989d85f6743b56ac2c5fb42fc34390b8c89217c0c20a4e6a",
+      "generated": true
+    }
+  ]
+}
