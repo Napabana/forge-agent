@@ -16,6 +16,7 @@ Git 操作工具，四个 action：
 
 from __future__ import annotations
 
+import shlex
 from typing import Any
 
 from tools.base import BaseTool, ToolEffect, ToolResult
@@ -36,7 +37,13 @@ def _run_git(
     """
     from tools.runtime import LocalRuntime
     rt = runtime or LocalRuntime()
-    result = rt.exec_args(["git", *args], cwd=cwd, timeout=30)
+    argv = ["git", *args]
+    exec_args = getattr(rt, "exec_args", None)
+    if callable(exec_args):
+        result = exec_args(argv, cwd=cwd, timeout=30)
+    else:
+        # Backward compatibility for duck-typed Runtime adapters.
+        result = rt.exec(shlex.join(argv), cwd=cwd, timeout=30)
     output = result.output.strip()
     return result.success, output
 
