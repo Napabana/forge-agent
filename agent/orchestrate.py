@@ -310,6 +310,7 @@ async def orchestrate_run(
                 readonly_root=readonly_root,
                 worktree_mount=(str(wt.path), CONTAINER_WORKDIR),
                 network=False,
+                python_executable=agent_cfg.test_python_executable,
             )
         else:
             # LocalRuntime 在宿主运行，命令的 cwd 直接指向 wt.path，
