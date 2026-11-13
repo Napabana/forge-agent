@@ -94,6 +94,7 @@ def test_retry_event_does_not_count_as_another_call(tmp_path):
     t.write_text("\n".join(rows) + "\n")
     a = analyze_trace(t)
     assert a["retry_events"] == 1 and a["started_calls"] == 1
+    assert a["usage_is_lower_bound"] is True
 
 
 def test_verifier_disagreement_is_rejected(tmp_path):
@@ -111,6 +112,7 @@ def test_failed_model_call_closes_pending_without_usage(tmp_path):
     t.write_text("\n".join(rows) + "\n")
     a = analyze_trace(t)
     assert a["failed_calls"] == 1 and not a["unresolved_calls"]
+    assert a["usage_is_lower_bound"] is True
     assert a["observed_finished_usage"]["input_tokens"] == 0
 
 
@@ -167,3 +169,16 @@ def test_real_pilot_manifest_matches_trace_sha256():
                     if x["path"] == "trace.sanitized.jsonl")
     actual = hashlib.sha256((base / "trace.sanitized.jsonl").read_bytes()).hexdigest()
     assert actual == expected
+
+
+def test_missing_provider_token_field_is_not_silently_complete(tmp_path):
+    t, _ = fixture(tmp_path)
+    rows = t.read_text().splitlines()
+    row = json.loads(rows[1])
+    del row["payload"]["provider_usage"]["input_tokens"]
+    rows[1] = json.dumps(row)
+    t.write_text("\n".join(rows) + "\n")
+    summary = analyze_trace(t)
+    assert summary["observed_finished_usage"]["input_tokens"] == 0
+    assert summary["usage_is_lower_bound"] is True
+    assert "input_tokens" in summary["usage_fields_missing"]
