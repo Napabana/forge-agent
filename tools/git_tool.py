@@ -31,8 +31,8 @@ def _run_git(
     runtime: "Runtime | None" = None,
 ) -> tuple[bool, str]:
     """
-    运行 git 命令，返回 (success, output)。
-    runtime 为 None 时直接用 subprocess（向后兼容）。
+    运行 git argv，返回 (success, output)。
+    runtime 为 None 时使用 LocalRuntime；不经过 shell 字符串拼接。
     """
     from tools.runtime import LocalRuntime
     rt = runtime or LocalRuntime()
