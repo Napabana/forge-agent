@@ -177,6 +177,38 @@ def test_pytest_tool_rejects_option_like_path_before_execution(tmp_path):
     assert runtime.args is None
 
 
+@pytest.mark.parametrize("returncode", [1, 5])
+def test_pytest_tool_classifies_test_outcomes_as_tool_failures(tmp_path, returncode):
+    runtime = _RecordingRuntime()
+    runtime.exec_args = lambda *args, **kwargs: RunResult(returncode, "1 failed\n", "")
+
+    result = PytestTool(runtime=runtime, default_cwd=str(tmp_path)).execute({"path": "tests"})
+
+    assert not result.success
+    assert result.error_type is ToolErrorType.TOOL_EXECUTION
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr", "expected_error"),
+    [
+        (1, "/test/python: No module named pytest\n", "pytest is not installed"),
+        (3, "INTERNALERROR> plugin crashed\n", "pytest runtime failed"),
+        (-1, "No such file or directory\n", "could not be started"),
+    ],
+)
+def test_pytest_tool_classifies_environment_failures_as_infrastructure(
+    tmp_path, returncode, stderr, expected_error
+):
+    runtime = _RecordingRuntime()
+    runtime.exec_args = lambda *args, **kwargs: RunResult(returncode, "", stderr)
+
+    result = PytestTool(runtime=runtime, default_cwd=str(tmp_path)).execute({"path": "tests"})
+
+    assert not result.success
+    assert result.error_type is ToolErrorType.INFRASTRUCTURE
+    assert expected_error in result.error
+
+
 def test_local_runtime_exec_args_never_invokes_a_shell(monkeypatch, tmp_path):
     calls = {}
 

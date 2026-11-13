@@ -27,6 +27,14 @@ def finish_backend():
     return MockBackend([Action(ActionType.FINISH, "done", message="ok")])
 
 
+def test_default_retry_policy_handles_provider_tpm_windows():
+    config = AgentConfig()
+
+    assert config.llm_retry_delay == 65.0
+    assert config.llm_retry_max_delay == 90.0
+    assert config.llm_retry_jitter == 0.1
+
+
 def test_classifier_retries_only_known_transient_errors():
     assert classify_llm_error(ConnectionError("network down")).retryable
     assert classify_llm_error(HTTPError(503, "unavailable")).retryable
