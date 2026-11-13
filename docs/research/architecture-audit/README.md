@@ -131,3 +131,14 @@
 **Harness 实证评测**：Model/Provider、版本、任务 SHA、Tool Manifest、权限、预算、重试、上下文、seed/repeats 固定；按 independent verifier 评分，同时分开 model outcome、provider failure、infrastructure failure、cancellation；提供成功率及 steps/tokens/latency 的配对代价。
 
 任何跨项目比较都不直接用品牌整体成功率判断 Forge 某一模块好坏；外部 Benchmark 优先验证本项目实验结论能否迁移，不替代源码设计审查。
+
+## 2026-11-13 补充决策：Python-only 与单任务模型对比优先
+
+本轮进一步收敛执行范围，详见 [Python-only Harbor 与 Qwen3.8-27B 试验实施规划](../../changes/2026-11-13/Forge-Harness评测与Python-only试验实施规划.md)。
+
+- Harbor 外部 Benchmark 本轮只保留 Python 任务；Go 任务及跨语言 Test Tool 暂不实施。此前记录的 63 个 Python 任务数须以当前 manifest 和实际 task 目录重新核验。
+- 在 12-task Pilot 或全量 Python Benchmark 前，先对历史任务 `default/tiangolo__typer-1788` 做一次 Qwen3.8-27B 单任务对比。任务仓库 commit 固定为 `959a356fec72cedcfd4ee3f84790789f8e961989`，Baseline ReAct、max_steps=40，Planning/Recovery/Skills/MCP 关闭。
+- 历史 Qwen3.5-4B v7 是一次基础设施干净的 max_steps 未完成样本：40 steps、1,764,554 total tokens、Provider cost 未记录、历史 job 未执行 Harbor verifier。v5 Provider 429、v6 环境污染后取消，均不可计入模型成功率。
+- Qwen3.8-27B 价格按 2026-11-13 SiliconFlow 价格页快照：输入 ¥3/M、输出 ¥12/M；实际费用以 Provider usage 和账户账单为准。历史 4B 运行没有可用 cost 记录，不推断其费用。
+- 当前 GitHub `dev` 的 `config/default.yaml` 和 `examples/harbor/r2e_forge_runtime.yaml` 仍显示 Qwen3.5-4B。Harbor Adapter 默认上传 `r2e_forge_runtime.yaml`，所以运行前必须确认实际 `config_path` 与有效 model，不能只检查 Forge 其他入口的默认配置。
+- 单任务结果可信后再进入 12-task Python Pilot；H0/H1 评测可信性和配置复用、H2 Python Adapter、H3 Docker/Verifier 仍按实施规划推进。单次模型对比不构成总体成功率或 Harness 因果结论。
