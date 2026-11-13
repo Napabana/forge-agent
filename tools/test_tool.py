@@ -123,7 +123,10 @@ class PytestTool(BaseTool):
                 error_type=ToolErrorType.INVALID_ARGUMENTS,
             )
 
-        python_bin = self._python_executable or self._runtime.python_executable
+        python_bin = (
+            self._python_executable
+            or getattr(self._runtime, "python_executable", "python3")
+        )
         if not isinstance(python_bin, str) or not python_bin.strip():
             return ToolResult(
                 success=False,
@@ -142,11 +145,20 @@ class PytestTool(BaseTool):
             "--",
             test_path,
         ]
-        run_result = self._runtime.exec_args(
-            cmd_parts,
-            cwd=cwd,
-            timeout=PYTEST_TIMEOUT,
-        )
+        exec_args = getattr(self._runtime, "exec_args", None)
+        if callable(exec_args):
+            run_result = exec_args(
+                cmd_parts,
+                cwd=cwd,
+                timeout=PYTEST_TIMEOUT,
+            )
+        else:
+            # Backward compatibility for duck-typed Runtime adapters.
+            run_result = self._runtime.exec(
+                shlex.join(cmd_parts),
+                cwd=cwd,
+                timeout=PYTEST_TIMEOUT,
+            )
         if "timed out" in run_result.stderr.lower():
             return ToolResult(
                 success=False,
