@@ -1088,7 +1088,7 @@ isolate+sandbox 在调用 LLM 之前检查：
 
 ```text
 git --version
-python3 -m pytest --version
+<tools.test.python_executable 或默认 python3> -m pytest --version
 git rev-parse --is-inside-work-tree
 test -w .
 ```
