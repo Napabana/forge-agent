@@ -115,3 +115,13 @@ python -m pytest -q tests/test_coding_agent_eval.py tests/test_completion_candid
 - `tests/test_coding_agent_eval.py` 的 2 个真实 Forge Evaluation 行为刻画用例**依然未运行**；当前容器无法通过 DNS 拉取完整 Github repo，因此留给有完整 checkout 的本地环境进行无 API 的 pytest。
 - **H0 未完成生产接入**：原型中的 `model_call_started`、`failure_domain`、`snapshot_within_deadline` 均需要可信来源，现有 `TrialResult` 不能直接提供，不能从异常消息或配置标志推断。严禁把独立原型的分母公式替换到生产报表后直接报告模型能力。
 - Stage09 仍为 H0/H1 源码关键路径初审，不是 H01–H10 全部完成；H1 配置漂移与 Stage03/07 执行凭据隔离保持待办。
+
+## 8. 2026-11-14：H0 可信数据源核查与真实 Typer 归档
+
+详见 [09-H0-Trace与Harbor证据来源核查.md](09-H0-Trace与Harbor证据来源核查.md)。
+
+- 新增只读 `examples/harbor/trace_evidence.py`，依据 `model_call_id/run_id/step_id` 检验 Trace 事件关联，区分正常 finished 调用、pending request、自然 `run_terminated` 与 Harbor 外层 `AgentTimeoutError`，并保留原始 Verifier reward、缺失 Usage、未知费用。
+- 使用 GitHub 连接直接解析归档的全部 324 个 Trace 事件，得到开始 30、完成 29、Step30 未完成、两次 429 retry、没有正常 `run_terminated`；29 次 completed usage=868,723 Tokens，与归档 Manifest 的计数一致。
+- 归档 Harbor 的 `agent_result` 用量全部 null，但外部 verifier reward=1.0。源码发现 `examples/harbor/forge_harbor_agent.py` 是在 `await environment.exec()` 返回后才汇总并回写 usage；外层超时可能绕开这一步，因此旧 Harbor README 对“缺少终态时不会产生 reward”的概括已修正。
+- `tests/test_trace_evidence.py` 的 **11 条合成用例本地通过**；其余两个读取真实归档的 Python 回归已提交但**尚未在完整 Forge checkout 中执行**。本地独立 Stage08/09 原型累计 **51 passed**。这些测试不代表模型任务成功率。
+- `trace_evidence.py` 故意输出 `scoreable=null`、`failure_domain=null`、`provider_billed_cost=null`：外层超时证明 watchdog 超时，不能直接归罪模型或把 Provider 用量估算当真实账单。Stage09 的 H0/H1 生产接线仍未开始。
