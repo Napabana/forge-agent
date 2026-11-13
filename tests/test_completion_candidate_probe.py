@@ -131,3 +131,27 @@ def test_failed_diagnostic_from_old_snapshot_not_applied_to_new_patch():
         evidence("tmp", CheckOutcome.FAILED, origin=CheckOrigin.DIAGNOSTIC, snapshot="v1"),
     ))
     assert decision.state is Readiness.CANDIDATE_READY
+
+
+def test_pilot_r1_step18_evidence_would_require_cleanup_not_auto_success():
+    # Pilot-derived facts only: source patch, temporary repro script, focused pass.
+    # We do not infer hidden-test correctness from the focused test.
+    decision = check(
+        checks=(evidence("tests/test_core.py", origin=CheckOrigin.REPOSITORY, sequence=18),),
+        untracked_paths=("repro_issue.py",),
+    )
+    assert decision.state is Readiness.WRAP_UP_REQUIRED
+    assert "repro_issue.py" in " ".join(decision.reasons)
+
+
+def test_pilot_r1_step22_diagnostic_fail_does_not_erase_focused_pass():
+    decision = check(
+        checks=(
+            evidence("tests/test_core.py", origin=CheckOrigin.REPOSITORY, sequence=18),
+            evidence("test_tmp_fix.py", CheckOutcome.FAILED,
+                     origin=CheckOrigin.DIAGNOSTIC, sequence=22),
+        ),
+        untracked_paths=("repro_issue.py", "test_tmp_fix.py"),
+    )
+    assert decision.state is Readiness.WRAP_UP_REQUIRED
+    assert "test_tmp_fix.py" in " ".join(decision.reasons)
