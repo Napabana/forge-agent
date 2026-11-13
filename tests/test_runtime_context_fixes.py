@@ -324,3 +324,25 @@ def test_runner_merges_semantic_compaction_usage_once():
 
     assert result.usage.llm_calls == 1
     assert result.total_tokens == 30
+
+
+def test_docker_preflight_uses_the_configured_python_executable(monkeypatch, tmp_path):
+    runtime = DockerRuntime(
+        repo_path=str(tmp_path),
+        python_executable="/opt/custom venv/bin/python",
+    )
+    captured = {}
+
+    def fake_exec(cmd, cwd=None, timeout=30):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["timeout"] = timeout
+        return RunResult(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(runtime, "exec", fake_exec)
+    result = runtime.preflight(cwd=str(tmp_path))
+
+    assert result.success
+    assert "'/opt/custom venv/bin/python' -m pytest --version" in captured["cmd"]
+    assert captured["cwd"] == str(tmp_path)
+    assert captured["timeout"] == 30
