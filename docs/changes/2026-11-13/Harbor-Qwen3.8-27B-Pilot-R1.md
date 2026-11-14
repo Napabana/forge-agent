@@ -45,3 +45,5 @@
 本次是“功能结果成功、独立验收通过、rollout 因 Harness timeout 非自然终止”。不能写成完整 Forge SUCCESS，也不能写成模型任务失败。单次结果不能外推总体成功率或稳定 token/latency 优势。
 
 本轮只更新文档和脱敏实验附件，不修改生产 Python、默认配置、Benchmark fixture 或历史结果目录。架构职责和执行链未变化，因此不更新 Mermaid 或源码索引。仓库测试不因纯文档/数据归档重复运行；执行文档一致性、JSON/JSONL 解析、链接、secret/path 扫描与 `git diff --check`。
+
+补充：独立 Windows/WSL worktree 回归发现 `trace.sanitized.jsonl` 因 Git `text=auto` 被 checkout 为 CRLF，导致工作树 SHA-256 与 manifest 中仓库 blob 的 LF SHA-256 不同。`.gitattributes` 已增加 `*.jsonl text eol=lf`；实验内容和 manifest 不变，专项回归重新通过。
