@@ -91,7 +91,7 @@ bash scripts/serve_docs.sh
 作为代码变更的验收契约单独版本化：
 
 - `docs/plans/`：历史实施方案和归档计划。
-- [`docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md`](changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md)：本轮修复范围、设计决策和本地验收命令。
+- [`docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md`](https://github.com/Napabana/forge-agent/blob/dev/docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md)：本轮修复范围、设计决策和本地验收命令（`changes/**` 不进入本地站点构建）。
 - `docs/changes/`：其他按日期追加的开发记录。
 - `docs/evidence/`：证据索引和可说/不可说边界。
 

@@ -47,3 +47,9 @@
 本轮只更新文档和脱敏实验附件，不修改生产 Python、默认配置、Benchmark fixture 或历史结果目录。架构职责和执行链未变化，因此不更新 Mermaid 或源码索引。仓库测试不因纯文档/数据归档重复运行；执行文档一致性、JSON/JSONL 解析、链接、secret/path 扫描与 `git diff --check`。
 
 补充：独立 Windows/WSL worktree 回归发现 `trace.sanitized.jsonl` 因 Git `text=auto` 被 checkout 为 CRLF，导致工作树 SHA-256 与 manifest 中仓库 blob 的 LF SHA-256 不同。`.gitattributes` 已增加 `*.jsonl text eol=lf`；实验内容和 manifest 不变，专项回归重新通过。
+
+## 合并门禁收口
+
+研究分支进入 PR 前补齐了既有 Evidence Pack 测试依赖的四份历史证据文档；它们此前受 `/docs/**` 忽略规则影响，导致干净 worktree 缺失。Zensical 明确排除 `changes/**`，因此两个对应引用改为 GitHub `dev` 链接，不改变站点内容源或生产架构。
+
+WSL 最终验证：`python -m evals.verify_evidence_pack` 通过；`python -m pytest -q` 为 `1204 passed / 30 warnings`，耗时 461.55 秒；`zensical build --strict` 为 `No issues found`。warnings 均为既有 AnyIO/Python 3.11 cancellation deprecation。未调用真实模型 API，未修改生产 Agent Python、默认配置、Benchmark fixture 或历史结果。

@@ -143,7 +143,7 @@
 
 ## 2026-11-13 补充决策：Python-only 与单任务模型对比优先
 
-本轮进一步收敛执行范围，详见 [Python-only Harbor 与 Qwen3.8-27B 试验实施规划](../../changes/2026-11-13/Forge-Harness评测与Python-only试验实施规划.md)。
+本轮进一步收敛执行范围，详见 [Python-only Harbor 与 Qwen3.8-27B 试验实施规划](https://github.com/Napabana/forge-agent/blob/dev/docs/changes/2026-11-13/Forge-Harness评测与Python-only试验实施规划.md)（`changes/**` 不进入本地站点构建）。
 
 - Harbor 外部 Benchmark 本轮只保留 Python 任务；Go 任务及跨语言 Test Tool 暂不实施。此前记录的 63 个 Python 任务数须以当前 manifest 和实际 task 目录重新核验。
 - `default/tiangolo__typer-1788` 的 Qwen3.8-27B 单任务 Pilot R1 已执行一次：任务 commit 固定为 `959a356fec72cedcfd4ee3f84790789f8e961989`，Baseline ReAct、35 max steps，Planning/Recovery/Skills/MCP 关闭。35 steps 是用户根据 ¥5 预算明确选择的实验参数，不冒充与 v7 的严格同预算对照。
