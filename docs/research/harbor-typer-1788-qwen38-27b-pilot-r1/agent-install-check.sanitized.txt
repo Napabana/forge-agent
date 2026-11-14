@@ -1,0 +1,12 @@
+Usage: agent [OPTIONS] COMMAND [ARGS]...
+
+  Coding Agent — autonomous code editing and bug fixing.
+
+Options:
+  -c, --config TEXT  Path to config YAML file (default: config/default.yaml)
+  --help             Show this message and exit.
+
+Commands:
+  chat  Interactive chat mode — continuous conversation with the agent.
+  log   Inspect event logs.
+  run   Run the coding agent on a repository.

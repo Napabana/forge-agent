@@ -1,13 +1,14 @@
 # Forge Agent 架构审计与开源 Coding Agent 横向对标
 
 > 持久化研究索引｜启动于 2026-11-12｜仓库：`Napabana/forge-agent` 的 `dev`。
+> **2026-11-14 批量静态审查收口**：本轮实际提交到 `docs/qwen38-27b-pilot-r1` 研究分支，真实 Harbor Pilot 运行源码为 `ca396ce6f14b88dd439bebdcb3b9634645017034`；阶段 01–03 旧 SHA 报告是历史基线，不冒充在当前分支重新做了所有动态验证。
 > 初始**生产源码基准**：`3e3fc48814aa15604c8a3a8a4432563854f8b6c1`。
 > 该基准后的研究文档提交不改变已盘点的功能源码；每次专题开始仍须核查当前 `dev`，若有生产 Diff，先更新证据基线。
 > 本研究不取代 `docs/design/` 的正式当前架构；`docs/research/` 专门保存对比、论证、评分和决策。
 
 ## 目的与完成定义
 
-在开展 Teacher→Student→SFT→GRPO 前，对 Forge Agent **全架构**进行源码审计、与 Pi Agent/Codex CLI/Claude Code 等成熟实现横向对比，给出可复现的 baseline 准入判断和适合实习项目的改进路线。完成标准是：**功能覆盖可核查、每项有源码/测试/对照依据、改进有成本和优先级、面试追问可复述、结论不夸大**。不以新功能数量或复刻商业系统作为目标。
+对 Forge Agent **全架构**进行源码审计、与 Pi Agent/Codex CLI/Claude Code 等成熟实现横向对比，给出可复现的 Harness/Evaluation baseline 判断和适合实习项目的改进路线。早期研究曾把 Teacher→Student→SFT→GRPO 作为候选后续方向；当前决策是不开展这些训练工作，仅保留相关章节作为历史问题与证据边界。完成标准是：**功能覆盖可核查、每项有源码/测试/对照依据、改进有成本和优先级、面试追问可复述、结论不夸大**。不以新功能数量或复刻商业系统作为目标。
 
 ## 进度与产物
 
@@ -17,14 +18,14 @@
 | 01 | 整体架构、入口、Runner/Orchestrator、跨模块生命周期与状态所有权 | [01-整体架构与执行链路.md](01-整体架构与执行链路.md) | **已完成源码级静态对标**；待回归 |
 | 02 | Model Integration、LLM Backend、ReAct、Prompt、Tool Call、Streaming、终止 | [02-Model-Integration与Agent-Loop.md](02-Model-Integration与Agent-Loop.md) | **已完成源码级静态对标**；定向协议回归待做 |
 | 03 | 全部原生/控制/MCP 工具、Validation、Hook、Permission、Cancel | [03-Tool-System与执行治理.md](03-Tool-System与执行治理.md) | **已完成源码级静态审计**；P0 修复与回归待办 |
-| 04 | History、Token Budget、Compaction、Context 视图和 Session | `04-Context-Engineering.md` | 未开始 |
-| 05 | Repo Map、Tree-sitter、SQLite Schema、索引更新、检索及成本 | `05-Repo-Map深度审查.md` | 未开始 |
-| 06 | Planning、Recovery、Loop、Progress、Replan Gate | `06-Planning与Failure-Recovery.md` | 未开始 |
-| 07 | TaskEngine、Worktree、Local/Docker、取消与资源清理 | `07-Execution-Runtime与Isolation.md` | 未开始 |
-| 08 | Completion Guard、Acceptance、Tests、GitHub Delivery | `08-Testing与Acceptance.md` | 未开始 |
-| 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | `09-Trace与Evaluation.md` | 未开始 |
-| 10 | Skills、MCP、Trajectory、Evolution、Teacher/Student 与 RL readiness | `10-Extension与RL-Readiness.md` | 未开始 |
-| 11 | 全功能评分、P0/P1/P2/P3 路线、Baseline 准入、面试 Q&A | `11-综合评分与改进路线.md` | 未开始 |
+| 04 | History、Token Budget、Compaction、Context 视图和 Session | [04-Context-Engineering.md](04-Context-Engineering.md) | **D01–D09、D17–D19 静态审查完成**；动态/消融待做 |
+| 05 | Repo Map、Tree-sitter、SQLite Schema、索引更新、检索及成本 | [05-Repo-Map深度审查.md](05-Repo-Map深度审查.md) | **D10–D16 静态审查完成**；真实 Counter/召回消融待做 |
+| 06 | Planning、Recovery、Loop、Progress、Replan Gate | [06-Planning与Failure-Recovery.md](06-Planning与Failure-Recovery.md) | **E01–E11 静态审查及历史 R2 数据核查完成**；独立消融待做 |
+| 07 | TaskEngine、Worktree、Local/Docker、取消与资源清理 | [07-Execution-Runtime与Isolation.md](07-Execution-Runtime与Isolation.md) | **F01–F10 静态审查完成**；Secret/Runtime 安全验证为 P0 |
+| 08 | Completion Guard、Acceptance、Tests、GitHub Delivery | [08-Testing与Acceptance.md](08-Testing与Acceptance.md)、[离线验证记录](08-离线验证记录.md) | **源码审查完成，19 个独立原型用例已运行；3 个 Forge 行为刻画用例待真实仓库验证** |
+| 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | [09-Trace与Evaluation.md](09-Trace与Evaluation.md)、[H0 离线记录](09-离线评分合同验证记录.md)、[Trace/Harbor 证据](09-H0-Trace与Harbor证据来源核查.md) | **H01–H10 静态审查完成**；已归档真实样本核对，生产接线及异常注入待做 |
+| 10 | Skills、MCP、Trajectory、Evolution、Teacher/Student 与 RL readiness | [10-Extension与RL-Readiness.md](10-Extension与RL-Readiness.md) | **I01–I11 静态审查完成**；训练方向不纳入 Forge 改造 |
+| 11 | 全功能评分、P0/P1/P2/P3 路线、Baseline 准入、面试 Q&A | [11-综合评分与改进路线.md](11-综合评分与改进路线.md) | **J01–J06 + 112 项静态审查汇总与整改顺序完成**；未认证生产修复 |
 
 功能索引位于 **[00 报告](00-研究计划与功能总清单.md)**。阶段 0 已列出 **112 个候选细分审计对象**；后续允许进一步拆分，但不允许不留痕删除审计对象。
 
@@ -70,7 +71,7 @@
 - **R02-02**：OpenAI-compatible 非流式带 `strict=self._strict_tool_schema`；Streaming `_stream_with_tools` 未携带 strict，存在确定的配置差异。
 - **R02-03**：Streaming 只要已有 tool delta 就把 `finish_reason` 归一为 `tool_calls`；需要拒绝 `length` 截断时的工具执行（条件 P1）。
 - **R02-04**：Responses `failed/incomplete` 的 output 可能仍被解析为 TOOL_CALL，需要模拟失败状态的回归来确认安全边界（条件 P1）。
-- **R02-05**：Forge History 主要以文本化 Action/Observation 表示工具交互，不能与原生 Provider tool_call_id transcript 混为一谈；Teacher/Student SFT 输出协议需要预先冻结。
+- **R02-05**：Forge History 主要以文本化 Action/Observation 表示工具交互，不能与原生 Provider tool_call_id transcript 混为一谈；当前不产出 SFT 数据，该项只保留为历史协议风险。
 - **保留现有强项**：Provider 错误分类、bounded retry、stream chunk 后不盲目重试、Completion Guard、Loop Detector、独立验收状态。
 - **本阶段未运行 pytest/模型实验**；评分为有源码和测试文本支持的暂评分，尚不能认定已复现 P0。
 - 对照版本不变：Forge `3e3fc488`、Pi `b7294995`、Codex `1f1f6ebb`、Claude 2026-11-12 官方文档。
@@ -88,9 +89,17 @@
 - **本阶段没有修改功能代码，没有运行 Forge pytest，也没有执行注入 payload/真实模型/MCP 服务**。独立 Python 临时目录检查只验证了标准库 symlink 行为，不是 Forge 测试。
 - 对照版本：Forge 当前 dev e672dfd0（生产源码基准 3e3fc488）、Pi b7294995、Codex 1f1f6ebb；Claude 使用 2026-11-12 官方权限、Hooks、Sandbox 文档。
 
-## 下一步
+## 本批次静态审查收口（2026-11-14）
 
-**阶段 04：Context / History / Token Budget / Compaction。** 按 00 索引 D01–D12 核查 canonical History、消息角色与 event refs、token counter、model capability/request budget、tool pruning、semantic packet、structured compaction、prepare_next_turn 与 Session persistence；重点验证工具结果压缩是否保留足够执行证据、是否错误提升不可信工具输出，以及 Teacher→Student trajectory 是否可重建。生成 `04-Context-Engineering.md`，更新本 README 与 decisions。阶段 03 的 P0 单独拆为安全修复任务，不在本阶段研究中直接修改生产代码。
+**112 项候选审计对象已在 Stage01–11 全部建立源码级静态审查记录，具体 ID 见 [11-综合评分与改进路线.md](11-综合评分与改进路线.md)。这只意味着研究覆盖，不表示 112 项已经运行测试、所有漏洞已验证或生产问题已解决。** 00 原清单保留且没有删除 ID。
+
+本批次新增/补齐：
+- Stage04 Context/Session（12 项）、Stage05 RepoMap/SQLite（7 项）、Stage06 Planning/Recovery（11 项）、Stage07 Runtime/Security（10 项）。
+- Stage09 完整 H01–H10（10 项）并保留此前 H0 Trace/Harbor 真实归档与离线原型；Stage10 Skills/MCP/Evolution（11 项）；Stage11 交叉 J01–J06（6 项）。
+- Stage01–03、08 已有历史固定 SHA 的审计报告，本批不把历史结论当最新动态验证。尤其 Stage03 旧 Git/Test 命令字符串风险已通过 exec_args 改造，参见 Stage07 现实现核查。
+- **未进行本批次 Forge pytest、Docker/Harbor 真机隔离测试、真实模型新 A/B 或成本优化；继续使用之前已确认的 Stage08/09 51 条原型/合成测试作为既有证据，不冒充这轮新执行。**
+
+下一项工作不是再新建 Stage：**先按 Stage11 的 P0-Security（可信密钥隔离）与 P0-Evaluation（可评分故障分类）执行确定性测试，然后对 Completion / Permission / Repo Map 做最小方案验证**，最后再安排付费 A/B。完整的验收矩阵、优先级和面试论证见 Stage11。
 
 ## 最终研究决策与疑点记录
 
@@ -104,7 +113,7 @@
 
 ### 背景及目标边界
 
-用户根据 Harbor Typer 1788 的 Qwen3.5-4B v5/v6/v7 运行结果，决定 Forge Agent 主要用于 Harness 设计验证和外部 Benchmark；Teacher/Student SFT、GRPO 转到独立项目。三次运行混有 Provider TPM 错误、目标 pytest 环境污染、取消及一次干净的 max_steps 失败，不能合并计算模型成功率。
+用户根据 Harbor Typer 1788 的 Qwen3.5-4B v5/v6/v7 运行结果，决定 Forge Agent 主要用于 Harness 设计验证和外部 Benchmark；随后进一步明确当前不开展 Teacher/Student SFT 或 GRPO。三次运行混有 Provider TPM 错误、目标 pytest 环境污染、取消及一次干净的 max_steps 失败，不能合并计算模型成功率。
 
 **横向设计审查不取消、不重置**。原目标中「训练数据和 RL 准备」不再作为 Forge 的主交付，改为检查 Trace/Eval/外部工具是否具备独立、可靠、可审计的接口。Forge 的研究问题从「为了训练 Student 怎样改 Agent」转为「哪些 Harness 设计在相同模型和任务下确实提高可靠性/安全性/效果，收益是否值得额外成本」。
 
@@ -134,11 +143,53 @@
 
 ## 2026-11-13 补充决策：Python-only 与单任务模型对比优先
 
-本轮进一步收敛执行范围，详见 [Python-only Harbor 与 Qwen3.8-27B 试验实施规划](../../changes/2026-11-13/Forge-Harness评测与Python-only试验实施规划.md)。
+本轮进一步收敛执行范围，详见 [Python-only Harbor 与 Qwen3.8-27B 试验实施规划](https://github.com/Napabana/forge-agent/blob/dev/docs/changes/2026-11-13/Forge-Harness评测与Python-only试验实施规划.md)（`changes/**` 不进入本地站点构建）。
 
 - Harbor 外部 Benchmark 本轮只保留 Python 任务；Go 任务及跨语言 Test Tool 暂不实施。此前记录的 63 个 Python 任务数须以当前 manifest 和实际 task 目录重新核验。
-- 在 12-task Pilot 或全量 Python Benchmark 前，先对历史任务 `default/tiangolo__typer-1788` 做一次 Qwen3.8-27B 单任务对比。任务仓库 commit 固定为 `959a356fec72cedcfd4ee3f84790789f8e961989`，Baseline ReAct、max_steps=40，Planning/Recovery/Skills/MCP 关闭。
+- `default/tiangolo__typer-1788` 的 Qwen3.8-27B 单任务 Pilot R1 已执行一次：任务 commit 固定为 `959a356fec72cedcfd4ee3f84790789f8e961989`，Baseline ReAct、35 max steps，Planning/Recovery/Skills/MCP 关闭。35 steps 是用户根据 ¥5 预算明确选择的实验参数，不冒充与 v7 的严格同预算对照。
+- Qwen3.8-27B 在 Step 13 正确修改生产代码，trial 内独立 Verifier 为 reward 1.0、F2P 1/1、P2P 22/22、无 regression；但第 30 次模型调用期间被 Harbor 外层 1800 秒 timeout 取消，Trace 没有 `run_terminated`。因此该结果是“功能通过、rollout 非自然终止”，不是完整 Forge SUCCESS。
 - 历史 Qwen3.5-4B v7 是一次基础设施干净的 max_steps 未完成样本：40 steps、1,764,554 total tokens、Provider cost 未记录、历史 job 未执行 Harbor verifier。v5 Provider 429、v6 环境污染后取消，均不可计入模型成功率。
-- Qwen3.8-27B 价格按 2026-11-13 SiliconFlow 价格页快照：输入 ¥3/M、输出 ¥12/M；实际费用以 Provider usage 和账户账单为准。历史 4B 运行没有可用 cost 记录，不推断其费用。
-- 当前 GitHub `dev` 的 `config/default.yaml` 和 `examples/harbor/r2e_forge_runtime.yaml` 仍显示 Qwen3.5-4B。Harbor Adapter 默认上传 `r2e_forge_runtime.yaml`，所以运行前必须确认实际 `config_path` 与有效 model，不能只检查 Forge 其他入口的默认配置。
-- 单任务结果可信后再进入 12-task Python Pilot；H0/H1 评测可信性和配置复用、H2 Python Adapter、H3 Docker/Verifier 仍按实施规划推进。单次模型对比不构成总体成功率或 Harness 因果结论。
+- Qwen3.8-27B 的 29 个完成调用为 868,723 total tokens；按 2026-11-13 SiliconFlow 价格快照估算约 ¥2.78。Provider 实际 cost 字段为空，第 30 次 started 请求是否计费未知，故不声明精确扣费。
+- Pilot 使用独立 config 和与 v7 相同的 wheel，没有修改仓库默认模型配置。完整报告及脱敏 Trace/console/result/Verifier/config/command/manifest 见 [Pilot R1 归档](../harbor-typer-1788-qwen38-27b-pilot-r1/报告.md)。
+- 当前不自动进入 12-task Pilot，也不开展 SFT/GRPO。若未来继续 Harness 评测，先修复并冻结 Harbor task timeout 与 adapter timeout 的双层配置；单次模型对比不构成总体成功率或 Harness 因果结论。
+
+## 2026-11-14：Pilot R1 专项横向对标（研究中）
+
+- [专项-Pilot-R1-停止权限与Token成本对标.md](专项-Pilot-R1-停止权限与Token成本对标.md) 已将 Typer 1788 的完整 Trace 同 Pi Agent turn-end hook、Codex 命令解析/沙箱审批、Aider 动态 Repo Map 的固定源码进行逐项对照。
+- 核心事实：Step 13 改对、Step 18 focused test 通过、Harbor reward=1.0；之后继续 11 次模型调用且无 FINISH、无 completion_rejected，最终 Harbor AgentTimeoutError；测试通过后的 375,818 tokens 约占总数 43.3%。
+- 待决策：不直接删 Completion Guard，不直接允许所有 Shell，不直接将 Repo Map 设为 1K。优先做结果状态真值表、Completion Evidence/测试 provenance 离线回归、凭据隔离审查、Repo Map counter/预算消融。
+- 本专项是 08/03/04/05/09 的跨阶段增量审计，**不代表 112 项已完成或任何修复已执行**；暂不修改功能代码、不调用真实模型 API。
+
+## 2026-11-14 阶段 08 收口：Completion / Testing / Acceptance / Delivery
+
+- [阶段 08 完整报告](08-Testing与Acceptance.md) 已完成原阶段 00 的 G01–G09 全项目静态审计，梳理 Agent FINISH Guard、测试结果、内容指纹、独立 verifier、Worktree 清理、PR 交付以及失败 Trace；固定运行源码 `ca396ce6`，对照 Pi/Codex/Claude/Aider。
+- 核心事实：Pilot R1 没有 FINISH 或 `completion_rejected`，不能将超时归因于 Completion Guard 误拒绝。Step 18 的 focused PASS 之前已有 Step 16 的未跟踪临时文件，不能据此自动提交；`last_test_passed` 是全局最近 test 布尔值，缺少可信测试来源和快照绑定。
+- 新增可验证风险：`_apply_no_progress_guard` 对已验证不变的仓库状态重置计数，可能使多余只读检查不触发无进展提醒；`deliver_pull_request` 使用 `git add --all`，路径合同未禁止时临时文件可能进入 PR。
+- 暂不实施 `pytest PASS → SUCCESS`、不取消 Completion Guard、不修改 Runner hidden verifier 跳过规则。首选候选是 **CompletionCandidate / WrapUpRequired + TestEvidence provenance + 独立 outcome**，先跑离线 S08/A08 反例；目前**只有设计/现有测试阅读，没有新执行 pytest 或付费模型**。
+
+
+## 2026-11-14 阶段 08 离线原型进展
+
+- [阶段 08 离线验证记录](08-离线验证记录.md)：通过独立纯函数原型 `evals/completion_candidate_probe.py` 定义 NotReady / WrapUpRequired / CandidateReady；`tests/test_completion_candidate_probe.py` 在 Python 3.13.5、pytest 9.0.2 环境运行 **19 passed**，不依赖真实模型与项目生产接口。
+- 在 `tests/test_agent_completion_guards.py` 追加 3 个现状刻画用例，分别覆盖后续诊断测试覆盖先前 focused pass、未跟踪临时文件未被 Agent Guard 阻挡、已测试状态中的无进展判定。因当前工作环境无仓库 checkout（git clone DNS 失败），**未执行这 3 个与原有 Forge 全套测试**。
+- 本轮不改变 Agent Loop、Permission、Runner、Harbor、Prompt 或 Token Budget；原型通过率不能替代真实 Forge 代码回归，更不能推断 Benchmark 成功率。后续可直接在用户本地 Python 环境执行上述记录提供的无 API 测试命令。
+
+
+## 2026-11-14 阶段 09 H0/H1 初审
+
+- [Stage 09 当前源码问题与测试方案](09-Trace与Evaluation.md)：源码确认 `evals/coding_agent/runner.py::_run_trial` 捕获异常后仍可构造 `real_model_executed=True` / `execution_status=executed` 的失败行，而 `report.py::build_report` 会将全部 real-model rows 纳入观测成功率分母；另确认 eval factory 与 CLI 的 Repo Map / Context Policy / Test Interpreter 配置不一致。
+- 在 `tests/test_coding_agent_eval.py` 追加两个当前行为刻画测试（Runner 异常被计为模型失败、Runner 工厂异常中断整个 suite），**尚未在完整 Forge 仓库中执行**。Stage 09 仍是关键路径初审，不能声称全部 H01–H10 或外部 Pi/Codex Trace 对标已完成。
+- 优先级保持：先冻结 scoreability/failure domain/Verifier 结果，后解决 Eval 和生产配置复用，再开展多任务 A/B。
+
+
+## 2026-11-14：Stage 09 H0 独立评分合同验证
+
+- [09-离线评分合同验证记录.md](09-离线评分合同验证记录.md)：新增研究模块 `evals/trial_outcome_probe.py` 和 21 条测试 `tests/test_trial_outcome_probe.py`，与 Stage08 原型 19 条测试在本地累计 **40 passed in 0.08s**；`scoreable`、自然结束、Verifier 原始结果和故障归属分别表示，策略有内容指纹以冻结分母口径。
+- 以上均为**未接入生产的纯函数原型**；原有 Forge Runner/Eval/Harbor 行为不变，5 条 production characterization 用例仍需完整仓库环境执行；Stage09 全部 H01–H10 尚未完成。下阶段优先解决可信字段来源与测试验证，而非直接改 report denominator。
+
+
+## 2026-11-14：真实 Typer Trace 与 Harbor 证据来源核查
+
+- [09-H0-Trace与Harbor证据来源核查.md](09-H0-Trace与Harbor证据来源核查.md)：源码和 324 条真实 Trace 事件表明 30 次调用开始、29 次完成、Step 30 未收口；29 次 completed usage=868,723 Tokens。Harbor 因 `AgentTimeoutError` 没有记录 Agent Usage（null），但独立 verifier 给出 reward=1.0；不能将这些事实合并为自然 FINISH/实际账单。
+- 新增 `examples/harbor/trace_evidence.py`（只读 Trace+Harbor 检查器）和 `tests/test_trace_evidence.py`。在本地合成数据下新增 11 个通过，和前两项原型合计 **51 passed**；另 2 个直接读取归档及 Manifest 的 Python 回归测试已提交，但当前容器缺完整 repo checkout，**未执行**。
+- Harbor 示例 README 已明确外层超时不会保证 Adapter 收尾后续 Usage 采集执行；因此不允许把 Harbor Usage null 当零。相关结果仅为 H0 证据来源审查，不代表 Stage 09 全面结束或生产 Evaluator 已修复。

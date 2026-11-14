@@ -210,7 +210,7 @@ Harbor 独立 Verifier 是任务结果的主要依据。Forge 自报 \`SUCCESS\`
 | Model | Run | Steps | Input | Output | Reasoning | Total | Latency | Harbor reward | Termination | Cost |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|
 | Qwen3.5-4B | v7 | 40 | 1,758,740 | 5,814 | 3,786 | 1,764,554 | Forge 1296.9s | 历史 job 未执行 verifier | max_steps | 未记录 |
-| Qwen3.8-27B | pilot-r1 | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 |
+| Qwen3.8-27B | pilot-r1 | 29 完成，第 30 call 被取消 | 849,931 | 18,792 | 15,264 | 868,723 | Agent phase 1877.1s | 1.0；F2P 1/1、P2P 22/22 | Harbor `AgentTimeoutError`；无 Forge terminal event | 约 ¥2.78（29 个完成调用估值） |
 
 比较时分别讨论：
 
@@ -221,6 +221,14 @@ Harbor 独立 Verifier 是任务结果的主要依据。Forge 自报 \`SUCCESS\`
 - 只有一次 run 时，不计算或宣传 pass@k、总体成功率或统计显著性。
 
 ## 6. 后续决策门槛
+
+### 6.1 Pilot R1 实际决策
+
+Qwen3.8-27B 已正确修改 `typer/core.py`，trial 内独立 Verifier 为 reward 1.0、F2P 1/1、P2P 22/22、无 regression；但 rollout 没有自然 Forge 终态。第 30 次模型调用期间，Harbor 使用 task `[agent].timeout_sec=1800.0` 取消执行。启动命令中的 `--agent-kwarg agent_timeout_sec=5400` 只传给 adapter，没有覆盖 Harbor 外层 timeout；未来新任务必须同时设置 Harbor `--agent-timeout-multiplier 3` 或等价 override。
+
+当前不自动进入 12-task Pilot，也不开展 SFT/GRPO。完整报告与脱敏附件见 [`docs/research/harbor-typer-1788-qwen38-27b-pilot-r1/报告.md`](../../research/harbor-typer-1788-qwen38-27b-pilot-r1/报告.md)。
+
+### 6.2 原计划门槛
 
 单任务结果出来后再决定是否扩大评测：
 
@@ -394,7 +402,7 @@ Harbor 独立 Verifier 是任务结果的主要依据。Forge 自报 \`SUCCESS\`
 当前阶段交付：
 
 1. 本文档：Python-only 范围、模型固定、Typer 1788 对照协议、H0–H3 分阶段计划。
-2. Codex 执行后单独保存一份 Typer 1788 Qwen3.8-27B 运行结果记录；原始 Harbor job、Trace、console、wheel 和 secret 保留在本地，不提交仓库。
-3. 只有当单任务 Pilot 的环境、终态、Verifier、Token 和 Cost 证据可信，才进入 12-task Python Pilot。
+2. 单次 Qwen3.8-27B Pilot R1 已执行；完整报告及脱敏后的 Trace、console、Harbor result、exception、Verifier、runtime config、launch command 和 manifest 已归档到 [`docs/research/harbor-typer-1788-qwen38-27b-pilot-r1/`](../../research/harbor-typer-1788-qwen38-27b-pilot-r1/报告.md)。原始 Harbor job、secret、wheel 和未脱敏宿主路径仍只保留在本地。
+3. Pilot 功能结果通过，但 Trace 无 Forge terminal event；当前不自动进入 12-task Python Pilot，也不开展 SFT/GRPO。
 
-本轮文档完成不代表模型实验已经执行，也不代表 H0–H3 已修复。真实模型运行必须由用户明确启动，并由用户检查费用和本地 artifacts。
+H0–H3 尚未因本次 Pilot 自动完成。后续若继续 Harness 评测，应先修复并验证 Harbor/adapter 双层 timeout 配置，再由用户明确启动新的真实模型运行。

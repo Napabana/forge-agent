@@ -262,3 +262,48 @@ def test_skill_selection_grader_is_optional_process_evidence(tmp_path: Path):
     assert results[0].passed is True
     assert results[1].passed is False
     assert required_graders_passed(results) is True
+
+# Stage 09: characterize current failure accounting (not desired future scoring semantics).
+def test_characterization_runner_exception_is_counted_in_real_model_rate(tmp_path):
+    suite = EvaluationSuite("suite", (_task(),), defaults={"max_steps": 2, "budget_tokens": 1000})
+
+    class BrokenRunner:
+        def run(self, request):
+            raise RuntimeError("simulated provider infrastructure outage")
+
+        def close(self):
+            pass
+
+    results = EvaluationHarness(
+        suite=suite,
+        output_dir=tmp_path / "out",
+        runner_factory=lambda *args: BrokenRunner(),
+        evidence_kind="real_model",
+        real_model_executed=True,
+    ).run()
+    row = results[0]
+    assert row.run_status == "failed"
+    assert row.termination_reason == "evaluation_runner_exception"
+    assert row.execution_status == "executed" and row.real_model_executed is True
+    agg = build_report(results, suite_id="suite")["real_model_small_sample"]["baseline_react"]
+    # Known current behavior: a simulated infrastructure exception enters
+    # the observed model-failure denominator.
+    assert agg["runs"] == 1 and agg["observed_success_rate"] == 0.0
+
+
+def test_characterization_runner_factory_exception_aborts_suite(tmp_path):
+    suite = EvaluationSuite("suite", (_task(),), defaults={"max_steps": 2, "budget_tokens": 1000})
+
+    def broken_factory(*args):
+        raise RuntimeError("adapter setup failed before runner.run")
+
+    harness = EvaluationHarness(
+        suite=suite, output_dir=tmp_path / "out",
+        runner_factory=broken_factory,
+        evidence_kind="deterministic_harness",
+        real_model_executed=False,
+    )
+    with pytest.raises(RuntimeError, match="adapter setup failed"):
+        harness.run()
+    # No completed trial.json for an exception before runner.run.
+    assert not (tmp_path / "out" / "trials" / "tiny-task--baseline_react--r001" / "trial.json").exists()
