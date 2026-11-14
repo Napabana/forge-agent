@@ -125,3 +125,67 @@ python -m pytest -q tests/test_coding_agent_eval.py tests/test_completion_candid
 - 归档 Harbor 的 `agent_result` 用量全部 null，但外部 verifier reward=1.0。源码发现 `examples/harbor/forge_harbor_agent.py` 是在 `await environment.exec()` 返回后才汇总并回写 usage；外层超时可能绕开这一步，因此旧 Harbor README 对“缺少终态时不会产生 reward”的概括已修正。
 - `tests/test_trace_evidence.py` 的 **11 条合成用例本地通过**；其余两个读取真实归档的 Python 回归已提交但**尚未在完整 Forge checkout 中执行**。本地独立 Stage08/09 原型累计 **51 passed**。这些测试不代表模型任务成功率。
 - `trace_evidence.py` 故意输出 `scoreable=null`、`failure_domain=null`、`provider_billed_cost=null`：外层超时证明 watchdog 超时，不能直接归罪模型或把 Provider 用量估算当真实账单。Stage09 的 H0/H1 生产接线仍未开始。
+
+## 9. H01–H10 源码级静态审查全覆盖（2026-11-14 批次）
+
+本节补全原 Stage 00 索引 H01–H10。此前 H0 审计、Typer 原始 Trace、离线原型记录仍独立保存；**它们不是本批次执行了 Forge 全量集成测试的证明**。生产基线与 Stage 07 相同，未修改 EvaluationHarness 生产代码。
+
+| ID | 功能 | 可定位源码 | 已确认机制及待验证风险 | 静态暂评分 |
+|---|---|---|---|---|
+| H01 | append-only EventLog | `agent/event_log.py::EventLog._append` | JSONL 逐事件写入与 flush；崩溃可能造成尾行截断 | 7/10（高） |
+| H02 | Trace v2 span | `agent/event_log.py::log_trace; agent/trace_v2.py` | run_id/step_id/span_id/model_call_id 关联；本次 324 事件验证可配对 | 8/10（高） |
+| H03 | 递归脱敏 | `agent/trace_v2.py::redact_trace_value` | 按字段键/常见 Secret 文本模式脱敏，不等于任意用户自定义 Secret DLP | 6/10（高） |
+| H04 | Token Usage | `llm/usage.py; agent/core.py; examples/harbor/forge_usage_extract.py` | Provider completed usage 可能与 Harbor 统计不一致；pending 调用计费未知 | 5.5/10（高） |
+| H05 | Suite/Trial schema | `evals/coding_agent/schema.py` | Task/Variant/Trial 数据分层；缺可信 scoreable/failure_domain/verifier_executed | 6/10（高） |
+| H06 | 仓库冻结 | `evals/coding_agent/runner.py::materialize_task_repo` | 固定 source commit，清除原 Git 历史后新建 baseline 防信息泄漏 | 7.5/10（高） |
+| H07 | Outcome/process grader | `evals/coding_agent/graders.py::grade` | outcome 与 run_trace/process 分离；command grader 继承 os.environ | 6/10（高） |
+| H08 | 报告与回收 | `evals/coding_agent/runner.py::_run_trial; report.py::build_report` | Runner 异常可能计入模型失败；工厂异常在 try 外；cleanup 覆盖原终态 | 4.5/10（高） |
+| H09 | V1 R2 外部证据 | `evals/results/benchmark_v1_r2_*/report.json` | baseline/fullP2 各 23/24；联合开关改变，不能单归因 | 6.5/10（高） |
+| H10 | abstention/故障/成本 | `evals/results/abstain_s3_real_r2/report.json; evals/trial_outcome_probe.py` | 已存 abstention 样本；故障域/费率仍是未接线原型 | 5/10（中高） |
+
+**必须提升为 P0/P1 的新风险**：`evals/coding_agent/graders.py::_run_command` 用 `env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1")` 将宿主环境完整传给 grader 子进程；如果其中有 Provider Key，而被验证仓库内的代码可执行，则该进程可能读取宿主 Key。此项与 Stage07 的 `LocalRuntime` 继承环境问题共享安全前置条件，但**属于独立验收进程，不是仅靠工具 Permission 就能保护**。必须先评估可信仓库 vs 不可信公开 PR 的运行边界，测试只报告 Secret 是否暴露、绝不回显值。
+
+## 10. 横向设计对照和限制
+
+| 机制 | Forge | 可验证外部机制 | 何种条件下借鉴 |
+|---|---|---|---|
+| 生命周期/可追溯 | JSONL+run_id/span_id/Tool/Model 事件 | [Pi 单轮事件/工具执行流程](https://github.com/earendil-works/pi/blob/b729499585bd7dacf6e9bc52994c6f157e35f9c9/packages/agent/src/agent-loop.ts#L173-L310) | 对照回调边界，不声称使用同一种 Trace Schema |
+| 停止与 Outcome | Agent FINISH、Runner acceptance、Harbor verifier 彼此独立 | [Codex turn loop 与 Stop Hook](https://github.com/openai/codex/blob/1f1f6ebb6c156d5ab1d4745155f340b897b24f02/codex-rs/core/src/session/turn.rs#L642-L860) | 不让 Stop Hook 代替隐藏 Verifier |
+| 任务难度与成功率 | Benchmark V1 R2 12×2 小样本 | [SWE-bench 官方评测](https://github.com/SWE-bench/SWE-bench) | 评测需要冻结任务和环境，不可横向比模型总体成功率 |
+| 回放/演化 | NormalizedTrajectory 由 run_terminated + acceptance 过滤 | Forge 的内部 Promotion Gate | 当前不进行 Teacher SFT/GRPO，优先保证数据 provenance |
+
+## 11. 真实归档与统计结论
+
+- 本仓库 `evals/results/benchmark_v1_r2_baseline_real/report.json` 和 `.../benchmark_v1_r2_full_p2_real/report.json` 各 24 real-model trial，均 23 次 success。Full P2 平均 tokens 从 172,758 提升到 227,781，步数 12.375→15.875；同时开了 Planning/Recovery/Skills，不属于单模块消融，不能宣传提升。
+- `evals/results/abstain_s3_real_r2/report.json` 只有 2 个 Trial，观察成功 1/2。不能据此断言 abstention 策略在大样本下有效。
+- Typer 1788 R1：Forge `run_terminated` 缺失，但 Harbor verifier reward=1.0，Agent 外层 timeout。参考 [真实 Trace 来源核查](09-H0-Trace与Harbor证据来源核查.md)，**没有自然 FINISH**。
+
+## 12. 统一离线回归清单
+
+| 用例 | 验证目的 |
+|---|---|
+| EVAL09-01 | Trace 写入中断、尾行截断、run_id/span_id 跨运行污染；进程异常后 Collector 不虚构终态 |
+| EVAL09-02 | 原始 Tool arguments、用户自定义 credential、异常文本及嵌套字段脱敏与不可信工具输出 |
+| EVAL09-03 | 未完成模型请求、429 retry、Usage 缺失、Harbor 外层 timeout+verifier pass：保留已知与未知量 |
+| EVAL09-04 | 数据源 materialize/factory 抛异常：保留 Trial 记录和故障域；不将 Runner 失败计为模型答错 |
+| EVAL09-05 | 可评分分母冻结、Verifier 未执行/执行失败/通过、超时后快照、cleanup failure 各有独立字段 |
+| EVAL09-06 | Command grader 运行任意受测代码时不可读取 Host Provider Key，工作区/网络访问被限制 |
+| EVAL09-07 | MockBackend / Fake 结果不能发布能力成功率；旧 report schema 不因新字段静默改变 |
+| EVAL09-08 | 固定 source commit、suite sha、tool manifest、预算、Prompt、模型、Runner、沙箱在 A/B 中一致 |
+| EVAL09-09 | 缺失/伪造 process trace 不得在 skill selection/recovery motif grader 中给出无证据 PASS |
+| EVAL09-10 | 旧 Benchmark/新 Harbor 任务分开报告 outcome success 与 natural FINISH/故障比例/Token 成本 |
+
+关联测试：`tests/test_trace_v2.py`、`test_coding_agent_eval.py`、`test_coding_agent_benchmark_v1.py`、`test_trial_outcome_probe.py`、`test_trace_evidence.py`、`test_skill_evolution.py`。
+
+## 13. 统一裁决
+
+- **P0（安全）**：封闭 Eval/Grader 执行面的凭据继承与不可信测试代码访问边界；先用假 Secret 进行离线验证。
+- **P0（评测可信）**：有明确来源的 failure_domain、model_call_started、verifier_executed、scoreable，并且对已发布样本保留原语义和旧 schema。
+- **P1**：避免 Harness factory/materialize 异常丢 Trial、cleanup overwrite 原 RunStatus；外部 timeout 后 Usage Collector 独立收口且缺失视为 unknown。
+- **P1**：Eval Factory 复用真实 CLI/Chat 的有效配置，冻结 A/B 生效值而非只写配置文件路径。
+- **P2**：Benchmark V1 R2 做新分离变量消融，保持样本、模型、budget、tool manifest；当前无 API 预算暂不执行。
+- **P3**：暂不引入复杂 OpenTelemetry 后端或把 SFT/GRPO 训练逻辑接入 Forge 核心。
+
+面试重点：为什么 `reward=1` 仍可能 Agent timeout？因为任务最终代码被外部验证和模型是否正常终止是两个不同的结果轴。如何避免 Benchmark 成功率失真？通过预先冻结可评分合同和真实来源的终态/故障/Verifier 字段，报告总数、可评分数、不可评分故障数，而不是仅用单个 success。
+
+**Stage09 完成声明**：H01–H10 的静态证据核查与横向设计对照已覆盖；Stage09 的生产结果分类修复、全部 EVAL09 动态回归和独立付费 A/B **尚未完成**。
