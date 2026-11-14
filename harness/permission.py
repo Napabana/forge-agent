@@ -152,7 +152,14 @@ class PermissionManager:
         workspace: str | None = None,
         registry: ToolRegistry | None = None,
         constraints: ExecutionConstraints = ExecutionConstraints(),
+        profile: str = "interactive",
+        constrained_environment: bool = False,
     ) -> None:
+        if profile not in {"interactive", "unattended"}:
+            raise ValueError("unknown permission profile")
+        if profile == "unattended" and not constrained_environment:
+            raise ValueError("unattended requires an explicitly constrained execution environment")
+        self.profile = profile
         extra = tuple(p for p in self._EXTRA_DENY if p not in _BLOCKED_PATTERNS)
         self.deny_patterns = deny_patterns if deny_patterns is not None \
             else (_BLOCKED_PATTERNS + extra)
@@ -204,11 +211,20 @@ class PermissionManager:
 
     def _check_command(self, command: str) -> PermissionDecision:
         cmd_lower = command.lower()
+        if self.profile == "unattended" and command.strip().split(" ", 1)[0] in {"env", "printenv"}:
+            return _deny("unattended: environment inspection is not authorized")
         for pattern in self.deny_patterns:
             if pattern.lower() in cmd_lower:
                 return _deny(f"'{pattern}' is on the deny list")
         if _is_repository_readonly(command):
             return ALLOW
+        # 仅可信入口显式启用受限环境；不因为 runtime 名为 Docker 就自动授权。
+        if self.profile == "unattended" and command.strip() in {
+            "python --version", "python3 --version", "pytest --version",
+        }:
+            return ALLOW
+        if self.profile == "unattended":
+            return _deny("unattended: command requires interactive authorization")
         for kw in self.confirm_keywords:
             if kw in cmd_lower:
                 return _confirm(f"destructive command: {command}")
@@ -221,10 +237,10 @@ def _path_escape_reason(path: str, workspace: str) -> str:
     返回空串表示安全，非空为拒绝原因。
     """
     import os
-    ws = os.path.abspath(workspace)
+    ws = os.path.realpath(workspace)
     try:
-        target = os.path.abspath(os.path.join(ws, path)) if not os.path.isabs(path) \
-            else os.path.abspath(path)
+        target = os.path.realpath(os.path.join(ws, path)) if not os.path.isabs(path) \
+            else os.path.realpath(path)
     except Exception as e:  # noqa: BLE001
         return f"invalid path {path!r}: {e}"
     if target == ws or target.startswith(ws + os.sep):
