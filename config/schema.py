@@ -65,6 +65,8 @@ class LLMConfig:
 @dataclass
 class AgentCfg:
     max_steps: int = 40
+    max_model_calls: int | None = None
+    max_total_tokens: int | None = None
     budget_tokens: int = 80_000
     context_budget_cap: int | None = None
     context_safety_margin_tokens: int = 1024
@@ -177,6 +179,8 @@ def _expand_env(text: str) -> str:
 def _optional_positive_int(raw: dict[str, Any], key: str) -> int | None:
     if key not in raw or raw[key] is None or raw[key] == "":
         return None
+    if isinstance(raw[key], bool):
+        raise ValueError(f"{key} must be a positive integer")
     value = int(raw[key])
     if value <= 0:
         raise ValueError(f"{key} must be positive")
@@ -419,6 +423,8 @@ def _parse(data: dict[str, Any]) -> AppConfig:
         raise ValueError("agent.log_dir must be a non-empty string")
     agent = AgentCfg(
         max_steps=int(agent_raw.get("max_steps", 40)),
+        max_model_calls=_optional_positive_int(agent_raw, "max_model_calls"),
+        max_total_tokens=_optional_positive_int(agent_raw, "max_total_tokens"),
         context_budget_cap=context_budget_cap,
         context_safety_margin_tokens=safety_margin,
         log_dir=str(Path(log_dir_raw.strip()).expanduser()),

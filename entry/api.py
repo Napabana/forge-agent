@@ -38,7 +38,7 @@ from entry.api_store import (
     ApiTaskStore,
 )
 from entry.cli import _build_registry
-from entry.context_common import build_context_policy
+from entry.context_common import build_context_policy, configured_agent_options
 from llm.router import create_backend_from_config
 from runtime.worktree import WorktreeResultPolicy
 from task.engine import TaskEngine
@@ -258,12 +258,7 @@ def run_agent_task(
         })
         context_policy = build_context_policy(cfg, backend)
         agent_cfg = AgentConfig(
-            max_steps=cfg.agent.max_steps,
-            budget_tokens=cfg.agent.budget_tokens,
-            history_max_messages=cfg.context.history_window * 2,
-            repo_map_mode=cfg.context.repo_map_mode,
-            repo_map_budget=cfg.context.repo_map_budget,
-            test_python_executable=cfg.tools.test.python_executable,
+            **configured_agent_options(cfg),
             prepare_next_turn=context_policy,
             planning_mode=cfg.agent.planning_mode,
             recovery_mode=cfg.agent.recovery_mode,

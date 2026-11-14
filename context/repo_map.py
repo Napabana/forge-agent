@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+from context.token_budget import TokenCounter
+
 
 _LANG_REGISTRY: dict[str, tuple[str, str]] = {
     ".py": ("tree_sitter_python", "language"),
@@ -225,6 +227,7 @@ class RepoMap:
         *,
         force_refresh: bool = False,
         query: str | None = None,
+        counter: TokenCounter | None = None,
     ) -> str:
         if force_refresh:
             self.refresh()
@@ -233,7 +236,8 @@ class RepoMap:
 
         files = list(self._files or ())
         if not files:
-            return "(empty repository)"
+            empty = "(empty repository)"
+            return empty if counter is None or counter.count_text(empty) <= budget else ""
 
         relevance = _query_relevance(files, query)
         files.sort(key=lambda item: (
@@ -245,6 +249,16 @@ class RepoMap:
         max_chars = budget * 4
         for index, file_info in enumerate(files):
             block = self._format_file(file_info)
+            if counter is not None:
+                # 包括分隔符与省略提示，同请求 TokenCounter 保证整个渲染结果不超预算。
+                candidate = "\n".join([*lines, block])
+                if counter.count_text(candidate) > budget:
+                    marker = f"... ({len(files) - index} more files not shown)"
+                    if counter.count_text("\n".join([*lines, marker])) <= budget:
+                        lines.append(marker)
+                    break
+                lines.append(block)
+                continue
             if char_count + len(block) > max_chars:
                 lines.append(f"... ({len(files) - index} more files not shown)")
                 break

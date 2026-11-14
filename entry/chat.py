@@ -114,6 +114,7 @@ class ChatSession:
         execution_workspace: str | None = None,
     ) -> None:
         from agent.core import AgentConfig
+        from entry.context_common import configured_agent_options
         from agent.runner import ExecutionRunner
         from context.history import ConversationHistory
 
@@ -167,12 +168,7 @@ class ChatSession:
             self._event_renderer.record_streamed_text(text)
 
         agent_cfg = AgentConfig(
-            max_steps=config.agent.max_steps,
-            budget_tokens=config.agent.budget_tokens,
-            history_max_messages=config.context.history_window * 2,
-            repo_map_mode=config.context.repo_map_mode,
-            repo_map_budget=config.context.repo_map_budget,
-            test_python_executable=config.tools.test.python_executable,
+            **configured_agent_options(config),
             planning_mode=config.agent.planning_mode,
         recovery_mode=config.agent.recovery_mode,
         recovery_max_attempts=config.agent.recovery_max_attempts,

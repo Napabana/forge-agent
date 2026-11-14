@@ -190,12 +190,14 @@ def _command_verifier(command: str):
         raise ValueError("verification command cannot be empty")
 
     def verify(repo: Path) -> bool:
+        from tools.execution_env import execution_environment
         proc = subprocess.run(
             argv,
             cwd=repo,
             capture_output=True,
             text=True,
             timeout=600,
+            env=execution_environment(),
             check=False,
         )
         logger.info("Independent verifier exited with %d", proc.returncode)
@@ -420,7 +422,7 @@ def run_on_issue(
         return 1
 
     from entry.cli import _build_registry
-    from entry.context_common import build_context_policy
+    from entry.context_common import build_context_policy, configured_agent_options
     context_policy = build_context_policy(config, backend)
     # GitHub Issue 的所有仓库工具默认在目标仓库执行，避免误用 Forge 进程目录。
     registry = _build_registry(
@@ -440,11 +442,7 @@ def run_on_issue(
         sys.stdout.flush()
 
     agent_config = AgentConfig(
-        max_steps=config.agent.max_steps,
-        budget_tokens=config.agent.budget_tokens,
-        repo_map_mode=config.context.repo_map_mode,
-        repo_map_budget=config.context.repo_map_budget,
-        test_python_executable=config.tools.test.python_executable,
+        **configured_agent_options(config),
         prepare_next_turn=context_policy,
         planning_mode=config.agent.planning_mode,
         recovery_mode=config.agent.recovery_mode,

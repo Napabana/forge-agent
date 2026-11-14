@@ -11,7 +11,9 @@ from pathlib import Path
 from agent.core import AgentConfig
 from agent.runner import ExecutionRunner
 from config.schema import MCPConfig, MCPServerConfig, load_config
-from entry.cli import _build_registry
+from entry.cli import _build_run_registry
+from entry.context_common import build_context_policy, configured_agent_options
+from context.token_budget import token_counter_for_model
 from evals.coding_agent.runner import EvaluationHarness, validate_suite_references, write_not_executed
 from evals.coding_agent.schema import EvaluationSuite
 from llm.router import create_backend_from_config
@@ -114,11 +116,26 @@ def _real_runner_factory(
     mcp_config: MCPConfig,
 ):
     def factory(task, repo, trace_dir, trial_id):
-        registry = _build_registry(cfg, default_cwd=str(repo), workspace=str(repo))
+        registry = _build_run_registry(cfg, default_cwd=str(repo), workspace=str(repo))
+        options = configured_agent_options(cfg)
+        # 不把 ContextBudgetSpec 转成 int：它携带模型计数器和请求预留配置。
+        options["max_steps"] = int(suite.defaults.get("max_steps", options["max_steps"]))
+        if "budget_tokens" in suite.defaults:
+            from config.schema import ContextBudgetSpec
+            previous = cfg.agent.budget_tokens
+            cap = int(suite.defaults["budget_tokens"])
+            if cap <= 0:
+                raise ValueError("suite budget_tokens must be positive")
+            options["budget_tokens"] = ContextBudgetSpec(
+                cap, model_context_window=previous.model_context_window,
+                model_max_output_tokens=previous.model_max_output_tokens,
+                request_max_output_tokens=previous.request_max_output_tokens,
+                context_budget_cap=min(cap, previous.context_budget_cap or cap),
+                safety_margin_tokens=previous.safety_margin_tokens,
+                model_name=previous.model_name, capability_fallback=previous.capability_fallback,
+            ) if isinstance(previous, ContextBudgetSpec) else cap
         config = AgentConfig(
-            max_steps=int(suite.defaults.get("max_steps", cfg.agent.max_steps)),
-            budget_tokens=int(suite.defaults.get("budget_tokens", cfg.agent.budget_tokens)),
-            history_max_messages=cfg.context.history_window * 2,
+            **options,
             planning_mode=planning_mode,
             recovery_mode=recovery_mode,
             recovery_max_attempts=cfg.agent.recovery_max_attempts,
@@ -128,7 +145,7 @@ def _real_runner_factory(
             skills_max_chars=cfg.agent.skills_max_chars,
             skills_reference_max_chars=cfg.agent.skills_reference_max_chars,
             stream=False,
-            repo_map_mode="incremental",
+            prepare_next_turn=build_context_policy(cfg, backend),
             repo_map_cache_dir=str(trace_dir.parent / "repo-map-cache"),
         )
         return ExecutionRunner(
@@ -185,7 +202,23 @@ def main() -> int:
         "model": cfg.llm.model,
         "max_steps": int(suite.defaults.get("max_steps", cfg.agent.max_steps)),
         "budget_tokens": int(suite.defaults.get("budget_tokens", cfg.agent.budget_tokens)),
-        "repo_map_mode": "incremental",
+        "repo_map_mode": cfg.context.repo_map_mode,
+        "repo_map_budget": cfg.context.repo_map_budget,
+        "compaction_mode": cfg.context.compaction_mode,
+        "compaction_threshold": cfg.context.compaction_threshold,
+        "compaction_target_ratio": cfg.context.compaction_target_ratio,
+        "compaction_keep_recent_tokens": cfg.context.compaction_keep_recent_tokens,
+        "token_counter": token_counter_for_model(cfg.llm.model).name,
+        "test_python_executable": cfg.tools.test.python_executable or sys.executable,
+        "max_model_calls": cfg.agent.max_model_calls,
+        "max_total_tokens": cfg.agent.max_total_tokens,
+        "context_budget_cap": (
+            min(int(suite.defaults["budget_tokens"]), cfg.agent.context_budget_cap or int(suite.defaults["budget_tokens"]))
+            if "budget_tokens" in suite.defaults else cfg.agent.context_budget_cap
+        ),
+        "context_safety_margin_tokens": cfg.agent.context_safety_margin_tokens,
+        "tool_manifest": _build_run_registry(cfg).tool_names,
+        "permission_profile": "safe_default_no_confirmation_callback",
         "planning_mode": planning_mode,
         "recovery_mode": recovery_mode,
         "recovery_max_attempts": cfg.agent.recovery_max_attempts,
@@ -235,6 +268,7 @@ def main() -> int:
             "api_key": cfg.llm.api_key or None,
             "base_url": cfg.llm.base_url or None,
             "max_tokens": cfg.llm.max_tokens,
+            "strict_tool_schema": cfg.llm.strict_tool_schema,
         })
     except ValueError as exc:
         report = write_not_executed(

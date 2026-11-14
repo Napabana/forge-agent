@@ -310,7 +310,7 @@ def run(
     except ImportError:
         is_tiktoken_available = lambda: False
 
-    from entry.context_common import build_context_policy
+    from entry.context_common import build_context_policy, configured_agent_options
     context_policy = build_context_policy(config, backend)
 
     resolved_reasoning_stream = stream if reasoning_stream is None else reasoning_stream
@@ -331,12 +331,7 @@ def run(
 
 
     agent_config = AgentConfig(
-        max_steps=config.agent.max_steps,
-        budget_tokens=config.agent.budget_tokens,
-        history_max_messages=config.context.history_window * 2,
-        repo_map_mode=config.context.repo_map_mode,
-        repo_map_budget=config.context.repo_map_budget,
-        test_python_executable=config.tools.test.python_executable,
+        **configured_agent_options(config),
         prepare_next_turn=context_policy,
         planning_mode=config.agent.planning_mode,
         recovery_mode=config.agent.recovery_mode,

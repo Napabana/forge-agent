@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+from context.token_budget import TokenCounter
+
 from context.repo_index import PersistentRepoIndex, StoredFile, StoredSymbol
 from context.repo_map import (
     FileInfo,
@@ -83,12 +85,13 @@ class PersistentRepoMap(RepoMap):
         *,
         force_refresh: bool = False,
         query: str | None = None,
+        counter: TokenCounter | None = None,
     ) -> str:
         if force_refresh:
             self.refresh()
         elif self._files is None:
             self.sync()
-        return super().build(budget=budget, query=query)
+        return super().build(budget=budget, query=query, counter=counter)
 
     def refresh(self) -> RepoMapScanReport:
         """Explicit full rebuild fallback, preserving RepoMap.refresh semantics."""
