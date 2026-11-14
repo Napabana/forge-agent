@@ -40,6 +40,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from tools.execution_env import execution_environment
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,7 @@ class LocalRuntime(Runtime):
             proc = subprocess.run(
                 cmd,
                 shell=True,
+                env=execution_environment(),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -194,6 +196,7 @@ class LocalRuntime(Runtime):
             proc = subprocess.run(
                 normalized,
                 shell=False,
+                env=execution_environment(),
                 capture_output=True,
                 text=True,
                 timeout=timeout,

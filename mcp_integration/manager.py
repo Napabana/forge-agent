@@ -9,6 +9,7 @@ from typing import Any
 from mcp import Client, MCPError, StdioServerParameters
 
 from config.schema import MCPConfig, MCPServerConfig
+from tools.execution_env import execution_environment
 
 
 _MAX_TOOLS_PER_SERVER = 128
@@ -257,7 +258,8 @@ class MCPClientManager:
             target = StdioServerParameters(
                 command=server.command or "",
                 args=list(server.args),
-                env=dict(server.env) or None,
+                # 显式 server.env 是可信宿主扩展授权；默认不继承 Provider 凭据。
+                env={**execution_environment(), **server.env},
             )
         elif server.transport == "streamable_http":
             target = server.url or ""
