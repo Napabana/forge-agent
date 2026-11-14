@@ -61,6 +61,7 @@ class EventType(str, Enum):
     CONTEXT_COMPACTION_FAILED = "context_compaction_failed"
     CONTEXT_COMPACTED = "context_compacted"
     COMPLETION_REJECTED = "completion_rejected"
+    COMPLETION_CANDIDATE = "completion_candidate"
     PLAN_CREATED = "plan_created"
     PLAN_STEP_STARTED = "plan_step_started"
     PLAN_STEP_COMPLETED = "plan_step_completed"
@@ -315,6 +316,7 @@ class RunResult:
     delivery_status: str = "not_requested"     # commit/push/PR 交付状态
     termination_reason: str | None = None       # 结构化终止原因
     resource_reason: str | None = None          # 资源终止子原因，例如 max_steps
+    usage_complete: bool | None = None          # None=历史未知；False=估算或缺失调用用量
 
     def __post_init__(self) -> None:
         if self.usage.total_tokens:

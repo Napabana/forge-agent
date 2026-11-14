@@ -21,6 +21,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import shlex
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent.event_log import EventLog
+from agent.completion import CheckEvidence, CheckOrigin, CheckOutcome, EvidenceSnapshot, Readiness, evaluate_completion_candidate
 from agent.loop_detector import LoopDetector, LoopSeverity
 from agent.planning import PlanningMode, PlanningRuntime, decide_planning
 from agent.recovery import (
@@ -42,7 +45,7 @@ from agent.recovery import (
 from context.history import ConversationHistory
 from context.incremental_repo_map import PersistentRepoMap
 from context.repo_map import RepoMap
-from context.repository_state import repository_content_fingerprint, repository_fingerprint
+from context.repository_state import repository_content_fingerprint, repository_fingerprint, _git
 from context.token_budget import LegacyTokenCounter, TokenBudget
 from agent.prompt import (
     build_system_prompt,
@@ -112,6 +115,9 @@ class AgentConfig:
     test_tool_names: tuple[str, ...] = ("test", "pytest")
     fatal_tool_error_repeats: int = 2
     budget_tokens: int = 80_000
+    max_model_calls: int | None = None
+    max_total_tokens: int | None = None
+    completion_wrapup_steps: int = 4
     history_max_messages: int = 40
     planning_mode: str = "off"
     recovery_mode: str = "off"
@@ -234,6 +240,15 @@ class Agent:
         log: EventLog,
         history: ConversationHistory | None = None,
     ) -> RunResult:
+        for value in (self._cfg.max_model_calls, self._cfg.max_total_tokens):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
+                raise ValueError("Trial budgets must be positive integers or None")
+        self._usage_complete = True
+        result = self._run(task, log, history)
+        result.usage_complete = self._usage_complete and result.usage.llm_calls > 0
+        return result
+
+    def _run(self, task: Task, log: EventLog, history: ConversationHistory | None = None) -> RunResult:
         """执行一次完整的 agent 运行。"""
         self._current_repo_path = task.repo_path
         self._model_repo_path = self._cfg.execution_workspace or task.repo_path
@@ -341,8 +356,31 @@ class Agent:
         last_repo_content_state = initial_repo_content_state
         fatal_error_key: str | None = None
         fatal_error_count = 0
+        baseline_tests = self._completion_test_files(task.repo_path)
+        initial_paths = self._completion_paths(task.repo_path)
+        completion_checks: list[CheckEvidence] = []
+        candidate_snapshot: str | None = None
+        candidate_step = 0
 
         for step in range(1, task.max_steps + 1):
+            resource_reason = None
+            if self._cfg.max_model_calls is not None and usage.llm_calls >= self._cfg.max_model_calls:
+                resource_reason = "model_calls"
+            elif self._cfg.max_total_tokens is not None:
+                if not self._usage_complete:
+                    resource_reason = "usage_unavailable"
+                elif usage.total_tokens >= self._cfg.max_total_tokens:
+                    resource_reason = "total_tokens"
+            if candidate_snapshot is not None and last_repo_content_state == candidate_snapshot:
+                if step - candidate_step > max(1, self._cfg.completion_wrapup_steps):
+                    resource_reason = "completion_wrapup"
+            if resource_reason:
+                reason = f"Reached trial resource limit: {resource_reason}"
+                log.log_task_incomplete(steps=step - 1, reason=reason, termination_reason="resource_exhausted", resource_reason=resource_reason)
+                return RunResult(task.task_id, RunStatus.INCOMPLETE, reason, step - 1,
+                                 total_tokens=total_tokens, usage=usage.snapshot(),
+                                 patch=self._get_git_diff(task.repo_path),
+                                 termination_reason="resource_exhausted", resource_reason=resource_reason)
             if self._is_cancel_requested():
                 reason = "Canceled by external request"
                 logger.info("Agent task %s canceled before step %d", task.task_id, step)
@@ -394,6 +432,7 @@ class Agent:
             def log_retry(attempt: int, error: LLMErrorInfo) -> None:
                 nonlocal llm_retries
                 llm_retries += 1
+                self._usage_complete = False  # 重试请求没有完整 usage，不能把未知费用计为零。
                 log.log_trace(
                     EventType.LLM_CALL_RETRY,
                     step,
@@ -408,6 +447,7 @@ class Agent:
             try:
                 response = self._call_with_retry(messages, tools, on_retry=log_retry)
             except Exception as exc:
+                self._usage_complete = False
                 canceled = self._is_cancel_requested()
                 error = classify_llm_error(exc)
                 log.log_trace(
@@ -465,6 +505,7 @@ class Agent:
                 provider_usage=response.usage.to_dict(),
             )
             usage.record(response.usage)
+            self._usage_complete = self._usage_complete and not response.usage.estimated and response.usage.total_tokens > 0
             total_tokens = usage.total_tokens
 
             # 同步 provider call 无法强杀；返回后第一安全边界优先响应 cancel。
@@ -962,6 +1003,44 @@ class Agent:
                     )
                     if last_test_passed:
                         last_successful_test_content_state = current_repo_content_state
+                    from tools.test_tool import PytestTool
+                    if isinstance(self._registry.get_tool(tc.name), PytestTool):
+                        origin = self._completion_check_origin(task.repo_path, tc.params, baseline_tests)
+                        check_id = json.dumps(tc.params, sort_keys=True)
+                        if origin is CheckOrigin.REPOSITORY and self._completion_contract_matches(task.test_cmd, tc.params):
+                            origin, check_id = CheckOrigin.CONTRACT, "task-test-command"
+                        completion_checks.append(CheckEvidence(
+                            check_id, origin,
+                            CheckOutcome.PASSED if observation.is_success() else CheckOutcome.FAILED,
+                            current_repo_content_state if not repository_content_changed else "stale-during-test",
+                            step,
+                        ))
+
+                untracked = _git(Path(task.repo_path).resolve(), "ls-files", "-z", "--others", "--exclude-standard")
+                new_paths = tuple(path for path in untracked.split("\0") if path) if untracked is not None else tuple(sorted(self._completion_paths(task.repo_path) - initial_paths))
+                new_paths = tuple(path for path in new_paths if (Path(task.repo_path) / path).resolve() != log.path.resolve())
+                readiness = evaluate_completion_candidate(EvidenceSnapshot(
+                    initial_repo_content_state, current_repo_content_state,
+                    require_changes=task.require_changes, require_tests=True,
+                    checks=tuple(completion_checks), fatal_infrastructure_error=fatal_error_key is not None,
+                    required_check_ids=("task-test-command",) if task.test_cmd else (), untracked_paths=new_paths,
+                ))
+                if readiness.state is not Readiness.NOT_READY:
+                    if candidate_snapshot != current_repo_content_state:
+                        candidate_snapshot, candidate_step = current_repo_content_state, step
+                        feedback = (
+                            "Completion candidate: a repository check passed for the current content snapshot. "
+                            "Review the diff and any temporary/untracked files; do not delete files automatically. "
+                            "Resolve diagnostic failures and remaining requirements, then FINISH or GIVE_UP. "
+                            "This is a wrap-up hint; independent acceptance is still required. "
+                            f"Wrap-up budget: {self._cfg.completion_wrapup_steps} steps. "
+                            + "; ".join(readiness.reasons)
+                        )
+                        log.log_trace(EventType.COMPLETION_CANDIDATE, step, state=readiness.state.value,
+                                      snapshot=current_repo_content_state, reasons=list(readiness.reasons))
+                        history.add(LLMMessage(role="user", content=feedback))
+                else:
+                    candidate_snapshot = None
 
                 mcp_evidence_advanced = False
                 if (
@@ -1215,6 +1294,69 @@ class Agent:
             termination_reason="resource_exhausted",
             resource_reason="max_steps",
         )
+
+    @staticmethod
+    def _completion_paths(repo_path: str) -> set[str]:
+        root = Path(repo_path).resolve()
+        paths = set()
+        for directory, dirs, files in os.walk(root, followlinks=False):
+            dirs[:] = [name for name in dirs if name not in {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", "build", "dist"}]
+            paths.update((Path(directory) / name).relative_to(root).as_posix() for name in files)
+        return paths
+
+    @staticmethod
+    def _completion_contract_matches(command: str | None, params: dict) -> bool:
+        if not command:
+            return False
+        try:
+            argv = shlex.split(command)
+            if len(argv) >= 3 and Path(argv[0]).name.startswith("python") and argv[1:3] == ["-m", "pytest"]:
+                argv = argv[2:]
+            # 只识别冻结的直接pytest命令；shell组合/自定义runner留给独立Acceptance。
+            return bool(argv and argv[0] == "pytest" and argv[1:] == shlex.split(params.get("args") or "") + [str(params.get("path") or "tests/")])
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _completion_test_files(repo_path: str) -> dict[str, str]:
+        """冻结宿主看到的既有测试；模型不能用参数把新建诊断脚本升级为正式证据。"""
+        root = Path(repo_path).resolve()
+        files = {}
+        for directory, dirs, names in os.walk(root, followlinks=False):
+            dirs[:] = [name for name in dirs if name not in {".git", ".venv", "venv", "node_modules", "__pycache__", "build", "dist"}]
+            for name in names:
+                if not (name.startswith("test_") or name.endswith("_test.py")) or not name.endswith(".py"):
+                    continue
+                path = Path(directory) / name
+                try:
+                    if path.is_symlink() or not path.resolve().is_relative_to(root):
+                        continue
+                    files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+                except OSError:
+                    continue
+        return files
+
+    @staticmethod
+    def _completion_check_origin(repo_path: str, params: dict, baseline: dict[str, str]) -> CheckOrigin:
+        root = Path(repo_path).resolve()
+        try:
+            cwd = Path(params.get("cwd") or root).resolve()
+            selected_path = str(params.get("path") or ("tests" if (cwd / "tests").is_dir() else ".")).split("::")[0]
+            target = (cwd / selected_path).resolve()
+            if not target.is_relative_to(root):
+                return CheckOrigin.DIAGNOSTIC
+            # 任意额外 pytest 参数可以改变测试集合/插件，保守视为诊断。
+            allowed_args = {"-q", "-v", "-x", "--disable-warnings", "--tb=short", "--tb=long", "--tb=no"}
+            if any(arg not in allowed_args for arg in shlex.split(params.get("args") or "")):
+                return CheckOrigin.DIAGNOSTIC
+            current = Agent._completion_test_files(repo_path)
+            selected = {path: digest for path, digest in current.items() if (root / path).is_relative_to(target) or root / path == target}
+            original = {path: digest for path, digest in baseline.items() if (root / path).is_relative_to(target) or root / path == target}
+            if selected and selected == original:
+                return CheckOrigin.REPOSITORY
+        except (OSError, ValueError, TypeError):
+            pass
+        return CheckOrigin.DIAGNOSTIC
 
     def _structured_recovery_enabled(self) -> bool:
         return bool(self._recovery_runtime and self._recovery_runtime.enabled)
@@ -1557,13 +1699,13 @@ class Agent:
             elif mode == "incremental":
                 if self._repo_map_sync_requested:
                     repo_map.sync()  # type: ignore[attr-defined]
-                self._repo_map_cache = repo_map.build(budget=map_budget, query=query)
+                self._repo_map_cache = repo_map.build(budget=map_budget, query=query, counter=token_budget.counter)
             elif self._repo_map_force_refresh:
                 self._repo_map_cache = repo_map.build(
-                    budget=map_budget, force_refresh=True, query=query
+                    budget=map_budget, force_refresh=True, query=query, counter=token_budget.counter
                 )
             else:
-                self._repo_map_cache = repo_map.build(budget=map_budget, query=query)
+                self._repo_map_cache = repo_map.build(budget=map_budget, query=query, counter=token_budget.counter)
             self._repo_map_build_seconds += time.perf_counter() - started
             self._repo_map_build_calls += int(mode != "none")
             self._repo_map_force_refresh = False
