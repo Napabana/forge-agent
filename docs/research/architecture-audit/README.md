@@ -17,14 +17,14 @@
 | 01 | 整体架构、入口、Runner/Orchestrator、跨模块生命周期与状态所有权 | [01-整体架构与执行链路.md](01-整体架构与执行链路.md) | **已完成源码级静态对标**；待回归 |
 | 02 | Model Integration、LLM Backend、ReAct、Prompt、Tool Call、Streaming、终止 | [02-Model-Integration与Agent-Loop.md](02-Model-Integration与Agent-Loop.md) | **已完成源码级静态对标**；定向协议回归待做 |
 | 03 | 全部原生/控制/MCP 工具、Validation、Hook、Permission、Cancel | [03-Tool-System与执行治理.md](03-Tool-System与执行治理.md) | **已完成源码级静态审计**；P0 修复与回归待办 |
-| 04 | History、Token Budget、Compaction、Context 视图和 Session | `04-Context-Engineering.md` | 未开始 |
-| 05 | Repo Map、Tree-sitter、SQLite Schema、索引更新、检索及成本 | `05-Repo-Map深度审查.md` | 未开始 |
-| 06 | Planning、Recovery、Loop、Progress、Replan Gate | `06-Planning与Failure-Recovery.md` | 未开始 |
-| 07 | TaskEngine、Worktree、Local/Docker、取消与资源清理 | `07-Execution-Runtime与Isolation.md` | 未开始 |
+| 04 | History、Token Budget、Compaction、Context 视图和 Session | [04-Context-Engineering.md](04-Context-Engineering.md) | **D01–D09、D17–D19 静态审查完成**；动态/消融待做 |
+| 05 | Repo Map、Tree-sitter、SQLite Schema、索引更新、检索及成本 | [05-Repo-Map深度审查.md](05-Repo-Map深度审查.md) | **D10–D16 静态审查完成**；真实 Counter/召回消融待做 |
+| 06 | Planning、Recovery、Loop、Progress、Replan Gate | [06-Planning与Failure-Recovery.md](06-Planning与Failure-Recovery.md) | **E01–E11 静态审查及历史 R2 数据核查完成**；独立消融待做 |
+| 07 | TaskEngine、Worktree、Local/Docker、取消与资源清理 | [07-Execution-Runtime与Isolation.md](07-Execution-Runtime与Isolation.md) | **F01–F10 静态审查完成**；Secret/Runtime 安全验证为 P0 |
 | 08 | Completion Guard、Acceptance、Tests、GitHub Delivery | [08-Testing与Acceptance.md](08-Testing与Acceptance.md)、[离线验证记录](08-离线验证记录.md) | **源码审查完成，19 个独立原型用例已运行；3 个 Forge 行为刻画用例待真实仓库验证** |
-| 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | [09-Trace与Evaluation.md](09-Trace与Evaluation.md)、[H0 离线记录](09-离线评分合同验证记录.md)、[Trace/Harbor 证据](09-H0-Trace与Harbor证据来源核查.md) | **H0 证据来源核查与只读工具 + 离线原型测试**；生产接线、H1 及其余专题待完成 |
-| 10 | Skills、MCP、Trajectory、Evolution、Teacher/Student 与 RL readiness | `10-Extension与RL-Readiness.md` | 未开始 |
-| 11 | 全功能评分、P0/P1/P2/P3 路线、Baseline 准入、面试 Q&A | `11-综合评分与改进路线.md` | 未开始 |
+| 09 | Trace、Observability、Eval、Graders、Benchmark、统计与消融 | [09-Trace与Evaluation.md](09-Trace与Evaluation.md)、[H0 离线记录](09-离线评分合同验证记录.md)、[Trace/Harbor 证据](09-H0-Trace与Harbor证据来源核查.md) | **H01–H10 静态审查完成**；已归档真实样本核对，生产接线及异常注入待做 |
+| 10 | Skills、MCP、Trajectory、Evolution、Teacher/Student 与 RL readiness | [10-Extension与RL-Readiness.md](10-Extension与RL-Readiness.md) | **I01–I11 静态审查完成**；训练方向不纳入 Forge 改造 |
+| 11 | 全功能评分、P0/P1/P2/P3 路线、Baseline 准入、面试 Q&A | [11-综合评分与改进路线.md](11-综合评分与改进路线.md) | **J01–J06 + 112 项静态审查汇总与整改顺序完成**；未认证生产修复 |
 
 功能索引位于 **[00 报告](00-研究计划与功能总清单.md)**。阶段 0 已列出 **112 个候选细分审计对象**；后续允许进一步拆分，但不允许不留痕删除审计对象。
 
@@ -88,9 +88,17 @@
 - **本阶段没有修改功能代码，没有运行 Forge pytest，也没有执行注入 payload/真实模型/MCP 服务**。独立 Python 临时目录检查只验证了标准库 symlink 行为，不是 Forge 测试。
 - 对照版本：Forge 当前 dev e672dfd0（生产源码基准 3e3fc488）、Pi b7294995、Codex 1f1f6ebb；Claude 使用 2026-11-12 官方权限、Hooks、Sandbox 文档。
 
-## 下一步
+## 本批次静态审查收口（2026-11-14）
 
-**当前首要执行：阶段 08 的离线状态回放与设计验证（不调用 LLM API），同时准备阶段 09 结果分层协议。** 完整的 G01–G09 对照、单任务 Trace 归因和 S08/A08 验收矩阵见 [08-Testing与Acceptance.md](08-Testing与Acceptance.md)。原阶段 04/05 仍保留，并在停止/测试协议可验证后继续。此前的阶段 04：Context / History / Token Budget / Compaction 规划： 按 00 索引 D01–D12 核查 canonical History、消息角色与 event refs、token counter、model capability/request budget、tool pruning、semantic packet、structured compaction、prepare_next_turn 与 Session persistence；重点验证工具结果压缩是否保留足够执行证据、是否错误提升不可信工具输出，以及 Teacher→Student trajectory 是否可重建。生成 `04-Context-Engineering.md`，更新本 README 与 decisions。阶段 03 的 P0 单独拆为安全修复任务，不在本阶段研究中直接修改生产代码。
+**112 项候选审计对象已在 Stage01–11 全部建立源码级静态审查记录，具体 ID 见 [11-综合评分与改进路线.md](11-综合评分与改进路线.md)。这只意味着研究覆盖，不表示 112 项已经运行测试、所有漏洞已验证或生产问题已解决。** 00 原清单保留且没有删除 ID。
+
+本批次新增/补齐：
+- Stage04 Context/Session（12 项）、Stage05 RepoMap/SQLite（7 项）、Stage06 Planning/Recovery（11 项）、Stage07 Runtime/Security（10 项）。
+- Stage09 完整 H01–H10（10 项）并保留此前 H0 Trace/Harbor 真实归档与离线原型；Stage10 Skills/MCP/Evolution（11 项）；Stage11 交叉 J01–J06（6 项）。
+- Stage01–03、08 已有历史固定 SHA 的审计报告，本批不把历史结论当最新动态验证。尤其 Stage03 旧 Git/Test 命令字符串风险已通过 exec_args 改造，参见 Stage07 现实现核查。
+- **未进行本批次 Forge pytest、Docker/Harbor 真机隔离测试、真实模型新 A/B 或成本优化；继续使用之前已确认的 Stage08/09 51 条原型/合成测试作为既有证据，不冒充这轮新执行。**
+
+下一项工作不是再新建 Stage：**先按 Stage11 的 P0-Security（可信密钥隔离）与 P0-Evaluation（可评分故障分类）执行确定性测试，然后对 Completion / Permission / Repo Map 做最小方案验证**，最后再安排付费 A/B。完整的验收矩阵、优先级和面试论证见 Stage11。
 
 ## 最终研究决策与疑点记录
 
