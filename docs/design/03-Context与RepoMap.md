@@ -1,5 +1,7 @@
 # 03 Context Engineering、Repo Map 与 Session
 
+> 架构映射初次核验：`fd700bdf48ace5f03bb9feab49d72f7c12e5ddcb`，2026-11-12；2026-11-15 加固增量见 [Harness 加固合同](Harness加固合同.md)。
+
 > 运行期修复基线：`dev`，2026-11-13；对应实施记录见 `docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md`。
 
 ## 1. 功能目标
@@ -38,7 +40,10 @@ flowchart LR
 
 Repo Map 由 `ContextConfig.repo_map_mode` 控制，默认 `incremental`。支持 `none`、`static`、
 `query_aware`、`incremental`。其实际构建预算为
-`min(available_input_tokens * 0.15, ContextConfig.repo_map_budget)`；默认硬上限 12000 tokens。
+`min(available_input_tokens * 0.15, ContextConfig.repo_map_budget)`；默认上限仍为 12000。
+生产 Agent 以 `TokenBudget.counter` 传入 `RepoMap.build(counter=...)`，按完整渲染结果（含换行和省略提示）
+逐块检查上限；严格性相对于同一本地 Counter，不代表 Provider 精确分词或账单。直接调用 build 且未传
+counter 的历史研究入口保留 `budget * 4` 字符近似模式。
 `PersistentRepoMap.sync()` 读取 index 和之前的 `RepositoryState`，捕获当前状态并检测变更；
 不可靠时 full rebuild，可靠 changed paths 只重新解析目标文件；query 改变只在
 `RepoMap.build(query=...)` 重排。
@@ -47,7 +52,7 @@ Repo Map 由 `ContextConfig.repo_map_mode` 控制，默认 `incremental`。支�
 Repo Map 与 History。Repo Map 已嵌入 system prompt，因此 `request_pressure` 的 system_tokens
 已经包含它；独立 repo_map_tokens 只用于诊断，不重复累加。
 
-CLI run、CLI chat、API、GitHub Issue 通过 `entry/context_common.py::build_context_policy`
+CLI run、CLI chat、API、GitHub Issue 和 Eval 通过 `entry/context_common.py::build_context_policy`
 创建各自独立的 `TraceableCompaction`。每次后续模型调用前先计算完整请求压力，Stage A 剪枝旧工具输出；
 仍超阈值才建立 deterministic evidence 和 semantic packet，调用 summarizer；失败用 structured
 fallback。结果通过 `PrepareNextTurnResult.history_override` 仅影响下一模型视图，不覆盖 canonical
@@ -88,6 +93,11 @@ Chat 每轮开始前写 `pending_round` checkpoint，完成/中断后原子更�
 - compaction side-call usage 由 ExecutionRunner 在正常返回路径合并进 RunResult；Chat 中断路径由
   ChatSession 消费未归集 usage。Semantic side-call 失败记录 Trace，不删除 canonical History。
 - Trace Token Breakdown 与 TokenBudget 复用同一个 Counter；Provider Usage 仍是请求后统计真值。
+- `configured_agent_options` 统一上述入口的请求预算、Repo Map、测试解释器和可选累计预算；Eval
+  不再把携带模型元数据的 `ContextBudgetSpec` 强转为 int。Suite 显式覆盖预算时保留 Counter/输出预留信息。
+- `agent.max_model_calls` 与 `agent.max_total_tokens` 是默认关闭的 Trial 累计限额，与单请求窗口不同；
+  前者限制逻辑模型请求，后者依据返回 usage 判断是否继续，未知 usage 不能记成零。它们不能预先保证
+  下一次请求的精确费用，也不提供进程级强制取消。
 - Session save 对 secret pattern 递归 redaction，以 revision + 文件锁拒绝 stale writer。
 
 ## 8. 设计取舍
@@ -104,6 +114,10 @@ Repo Map：`tests/test_repo_map_improvements.py`、`tests/test_repo_map_persiste
 `tests/test_model_aware_token_budget.py`、`tests/test_tool_pruning.py`、`tests/test_structured_compaction.py`、
 `tests/test_prepare_next_turn.py`、`tests/test_runtime_context_fixes.py`。Session：
 `tests/test_session_store.py`、`tests/test_chat.py`。
+
+审计修复新增 `tests/test_audit_repo_map_budget.py`（同 Counter 上限、目标符号、修改/删除新鲜度）与
+`tests/test_audit_config_parity.py`（入口配置、预算元数据、每 Trial 独立 Policy、累计限额校验）。这些是
+离线合同验证，不是实际模型 Token 消耗下降或成功率提升的证据。
 
 冻结证据只证明对应协议：12-case query-aware MRR/recall、persistent strict equivalence 和 phase timing；
 reference-count 71.26× 是子步骤，不是 Agent E2E。

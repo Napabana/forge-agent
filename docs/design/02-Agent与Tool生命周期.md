@@ -1,5 +1,7 @@
 # 02 Agent 主循环与 Tool 生命周期
 
+> 架构映射初次核验：`fd700bdf48ace5f03bb9feab49d72f7c12e5ddcb`，2026-11-12；本次加固增量见 [Harness 加固合同](Harness加固合同.md)。
+
 > 运行期修复基线：`dev`，2026-11-13；对应实施记录见 `docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md`。
 
 ## 1. 功能目标
