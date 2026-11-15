@@ -2,6 +2,8 @@
 
 分支：`fix/harness-audit-remediation-20261115`；基线：`35c94c3d96dd75a241913cf38ac243c208b6357d`。
 
+PR：<https://github.com/Napabana/forge-agent/pull/2>，目标 dev，未合并。实现提交：98793b6 / 46511a8 / 09bf3ba / 3d7ed5e / e77d3b2；后续提交仅记录文档与验证结果。
+
 ## 实际改动
 
 - P0 Security：LocalRuntime、command grader、GitHub 独立 verifier 使用最小环境；MCP 默认相同，显式 server.env 仍为可信扩展授权。
