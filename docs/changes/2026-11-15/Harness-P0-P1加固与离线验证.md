@@ -22,7 +22,8 @@
 - Context/配置：80 passed；补充入口及 policy 隔离：34 passed。
 - Evidence Pack：passed。
 - 文档一致性：PASS；严格 Zensical 构建：No issues found，6.54 秒。
-- 修改后完整 pytest：执行中，最终结果需收口后补充，不将专项替代全量。
+- 修改后原生 WSL 完整 pytest：1247 passed、14 skipped、31 warnings，382.09 秒；相对基线新增 57 项测试，0 失败。
+- `git diff --check` 通过；新增代码 Secret 模式扫描唯一匹配为测试路径 task-id 的误报，无新增真实凭据。
 
 ## 保留的限制
 
