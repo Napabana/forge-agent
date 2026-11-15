@@ -264,7 +264,7 @@ def test_skill_selection_grader_is_optional_process_evidence(tmp_path: Path):
     assert required_graders_passed(results) is True
 
 # Stage 09: characterize current failure accounting (not desired future scoring semantics).
-def test_characterization_runner_exception_is_counted_in_real_model_rate(tmp_path):
+def test_runner_exception_is_retained_but_not_scored_as_model_failure(tmp_path):
     suite = EvaluationSuite("suite", (_task(),), defaults={"max_steps": 2, "budget_tokens": 1000})
 
     class BrokenRunner:
@@ -284,14 +284,15 @@ def test_characterization_runner_exception_is_counted_in_real_model_rate(tmp_pat
     row = results[0]
     assert row.run_status == "failed"
     assert row.termination_reason == "evaluation_runner_exception"
-    assert row.execution_status == "executed" and row.real_model_executed is True
+    assert row.execution_status == "executed" and row.real_model_executed is False
     agg = build_report(results, suite_id="suite")["real_model_small_sample"]["baseline_react"]
     # Known current behavior: a simulated infrastructure exception enters
     # the observed model-failure denominator.
-    assert agg["runs"] == 1 and agg["observed_success_rate"] == 0.0
+    assert agg["runs"] == 1 and agg["observed_success_rate"] is None
+    assert row.failure_domain == "harness" and row.scoreable is False
 
 
-def test_characterization_runner_factory_exception_aborts_suite(tmp_path):
+def test_runner_factory_exception_preserves_trial(tmp_path):
     suite = EvaluationSuite("suite", (_task(),), defaults={"max_steps": 2, "budget_tokens": 1000})
 
     def broken_factory(*args):
@@ -303,7 +304,7 @@ def test_characterization_runner_factory_exception_aborts_suite(tmp_path):
         evidence_kind="deterministic_harness",
         real_model_executed=False,
     )
-    with pytest.raises(RuntimeError, match="adapter setup failed"):
-        harness.run()
-    # No completed trial.json for an exception before runner.run.
-    assert not (tmp_path / "out" / "trials" / "tiny-task--baseline_react--r001" / "trial.json").exists()
+    row = harness.run()[0]
+    assert row.phase_errors[0]["phase"] == "runner_factory"
+    assert row.scoreable is False and row.model_call_started is False
+    assert (tmp_path / "out" / "trials" / "tiny-task--baseline_react--r001" / "trial.json").exists()

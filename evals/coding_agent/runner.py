@@ -13,6 +13,7 @@ from typing import Any
 
 from agent.runner import AcceptanceContract, ExecutionRunner, RunRequest
 from agent.task import RunResult, RunStatus, Task
+from agent.trace_v2 import redact_trace_string
 from evals.coding_agent.graders import (
     GraderContext,
     extract_metrics,
@@ -28,6 +29,10 @@ from evals.coding_agent.schema import (
     TrialMetrics,
     TrialResult,
 )
+from evals.trial_outcome_probe import (
+    FailureDomain, RolloutStatus, ScoringPolicy, TrialEvidence, VerifierStatus, decide_trial,
+)
+from examples.harbor.trace_evidence import analyze_trace
 
 RunnerFactory = Callable[[EvalTask, Path, Path, str], ExecutionRunner]
 _IGNORED_DIRS = {".git", ".pytest_cache", "__pycache__", "logs", "traces"}
@@ -233,6 +238,7 @@ class EvaluationHarness:
         real_model_executed: bool = False,
         run_metadata: dict[str, Any] | None = None,
         source_repo_path: str | Path | None = None,
+        scoring_policy: ScoringPolicy | None = None,
     ) -> None:
         if repetitions < 1:
             raise ValueError("repetitions must be >= 1")
@@ -247,6 +253,7 @@ class EvaluationHarness:
         self.evidence_kind = evidence_kind
         self.real_model_executed = real_model_executed
         self.run_metadata = dict(run_metadata or {})
+        self.scoring_policy = scoring_policy or ScoringPolicy("forge-eval-snapshot-v2")
         self.source_repo_path = (
             Path(source_repo_path).resolve() if source_repo_path is not None else None
         )
@@ -262,7 +269,11 @@ class EvaluationHarness:
             raise ValueError(f"unknown task id(s): {missing}")
         output = reserve_output_dir(self.output_dir)
         metadata = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "scoring_policy": {
+                "id": self.scoring_policy.identifier,
+                "fingerprint": self.scoring_policy.fingerprint,
+            },
             "suite_id": self.suite.suite_id,
             "variant": self.variant,
             "repetitions": self.repetitions,
@@ -292,48 +303,70 @@ class EvaluationHarness:
     def _run_trial(self, task: EvalTask, config: TrialConfig) -> TrialResult:
         trial_dir = self.output_dir / "trials" / config.trial_id
         trial_dir.mkdir(parents=True, exist_ok=False)
-        repo = materialize_task_repo(
-            task,
-            trial_dir / "repo",
-            source_repo_path=self.source_repo_path,
-            source_commit=self.suite.source.commit if self.suite.source else None,
-        )
+        repo = trial_dir / "repo"
         trace_dir = trial_dir / "traces"
         cached_outcome: tuple[GraderResult, ...] | None = None
+        phase_errors: list[dict[str, str]] = []
+        phase = "materialize"
+        runner = None
+        run_result = None
+        graders: tuple[GraderResult, ...] = ()
+        verifier_status = VerifierStatus.NOT_RUN
+        patch_ref = final_state_ref = None
+        snapshot_available = False
+        failure_domain = FailureDomain.NONE
+        trace_evidence: dict[str, Any] = {}
 
         def verifier(workspace: Path) -> bool:
             nonlocal cached_outcome# 缓存结果
             cached_outcome = grade_many(_outcome_graders(task), GraderContext(repo=workspace))
+            if any(result.evidence.get("verifier_error") for result in cached_outcome):
+                raise RuntimeError("independent verifier could not execute")
             return required_graders_passed(cached_outcome)
 
-        runner = self.runner_factory(task, repo, trace_dir, config.trial_id)
-        max_steps = int(self.suite.defaults.get("max_steps", 20))
-        budget_tokens = int(self.suite.defaults.get("budget_tokens", 40_000))
-        agent_task = Task(
-            task.description,
-            str(repo),
-            task_id=config.trial_id,
-            test_cmd=task.test_cmd,
-            require_changes=task.require_changes,
-            require_tests=task.require_tests,
-            max_steps=max_steps,
-            budget_tokens=budget_tokens,
-        )
-        acceptance = AcceptanceContract(
-            require_changes=task.require_changes,
-            require_tests=task.require_tests,
-            verifier=verifier if _outcome_graders(task) else None,
-        )
         started = time.perf_counter()
-        cleanup_error: Exception | None = None
         try:
+            materialize_task_repo(
+                task, repo, source_repo_path=self.source_repo_path,
+                source_commit=self.suite.source.commit if self.suite.source else None,
+            )
+            phase = "runner_factory"
+            runner = self.runner_factory(task, repo, trace_dir, config.trial_id)
+            agent_task = Task(
+                task.description, str(repo), task_id=config.trial_id,
+                test_cmd=task.test_cmd, require_changes=task.require_changes,
+                require_tests=task.require_tests,
+                max_steps=int(self.suite.defaults.get("max_steps", 20)),
+                budget_tokens=int(self.suite.defaults.get("budget_tokens", 40_000)),
+            )
+            acceptance = AcceptanceContract(
+                require_changes=task.require_changes, require_tests=task.require_tests,
+                verifier=verifier if _outcome_graders(task) else None,
+            )
+            phase = "runner"
             run_result = runner.run(RunRequest(
                 task=agent_task, acceptance=acceptance, entrypoint="eval",
                 execution_constraints=task.execution_constraints,
             ))
-            elapsed = time.perf_counter() - started
-            metrics = extract_metrics(run_result, wall_time_seconds=elapsed)
-            outcome = cached_outcome or grade_many(_outcome_graders(task), GraderContext(repo=repo))
+            failure_domain = {
+                "provider_error": FailureDomain.PROVIDER,
+                "infrastructure_error": FailureDomain.HARNESS,
+                "canceled": FailureDomain.CANCELLATION,
+            }.get(run_result.termination_reason, FailureDomain.NONE)
+            if run_result.status == RunStatus.FAILED and failure_domain == FailureDomain.NONE:
+                failure_domain = FailureDomain.UNKNOWN
+            phase = "grading"
+            outcome = cached_outcome if cached_outcome is not None else grade_many(
+                _outcome_graders(task), GraderContext(repo=repo)
+            )
+            if not outcome:
+                verifier_status = VerifierStatus.NOT_RUN
+            elif any(result.evidence.get("verifier_error") for result in outcome):
+                verifier_status = VerifierStatus.ERROR
+                failure_domain = FailureDomain.HARNESS
+            else:
+                verifier_status = VerifierStatus.PASSED if required_graders_passed(outcome) else VerifierStatus.FAILED
+            metrics = extract_metrics(run_result, wall_time_seconds=time.perf_counter() - started)
             process = grade_many(
                 (
                     grader
@@ -343,49 +376,67 @@ class EvaluationHarness:
                 GraderContext(repo=repo, run_result=run_result, metrics=metrics),
             )
             graders = outcome + process
-            success = (
-                run_result.is_success()
-                and run_result.acceptance_status in {"not_requested", "passed"}
-                and required_graders_passed(graders)
-            )
-            error = run_result.error
-        except Exception as exc:  # harness still emits a TrialResult for one failed trial
-            elapsed = time.perf_counter() - started
-            run_result = RunResult(
-                task_id=config.trial_id,
-                status=RunStatus.FAILED,
-                summary=f"evaluation runner raised {type(exc).__name__}: {exc}",
-                steps_taken=0,
-                error=str(exc),
-                termination_reason="evaluation_runner_exception",
-            )
-            metrics = TrialMetrics(wall_time_seconds=elapsed)
-            graders = grade_many(_outcome_graders(task), GraderContext(repo=repo))
-            success = False
-            error = run_result.summary
+        except Exception as exc:
+            phase_errors.append({"phase": phase, "type": type(exc).__name__, "message": str(exc)})
+            failure_domain = FailureDomain.TASK_ENVIRONMENT if phase == "materialize" else FailureDomain.HARNESS
+            if phase == "grading":
+                verifier_status = VerifierStatus.ERROR
+            if run_result is None:
+                run_result = RunResult(
+                    config.trial_id, RunStatus.FAILED, "evaluation phase failed", 0,
+                    error=str(exc), termination_reason=f"evaluation_{phase}_exception",
+                )
         finally:
-            close = getattr(runner, "close", None)
+            # 先固定受测快照，再清理；清理故障不能改写已存在的模型/Verifier结果。
+            if repo.is_dir():
+                try:
+                    patch_path = trial_dir / "patch.diff"
+                    patch_path.write_text(_fixture_patch(task, repo), encoding="utf-8")
+                    final_state_path = trial_dir / "final_state.json"
+                    write_json(final_state_path, _final_state(repo))
+                    patch_ref = patch_path.relative_to(self.output_dir).as_posix()
+                    final_state_ref = final_state_path.relative_to(self.output_dir).as_posix()
+                    snapshot_available = True
+                except Exception as exc:
+                    phase_errors.append({"phase": "snapshot", "type": type(exc).__name__, "message": str(exc)})
+                    failure_domain = FailureDomain.HARNESS
+            close = getattr(runner, "close", None) if runner is not None else None
             if callable(close):
                 try:
                     close()
                 except Exception as exc:
-                    cleanup_error = exc
+                    phase_errors.append({"phase": "cleanup", "type": type(exc).__name__, "message": str(exc)})
 
-        if cleanup_error is not None:
-            run_result.status = RunStatus.FAILED
-            run_result.termination_reason = "evaluation_runner_cleanup_failure"
-            run_result.error = (
-                f"evaluation runner cleanup failed: "
-                f"{type(cleanup_error).__name__}: {cleanup_error}"
-            )
-            run_result.summary = run_result.error
-            success = False
-            error = run_result.error
-
-        patch_path = trial_dir / "patch.diff"
-        patch_path.write_text(_fixture_patch(task, repo), encoding="utf-8")
-        final_state_path = trial_dir / "final_state.json"
-        write_json(final_state_path, _final_state(repo))
+        assert run_result is not None
+        try:
+            metrics = extract_metrics(run_result, wall_time_seconds=time.perf_counter() - started)
+        except (OSError, ValueError, TypeError, UnicodeError) as exc:
+            phase_errors.append({"phase": "metrics", "type": type(exc).__name__, "message": str(exc)})
+            metrics = TrialMetrics(steps=run_result.steps_taken, wall_time_seconds=time.perf_counter() - started)
+            failure_domain = FailureDomain.HARNESS
+        if run_result.trace_path:
+            try:
+                trace_evidence = analyze_trace(run_result.trace_path)
+            except (OSError, ValueError) as exc:
+                phase_errors.append({"phase": "trace", "type": type(exc).__name__, "message": str(exc)})
+                failure_domain = FailureDomain.HARNESS
+        phase_errors = [{**error, "message": redact_trace_string(error["message"])} for error in phase_errors]
+        rollout = {
+            "success": RolloutStatus.FINISH, "incomplete": RolloutStatus.INCOMPLETE,
+            "max_steps": RolloutStatus.INCOMPLETE, "gave_up": RolloutStatus.GAVE_UP,
+            "canceled": RolloutStatus.CANCELED, "failed": RolloutStatus.FAILED,
+        }.get(run_result.status.value, RolloutStatus.UNKNOWN)
+        call_started = bool(trace_evidence.get("started_calls"))
+        decision = decide_trial(TrialEvidence(
+            config.trial_id, call_started, rollout, failure_domain, verifier_status,
+            snapshot_available, snapshot_available,
+        ), self.scoring_policy)
+        success = (
+            run_result.is_success()
+            and run_result.acceptance_status in {"not_requested", "passed"}
+            and required_graders_passed(graders)
+            and verifier_status is VerifierStatus.PASSED
+        )
         result = TrialResult(
             suite_id=self.suite.suite_id,
             task_id=task.task_id,
@@ -394,7 +445,7 @@ class EvaluationHarness:
             repetition=config.repetition,
             execution_status="executed",
             evidence_kind=self.evidence_kind,
-            real_model_executed=self.real_model_executed,
+            real_model_executed=self.real_model_executed and call_started,
             run_status=run_result.status.value,
             termination_reason=run_result.termination_reason,
             acceptance_status=run_result.acceptance_status,
@@ -402,10 +453,26 @@ class EvaluationHarness:
             metrics=metrics,
             grader_results=graders,
             trace_ref=_relative_ref(run_result.trace_path, self.output_dir),
-            patch_ref=patch_path.relative_to(self.output_dir).as_posix(),
-            final_state_ref=final_state_path.relative_to(self.output_dir).as_posix(),
-            error=error,
+            patch_ref=patch_ref,
+            final_state_ref=final_state_ref,
+            error=redact_trace_string(run_result.error) if run_result.error else None,
             execution_constraints=task.execution_constraints,
+            schema_version=2,
+            model_call_started=call_started,
+            model_calls_finished=trace_evidence.get("finished_calls"),
+            usage_complete=(
+                not trace_evidence["usage_is_lower_bound"]
+                and getattr(run_result, "usage_complete", None) is not False
+                if call_started else None
+            ),
+            verifier_status=verifier_status.value,
+            failure_domain=failure_domain.value,
+            scoreable=decision.scoreable,
+            scoreability_reason=decision.scoreability_reason,
+            scoreable_success=decision.scoreable_success,
+            scoring_policy_id=self.scoring_policy.identifier,
+            scoring_policy_fingerprint=self.scoring_policy.fingerprint,
+            phase_errors=tuple(phase_errors),
         )
         write_json(trial_dir / "trial.json", result.to_dict())
         return result

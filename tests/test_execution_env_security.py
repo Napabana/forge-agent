@@ -30,3 +30,16 @@ def test_untrusted_child_does_not_inherit_provider_credentials(monkeypatch, tmp_
 def test_environment_is_allowlist_not_secret_name_blacklist():
     assert "INVENTED_SECRET" not in execution_environment({"INVENTED_SECRET": "fake", "PATH": "/bin"})
     assert execution_environment({"PATH": "/bin"})["PATH"] == "/bin"
+
+
+def test_mcp_default_env_and_explicit_host_extension(monkeypatch):
+    from config.schema import MCPServerConfig
+    from mcp_integration.manager import MCPClientManager
+    import mcp_integration.manager as module
+    captured = []
+    monkeypatch.setenv("CUSTOM_VENDOR_CREDENTIAL", "fake-test-only")
+    monkeypatch.setattr(module, "Client", lambda target, **kw: captured.append(target))
+    MCPClientManager._make_client(MCPServerConfig(id="test", command=sys.executable))
+    assert "CUSTOM_VENDOR_CREDENTIAL" not in captured[-1].env
+    MCPClientManager._make_client(MCPServerConfig(id="test", command=sys.executable, env={"EXPLICIT_EXTENSION_VALUE": "fake-explicit"}))
+    assert captured[-1].env["EXPLICIT_EXTENSION_VALUE"] == "fake-explicit"

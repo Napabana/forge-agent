@@ -12,6 +12,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from evals.trial_outcome_probe import (
+    FailureDomain, RolloutStatus, ScoringPolicy, TrialEvidence, VerifierStatus, decide_trial,
+)
+
 _USAGE_KEYS = ("input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens", "total_tokens")
 _LLM_EVENTS = {"llm_call_started", "llm_call_finished", "llm_call_failed", "llm_call_retry"}
 
@@ -159,7 +163,10 @@ def analyze_harbor(path: str | Path, *, verifier_details: str | Path | None = No
 
 
 def audit_trial(trace_path: str | Path, harbor_path: str | Path,
-                *, verifier_details: str | Path | None = None) -> dict[str, Any]:
+                *, verifier_details: str | Path | None = None,
+                scoring_policy: ScoringPolicy | None = None,
+                failure_domain: FailureDomain | None = None,
+                snapshot_within_deadline: bool | None = None) -> dict[str, Any]:
     trace = analyze_trace(trace_path)
     harbor = analyze_harbor(harbor_path, verifier_details=verifier_details)
     exception_type = harbor["exception_type"]
@@ -169,7 +176,7 @@ def audit_trial(trace_path: str | Path, harbor_path: str | Path,
         observed_rollout = trace["terminal"]["status"]
     else:
         observed_rollout = "unknown_no_terminal"
-    return {
+    result = {
         "trace": trace,
         "harbor": harbor,
         "observed_rollout": observed_rollout,
@@ -177,6 +184,29 @@ def audit_trial(trace_path: str | Path, harbor_path: str | Path,
         "failure_domain": None,  # cannot assign culpability from timeout alone
         "provider_billed_cost": None,  # trace usage is not the invoice
     }
+    if scoring_policy is not None:
+        # 故障归属与截止快照由可信宿主显式提供，不能从超时字符串或reward反推。
+        if failure_domain is None or snapshot_within_deadline is None:
+            raise ValueError("scoring requires explicit failure_domain and snapshot_within_deadline")
+        rollout = {
+            "external_timeout": RolloutStatus.TIMEOUT, "success": RolloutStatus.FINISH,
+            "incomplete": RolloutStatus.INCOMPLETE, "gave_up": RolloutStatus.GAVE_UP,
+            "failed": RolloutStatus.FAILED, "canceled": RolloutStatus.CANCELED,
+        }.get(observed_rollout, RolloutStatus.UNKNOWN)
+        reward = harbor["verifier_reward"]
+        verifier = (VerifierStatus.PASSED if reward == 1.0 else VerifierStatus.FAILED) if reward is not None else VerifierStatus.NOT_RUN
+        decision = decide_trial(TrialEvidence(
+            trace["run_id"], bool(trace["started_calls"]), rollout, failure_domain,
+            verifier, reward is not None, snapshot_within_deadline,
+        ), scoring_policy)
+        result.update(
+            scoreable=decision.scoreable, scoreability_reason=decision.scoreability_reason,
+            scoreable_success=decision.scoreable_success, natural_finish=decision.natural_finish,
+            failure_domain=decision.failure_domain.value,
+            scoring_policy_id=scoring_policy.identifier,
+            scoring_policy_fingerprint=scoring_policy.fingerprint,
+        )
+    return result
 
 
 def main() -> None:

@@ -323,6 +323,19 @@ class TrialResult:
     final_state_ref: str | None = None
     error: str | None = None
     execution_constraints: ExecutionConstraints = ExecutionConstraints()
+    # v1 历史行保持原口径；v2 的评分证据由宿主采集，不接受模型自报。
+    schema_version: int = 1
+    model_call_started: bool | None = None
+    model_calls_finished: int | None = None
+    usage_complete: bool | None = None
+    verifier_status: str = "unknown"
+    failure_domain: str = "unknown"
+    scoreable: bool | None = None
+    scoreability_reason: str | None = None
+    scoreable_success: bool | None = None
+    scoring_policy_id: str | None = None
+    scoring_policy_fingerprint: str | None = None
+    phase_errors: tuple[dict[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

@@ -1,6 +1,8 @@
 """Deterministic graders and Trace/RunResult metric extraction."""
 from __future__ import annotations
 
+from tools.execution_env import execution_environment
+
 import json
 import os
 import subprocess
@@ -136,7 +138,7 @@ class GraderContext:
 
 def _run_command(repo: Path, command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
     resolved = [sys.executable if arg == "{python}" else arg for arg in command]
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    env = execution_environment()
     return subprocess.run(
         resolved,
         cwd=repo,
@@ -163,7 +165,8 @@ def grade(spec: GraderSpec, context: GraderContext) -> GraderResult:
                 "stderr": completed.stderr[-4000:],
             }
         except (OSError, subprocess.TimeoutExpired) as exc:
-            passed, detail, evidence = False, f"command grader failed: {type(exc).__name__}: {exc}", {}
+            passed, detail = False, f"command grader failed: {type(exc).__name__}: {exc}"
+            evidence = {"verifier_error": True, "error_type": type(exc).__name__}
         return GraderResult(spec.grader_id, spec.kind, passed, spec.required, detail, evidence)
 
     if spec.kind == "file":
