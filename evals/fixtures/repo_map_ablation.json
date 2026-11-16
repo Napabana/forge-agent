@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "repo_map_budget_tokens": 10200,
+  "cases": [
+    {
+      "id": "token-history-trimming",
+      "commit": "3c56fe373a3641f3170fc7d8f8d8842c6a76f6f7"
+    },
+    {
+      "id": "runtime-lifecycle-hardening",
+      "commit": "866456e1342e4e49f500613523ed77a025f89641"
+    },
+    {
+      "id": "orchestrate-react-integration",
+      "commit": "fc9a7d0853734d7bdaff323ab0e3d84de6618c78"
+    },
+    {
+      "id": "cli-isolate-default-cwd",
+      "commit": "8249678a22b568947b19e770915bfa53384e855f"
+    },
+    {
+      "id": "context-loop-improvements",
+      "commit": "c0fc67345db28f11c3eed36baf26b6e7c5b0a982"
+    },
+    {
+      "id": "isolated-execution-hardening",
+      "commit": "2ce23912f4153385af2333ebda24aeef6e5992a6"
+    },
+    {
+      "id": "false-completion-guard",
+      "commit": "2cd4705d99580857e10ca61f29e3d4c85d16b0e6"
+    },
+    {
+      "id": "response-infra-error-handling",
+      "commit": "82b95893d4778ad8fb522a0b2071d831bc7f04e0"
+    },
+    {
+      "id": "worktree-fix",
+      "commit": "9682edfa0ea12d63497b89144059b1d3fd2b88ce"
+    },
+    {
+      "id": "persistent-chat-sessions",
+      "commit": "c1724f9c8043d102ce307fa91a3f2bda5b1a9297"
+    },
+    {
+      "id": "token-usage-accounting",
+      "commit": "cdb02caa92046da906c148e470bebff00d151106"
+    },
+    {
+      "id": "repomap-reference-count",
+      "commit": "08ea5f5fc22a67fc58da70786ee439ea255a3189"
+    }
+  ],
+  "performance": {
+    "baseline_commit": "cdb02caa92046da906c148e470bebff00d151106",
+    "optimized_commit": "08ea5f5fc22a67fc58da70786ee439ea255a3189",
+    "snapshot_commit": "cdb02caa92046da906c148e470bebff00d151106",
+    "repetitions": 5
+  }
+}

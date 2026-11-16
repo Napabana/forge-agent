@@ -1,0 +1,52 @@
+{
+  "baseline": {
+    "runs": 1,
+    "solved": 0,
+    "pass_at_1": 0.0,
+    "verifier_pass_rate": 1.0,
+    "max_steps_exhausted_rate": 1.0,
+    "false_finish_rate": 0.0,
+    "mean_agent_tokens": 83224,
+    "mean_input_tokens": 80646,
+    "mean_output_tokens": 2578,
+    "mean_semantic_tokens": 0,
+    "mean_total_tokens_with_context": 83224,
+    "tokens_per_solved": 0.0,
+    "mean_latency_seconds": 141.68897666500197,
+    "p95_latency_seconds": 141.68897666500197,
+    "tool_calls": 12,
+    "context_trigger_rate": 0.0,
+    "semantic_calls": 0,
+    "semantic_error_count": 0,
+    "mean_max_pressure_ratio": null,
+    "status_distribution": {
+      "incomplete": 1
+    },
+    "termination_reason_distribution": {
+      "resource_exhausted": 1
+    },
+    "resource_reason_distribution": {
+      "max_steps": 1
+    },
+    "completion_rejections": 0,
+    "completion_rejection_reasons": {}
+  },
+  "comparison_v2_v3": [
+    {
+      "case_id": "huge-tool-history",
+      "variant": "baseline",
+      "v2_passed": false,
+      "v3_passed": false,
+      "v2_verifier_status": "passed",
+      "v3_verifier_status": "passed",
+      "v2_agent_status": "failed",
+      "v3_agent_status": "incomplete",
+      "v3_termination_reason": "resource_exhausted",
+      "v3_resource_reason": "max_steps",
+      "v2_total_tokens": 51762,
+      "v3_total_tokens": 83224,
+      "v2_latency_seconds": 68.47868911299884,
+      "v3_latency_seconds": 141.68897666500197
+    }
+  ]
+}

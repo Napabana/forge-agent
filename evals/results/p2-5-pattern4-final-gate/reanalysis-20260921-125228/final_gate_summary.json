@@ -1,0 +1,398 @@
+{
+  "mode": "replay_existing",
+  "provider_calls": 0,
+  "candidate_id": "candidate-80bb153c9f364a1c",
+  "candidate_skill": "experience-recovery-workflow-f06f6bad",
+  "pattern_id": "pattern-591db3daf06f6bad",
+  "evaluation_record_id": "evaluation-0410211f1f0a87c7",
+  "promotion_status": "reject",
+  "promotion_reasons": [
+    "candidate was not loaded when required: should-trigger-timeout-policy/r1",
+    "candidate process grader failed for should-trigger-timeout-policy/r1",
+    "candidate was not loaded when required: target-normalize-label/r1",
+    "candidate process grader failed for target-normalize-label/r1"
+  ],
+  "cases": [
+    {
+      "task_id": "non-regression-triple",
+      "role": "non_regression",
+      "baseline_success": true,
+      "candidate_success": true,
+      "baseline_required_graders_passed": true,
+      "candidate_required_graders_passed": true,
+      "candidate_loaded": false,
+      "candidate_process_passed": true,
+      "baseline_steps": 6,
+      "candidate_steps": 6,
+      "baseline_tokens": 28191,
+      "candidate_tokens": 32080,
+      "evaluation_failed": false,
+      "failure_reason": null
+    },
+    {
+      "task_id": "should-not-trigger-config",
+      "role": "should_not_trigger",
+      "baseline_success": true,
+      "candidate_success": true,
+      "baseline_required_graders_passed": true,
+      "candidate_required_graders_passed": true,
+      "candidate_loaded": false,
+      "candidate_process_passed": true,
+      "baseline_steps": 5,
+      "candidate_steps": 5,
+      "baseline_tokens": 16546,
+      "candidate_tokens": 25701,
+      "evaluation_failed": false,
+      "failure_reason": null
+    },
+    {
+      "task_id": "should-trigger-timeout-policy",
+      "role": "should_trigger",
+      "baseline_success": true,
+      "candidate_success": true,
+      "baseline_required_graders_passed": true,
+      "candidate_required_graders_passed": true,
+      "candidate_loaded": false,
+      "candidate_process_passed": false,
+      "baseline_steps": 7,
+      "candidate_steps": 7,
+      "baseline_tokens": 33152,
+      "candidate_tokens": 40306,
+      "evaluation_failed": false,
+      "failure_reason": null
+    },
+    {
+      "task_id": "target-normalize-label",
+      "role": "target",
+      "baseline_success": true,
+      "candidate_success": true,
+      "baseline_required_graders_passed": true,
+      "candidate_required_graders_passed": true,
+      "candidate_loaded": false,
+      "candidate_process_passed": false,
+      "baseline_steps": 8,
+      "candidate_steps": 7,
+      "baseline_tokens": 34504,
+      "candidate_tokens": 42542,
+      "evaluation_failed": false,
+      "failure_reason": null
+    }
+  ],
+  "evaluation_path": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/p2-5-pattern4-final-gate/reanalysis-20260921-125228/evaluation.json",
+  "decision_path": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/p2-5-pattern4-final-gate/reanalysis-20260921-125228/promotion_decision.json",
+  "auto_promoted": false,
+  "source_baseline_trials": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/p2-5-pattern4-final-gate/baseline/raw.jsonl",
+  "source_candidate_trials": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/p2-5-pattern4-final-gate/candidate/raw.jsonl",
+  "baseline_trial_diagnostics": [
+    {
+      "task_id": "target-normalize-label",
+      "variant": "evolution_baseline",
+      "run_status": "success",
+      "termination_reason": "completion_satisfied",
+      "acceptance_status": "passed",
+      "raw_trial_success": true,
+      "steps": 8,
+      "tokens": 34504,
+      "failure_classified_count": 2,
+      "recovery_selected_count": 2,
+      "skill_discovered_count": 0,
+      "skill_selected_count": 0,
+      "skill_loaded_count": 0,
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "passed": true,
+          "required": true,
+          "detail": "returncode=0, expected=0",
+          "evidence": {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "changed",
+          "kind": "repository_state",
+          "passed": true,
+          "required": true,
+          "detail": "changed=True, expected=True",
+          "evidence": {
+            "status_porcelain": " M label_utils.py\n?? __pycache__/\n?? tests/__pycache__/\n"
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "should-trigger-timeout-policy",
+      "variant": "evolution_baseline",
+      "run_status": "success",
+      "termination_reason": "completion_satisfied",
+      "acceptance_status": "passed",
+      "raw_trial_success": true,
+      "steps": 7,
+      "tokens": 33152,
+      "failure_classified_count": 2,
+      "recovery_selected_count": 2,
+      "skill_discovered_count": 0,
+      "skill_selected_count": 0,
+      "skill_loaded_count": 0,
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "passed": true,
+          "required": true,
+          "detail": "returncode=0, expected=0",
+          "evidence": {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": ""
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "should-not-trigger-config",
+      "variant": "evolution_baseline",
+      "run_status": "success",
+      "termination_reason": "completion_satisfied",
+      "acceptance_status": "passed",
+      "raw_trial_success": true,
+      "steps": 5,
+      "tokens": 16546,
+      "failure_classified_count": 0,
+      "recovery_selected_count": 0,
+      "skill_discovered_count": 0,
+      "skill_selected_count": 0,
+      "skill_loaded_count": 0,
+      "graders": [
+        {
+          "id": "value",
+          "kind": "command",
+          "passed": true,
+          "required": true,
+          "detail": "returncode=0, expected=0",
+          "evidence": {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": ""
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "non-regression-triple",
+      "variant": "evolution_baseline",
+      "run_status": "success",
+      "termination_reason": "completion_satisfied",
+      "acceptance_status": "passed",
+      "raw_trial_success": true,
+      "steps": 6,
+      "tokens": 28191,
+      "failure_classified_count": 0,
+      "recovery_selected_count": 0,
+      "skill_discovered_count": 0,
+      "skill_selected_count": 0,
+      "skill_loaded_count": 0,
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "passed": true,
+          "required": true,
+          "detail": "returncode=0, expected=0",
+          "evidence": {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": ""
+          }
+        }
+      ]
+    }
+  ],
+  "candidate_trial_diagnostics": [
+    {
+      "task_id": "target-normalize-label",
+      "variant": "evolution_candidate",
+      "run_status": "success",
+      "termination_reason": "completion_satisfied",
+      "acceptance_status": "passed",
+      "raw_trial_success": false,
+      "steps": 7,
+      "tokens": 42542,
+      "failure_classified_count": 2,
+      "recovery_selected_count": 2,
+      "skill_discovered_count": 1,
+      "skill_selected_count": 0,
+      "skill_loaded_count": 0,
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "passed": true,
+          "required": true,
+          "detail": "returncode=0, expected=0",
+          "evidence": {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "changed",
+          "kind": "repository_state",
+          "passed": true,
+          "required": true,
+          "detail": "changed=True, expected=True",
+          "evidence": {
+            "status_porcelain": " M label_utils.py\n?? __pycache__/\n?? tests/__pycache__/\n"
+          }
+        },
+        {
+          "id": "evolution-skill-trigger",
+          "kind": "skill_selection",
+          "passed": false,
+          "required": false,
+          "detail": "selected=[], expected_any=['experience-recovery-workflow-f06f6bad'], forbidden=[]",
+          "evidence": {
+            "selected_skills": []
+          }
+        },
+        {
+          "id": "evolution-recovery-motif",
+          "kind": "recovery_motif",
+          "passed": false,
+          "required": true,
+          "detail": "required ordered motif not observed: failure=no_progress, recovery=change_approach, skill=experience-recovery-workflow-f06f6bad, next=INSPECT",
+          "evidence": {
+            "failure_index": null,
+            "recovery_index": null,
+            "skill_index": null,
+            "next_operation": null
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "should-trigger-timeout-policy",
+      "variant": "evolution_candidate",
+      "run_status": "success",
+      "termination_reason": "completion_satisfied",
+      "acceptance_status": "passed",
+      "raw_trial_success": false,
+      "steps": 7,
+      "tokens": 40306,
+      "failure_classified_count": 2,
+      "recovery_selected_count": 2,
+      "skill_discovered_count": 1,
+      "skill_selected_count": 0,
+      "skill_loaded_count": 0,
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "passed": true,
+          "required": true,
+          "detail": "returncode=0, expected=0",
+          "evidence": {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "evolution-skill-trigger",
+          "kind": "skill_selection",
+          "passed": false,
+          "required": false,
+          "detail": "selected=[], expected_any=['experience-recovery-workflow-f06f6bad'], forbidden=[]",
+          "evidence": {
+            "selected_skills": []
+          }
+        },
+        {
+          "id": "evolution-recovery-motif",
+          "kind": "recovery_motif",
+          "passed": false,
+          "required": true,
+          "detail": "required ordered motif not observed: failure=no_progress, recovery=change_approach, skill=experience-recovery-workflow-f06f6bad, next=INSPECT",
+          "evidence": {
+            "failure_index": null,
+            "recovery_index": null,
+            "skill_index": null,
+            "next_operation": null
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "should-not-trigger-config",
+      "variant": "evolution_candidate",
+      "run_status": "success",
+      "termination_reason": "completion_satisfied",
+      "acceptance_status": "passed",
+      "raw_trial_success": true,
+      "steps": 5,
+      "tokens": 25701,
+      "failure_classified_count": 0,
+      "recovery_selected_count": 0,
+      "skill_discovered_count": 1,
+      "skill_selected_count": 0,
+      "skill_loaded_count": 0,
+      "graders": [
+        {
+          "id": "value",
+          "kind": "command",
+          "passed": true,
+          "required": true,
+          "detail": "returncode=0, expected=0",
+          "evidence": {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "evolution-skill-trigger",
+          "kind": "skill_selection",
+          "passed": true,
+          "required": false,
+          "detail": "selected=[], expected_any=[], forbidden=['experience-recovery-workflow-f06f6bad']",
+          "evidence": {
+            "selected_skills": []
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "non-regression-triple",
+      "variant": "evolution_candidate",
+      "run_status": "success",
+      "termination_reason": "completion_satisfied",
+      "acceptance_status": "passed",
+      "raw_trial_success": true,
+      "steps": 6,
+      "tokens": 32080,
+      "failure_classified_count": 0,
+      "recovery_selected_count": 0,
+      "skill_discovered_count": 1,
+      "skill_selected_count": 0,
+      "skill_loaded_count": 0,
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "passed": true,
+          "required": true,
+          "detail": "returncode=0, expected=0",
+          "evidence": {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": ""
+          }
+        }
+      ]
+    }
+  ]
+}

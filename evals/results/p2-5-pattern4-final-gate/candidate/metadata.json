@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "suite_id": "p2-5-recovery-motif-real-gate",
+  "variant": "evolution_candidate",
+  "repetitions": 1,
+  "task_count": 4,
+  "execution_status": "executed",
+  "evidence_kind": "real_model",
+  "real_model_executed": true,
+  "run_metadata": {
+    "provider": "openai",
+    "protocol": "auto",
+    "model": "deepseek-v4.1-flash",
+    "planning_mode": "off",
+    "recovery_mode": "structured",
+    "repo_map_mode": "none",
+    "trigger_no_progress_steps": 2,
+    "non_trigger_no_progress_steps": 6,
+    "candidate_pattern_id": "pattern-591db3daf06f6bad",
+    "evolution_candidate_id": "candidate-80bb153c9f364a1c",
+    "evolution_candidate_version": 1,
+    "evolution_candidate_hash": "88363e519e7d285a8058eb186261175a5ffba075f3a276fcfa599e9a4c36e5c5"
+  },
+  "claim_boundary": "Observed real-model trials are a small sample until repeated and frozen."
+}

@@ -1,0 +1,42 @@
+{
+    "schema_version": 2,
+    "task": {
+        "name": "tiangolo__typer-1788",
+        "type": "local",
+        "digest": "sha256:8a47b7ab746b1f499e78166a9dc043fdb028df2f987481a8abaa2b30e5542830",
+        "path": "<R2E_WORKSPACE>/pr-runtime/tiangolo__typer-1788"
+    },
+    "install_only": false,
+    "timeout_multiplier": 1.0,
+    "agent": {
+        "name": "forge_harbor_agent:ForgeHarborAgent",
+        "skip_model_parsing": false,
+        "skills": [],
+        "resume_trajectory": false,
+        "extra_allowed_hosts": [
+            "api.siliconflow.cn"
+        ],
+        "kwargs": {
+            "agent_timeout_sec": 5400,
+            "config_path": "<FORGE_HOST_ROOT>/r2e_forge_runtime_qwen38_27b_pilot_r1.yaml"
+        },
+        "mcp_servers": []
+    },
+    "bridge_inputs": {},
+    "skills": [],
+    "environment": {
+        "type": "docker",
+        "force_build": false,
+        "delete": true,
+        "stream": false,
+        "cpu_enforcement_policy": "auto",
+        "memory_enforcement_policy": "auto",
+        "extra_docker_compose": [],
+        "kwargs": {},
+        "extra_allowed_hosts": []
+    },
+    "verifier": {
+        "disable": false,
+        "environment_mode": "shared"
+    }
+}

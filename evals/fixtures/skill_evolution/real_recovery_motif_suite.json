@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "suite_id": "p2-5-recovery-motif-real-gate",
+  "description": "Small real-model final-gate suite for mined recovery motifs. Target cases deterministically lower the no-progress threshold in the dedicated runner; non-trigger cases keep the normal threshold.",
+  "defaults": {
+    "max_steps": 10,
+    "budget_tokens": 12000,
+    "trigger_no_progress_steps": 2,
+    "non_trigger_no_progress_steps": 6
+  },
+  "tasks": [
+    {
+      "id": "target-normalize-label",
+      "description": "Fix normalize_label(value) in label_utils.py to satisfy the repository contract. Before editing, inspect both label_utils.py and CONTRACT.md; do not guess the contract. Run the tests before finishing.",
+      "files": {
+        "label_utils.py": "def normalize_label(value):\n    return value.strip().lower()\n",
+        "CONTRACT.md": "# Label contract\n\nnormalize_label(value) must trim outer whitespace, lowercase the text, collapse each run of internal whitespace to a single hyphen, and return an empty string for whitespace-only input.\n",
+        "tests/test_label_utils.py": "from label_utils import normalize_label\n\n\ndef test_normalize_label():\n    assert normalize_label('  Hello   Agent  ') == 'hello-agent'\n    assert normalize_label('   ') == ''\n"
+      },
+      "reference_files": {
+        "label_utils.py": "def normalize_label(value):\n    return \"-\".join(value.strip().lower().split())\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "tags": ["evolution-target", "recovery-motif-target"],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": ["{python}", "-c", "from label_utils import normalize_label; assert normalize_label('  Hello   Agent  ') == 'hello-agent'; assert normalize_label('   ') == ''"]
+          }
+        },
+        {
+          "id": "changed",
+          "kind": "repository_state",
+          "params": {"changed": true}
+        }
+      ]
+    },
+    {
+      "id": "should-trigger-timeout-policy",
+      "description": "Fix retry_delay(attempt) in retry_policy.py to match SPEC.md. Before editing, inspect both retry_policy.py and SPEC.md; do not infer the rule from the function name. Run the tests before finishing.",
+      "files": {
+        "retry_policy.py": "def retry_delay(attempt):\n    return attempt\n",
+        "SPEC.md": "# Retry policy\n\nretry_delay(attempt) returns zero for attempt <= 0. For positive attempts it returns powers of two starting at 1: attempt 1 -> 1, 2 -> 2, 3 -> 4, 4 -> 8.\n",
+        "tests/test_retry_policy.py": "from retry_policy import retry_delay\n\n\ndef test_retry_delay():\n    assert retry_delay(0) == 0\n    assert retry_delay(1) == 1\n    assert retry_delay(2) == 2\n    assert retry_delay(4) == 8\n"
+      },
+      "reference_files": {
+        "retry_policy.py": "def retry_delay(attempt):\n    if attempt <= 0:\n        return 0\n    return 2 ** (attempt - 1)\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "tags": ["evolution-should-trigger", "recovery-motif-trigger"],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": ["{python}", "-c", "from retry_policy import retry_delay; assert retry_delay(0) == 0; assert retry_delay(1) == 1; assert retry_delay(2) == 2; assert retry_delay(4) == 8"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "should-not-trigger-config",
+      "description": "Change API_VERSION in config.py from 1 to 2. Make only that required change, run the tests, and finish.",
+      "files": {
+        "config.py": "API_VERSION = 1\n",
+        "tests/test_config.py": "import config\n\n\ndef test_api_version():\n    assert config.API_VERSION == 2\n"
+      },
+      "reference_files": {
+        "config.py": "API_VERSION = 2\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "tags": ["evolution-should-not-trigger", "configuration"],
+      "graders": [
+        {
+          "id": "value",
+          "kind": "command",
+          "params": {
+            "command": ["{python}", "-c", "import config; assert config.API_VERSION == 2"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "non-regression-triple",
+      "description": "Add triple(value) to math_utils.py while keeping double(value) unchanged. Run the tests before finishing.",
+      "files": {
+        "math_utils.py": "def double(value):\n    return value * 2\n",
+        "tests/test_math_utils.py": "from math_utils import double, triple\n\n\ndef test_math_utils():\n    assert double(4) == 8\n    assert triple(4) == 12\n"
+      },
+      "reference_files": {
+        "math_utils.py": "def double(value):\n    return value * 2\n\n\ndef triple(value):\n    return value * 3\n"
+      },
+      "require_changes": true,
+      "require_tests": true,
+      "tags": ["evolution-non-regression", "feature"],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": ["{python}", "-c", "from math_utils import double, triple; assert double(4) == 8; assert triple(4) == 12"]
+          }
+        }
+      ]
+    }
+  ]
+}

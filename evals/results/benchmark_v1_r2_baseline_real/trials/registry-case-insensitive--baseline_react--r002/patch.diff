@@ -1,0 +1,116 @@
+diff --git a/src/calc_core/policy.py b/src/calc_core/policy.py
+index 41350a5..42b220e 100644
+--- a/src/calc_core/policy.py
++++ b/src/calc_core/policy.py
+@@ -9,6 +9,8 @@ module-level mutable state.
+ from dataclasses import dataclass
+ from typing import FrozenSet, Optional
+ 
++from .registry import normalize_name
++
+ 
+ @dataclass(frozen=True)
+ class OperationPolicy:
+@@ -27,11 +29,22 @@ class OperationPolicy:
+     max_batch_size: Optional[int] = None
+     strict_validation: bool = False
+ 
++    def __post_init__(self) -> None:
++        if self.enabled_operations is not None:
++            object.__setattr__(
++                self,
++                "enabled_operations",
++                frozenset(normalize_name(n) for n in self.enabled_operations),
++            )
++
+     def is_operation_enabled(self, operation_name: str) -> bool:
+-        """Return whether ``operation_name`` is allowed by this policy."""
++        """Return whether ``operation_name`` is allowed by this policy.
++
++        Matching is case-insensitive and ignores surrounding whitespace.
++        """
+         if self.enabled_operations is None:
+             return True
+-        return operation_name in self.enabled_operations
++        return normalize_name(operation_name) in self.enabled_operations
+ 
+     def check_batch_size(self, size: int) -> bool:
+         """Return whether a batch of ``size`` items is within the limit.
+diff --git a/src/calc_core/registry.py b/src/calc_core/registry.py
+index 7994efb..82edb5c 100644
+--- a/src/calc_core/registry.py
++++ b/src/calc_core/registry.py
+@@ -7,6 +7,15 @@ from .errors import UnknownOperationError
+ Operation = Callable[..., object]
+ 
+ 
++def normalize_name(name: str) -> str:
++    """Return the canonical key for ``name``.
++
++    Names are matched case-insensitively and ignore surrounding
++    whitespace, so ``" Add "`` and ``"add"`` refer to the same operation.
++    """
++    return name.strip().lower()
++
++
+ class OperationRegistry:
+     """Store operations by name and resolve them back."""
+ 
+@@ -15,14 +24,15 @@ class OperationRegistry:
+ 
+     def register(self, name: str, operation: Operation) -> None:
+         """Register ``operation`` under ``name``."""
+-        self._operations[name] = operation
++        self._operations[normalize_name(name)] = operation
+ 
+     def resolve(self, name: str) -> Operation:
+         """Return the operation registered under ``name``.
+ 
++        Lookup is case-insensitive and tolerant of surrounding whitespace.
+         Raises UnknownOperationError if no such operation exists.
+         """
+         try:
+-            return self._operations[name]
++            return self._operations[normalize_name(name)]
+         except KeyError:
+             raise UnknownOperationError(name) from None
+\ No newline at end of file
+diff --git a/tests/test_calc_core.py b/tests/test_calc_core.py
+index 1b00ac0..d50a4df 100644
+--- a/tests/test_calc_core.py
++++ b/tests/test_calc_core.py
+@@ -65,6 +65,34 @@ def test_registry_unknown_name_raises_unknown_operation_error():
+         registry.resolve("missing")
+ 
+ 
++def test_registry_lookup_is_case_insensitive_and_strips_whitespace():
++    registry = OperationRegistry()
++    registry.register("add", add)
++    # Canonical lowercase still works.
++    assert registry.resolve("add") is add
++    # Mixed case and surrounding whitespace resolve to the same operation.
++    assert registry.resolve("ADD") is add
++    assert registry.resolve("Add") is add
++    assert registry.resolve("  add  ") is add
++    assert registry.resolve("  AdD\t") is add
++    # Registration is normalized too.
++    other = OperationRegistry()
++    other.register("  SuBtRaCt ", subtract)
++    assert other.resolve("subtract") is subtract
++    # Unknown names still raise with the original name preserved.
++    with pytest.raises(UnknownOperationError) as exc_info:
++        registry.resolve("  MiSsInG ")
++    assert exc_info.value.name == "  MiSsInG "
++
++
++def test_service_execute_is_case_insensitive_and_strips_whitespace():
++    service = CalculatorService()
++    assert service.execute("add", 2, 3) == 5
++    assert service.execute("ADD", 2, 3) == 5
++    assert service.execute("  SuBtRaCt  ", 5, 3) == 2
++    assert service.execute("DiViDe", 7, 2) == 3.5
++
++
+ # --- service ---------------------------------------------------------------
+ 
+ 

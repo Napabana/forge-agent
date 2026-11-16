@@ -1,0 +1,107 @@
+{
+  "metadata": {
+    "schema_version": 1,
+    "generated_at": "2026-09-16T14:47:24.772571+00:00",
+    "runner_revision": "840f158f10b7cda6298870532ee6fdf5aef11598",
+    "fixture_sha256": "18dfcebb3173eb996485eda3b39e552716accc398948117dbdf6f1b6baaaa4e5",
+    "python": "3.11.16",
+    "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+    "retrieval_case_count": 12,
+    "performance_runs": 5,
+    "strict": true
+  },
+  "retrieval": {
+    "case_count": 12,
+    "all_semantic_equivalent": true,
+    "all_ranking_equivalent": true,
+    "all_visible_equivalent": true,
+    "all_rendering_equivalent": true,
+    "all_equivalent": true,
+    "incremental_query_aware": {
+      "cases": 12,
+      "recall_at_1": 0.08333333333333333,
+      "recall_at_3": 0.20634920634920634,
+      "recall_at_5": 0.2561177248677249,
+      "mrr": 0.31875,
+      "mean_target_rank": 20.818121693121693,
+      "budget_target_recall": 0.6352513227513228,
+      "mean_map_tokens": 0
+    }
+  },
+  "frozen_comparison": {
+    "frozen_query_aware": {
+      "mrr": 0.31875,
+      "budget_target_recall": 0.6352513227513228,
+      "recall_at_1": 0.08333333333333333,
+      "recall_at_3": 0.20634920634920634,
+      "recall_at_5": 0.2561177248677249,
+      "mean_target_rank": 20.818121693121693
+    },
+    "incremental_query_aware": {
+      "mrr": 0.31875,
+      "budget_target_recall": 0.6352513227513228,
+      "recall_at_1": 0.08333333333333333,
+      "recall_at_3": 0.20634920634920634,
+      "recall_at_5": 0.2561177248677249,
+      "mean_target_rank": 20.818121693121693
+    },
+    "deltas": {
+      "mrr": 0.0,
+      "budget_target_recall": 0.0,
+      "recall_at_1": 0.0,
+      "recall_at_3": 0.0,
+      "recall_at_5": 0.0,
+      "mean_target_rank": 0.0
+    },
+    "tolerance": 1e-12,
+    "equivalent": true
+  },
+  "performance": {
+    "legacy_build_seconds": {
+      "runs": 5,
+      "median_seconds": 0.6097019150000165,
+      "p95_seconds": 0.6250595610000005
+    },
+    "cold_build_seconds": {
+      "runs": 5,
+      "median_seconds": 0.9605369140000022,
+      "p95_seconds": 0.9757440700000046
+    },
+    "warm_load_seconds": {
+      "runs": 5,
+      "median_seconds": 0.2967241139999999,
+      "p95_seconds": 0.30183638900000176
+    },
+    "query_rerank_seconds": {
+      "runs": 5,
+      "median_seconds": 0.2079893590000097,
+      "p95_seconds": 0.21436652900000297
+    },
+    "single_file_update_seconds": {
+      "runs": 5,
+      "median_seconds": 0.17000561999998354,
+      "p95_seconds": 0.17535328000001016
+    },
+    "multi_file_update_seconds": {
+      "runs": 5,
+      "median_seconds": 0.1766203190000084,
+      "p95_seconds": 0.18166241100001912
+    },
+    "full_rebuild_seconds": {
+      "runs": 5,
+      "median_seconds": 0.804536634999991,
+      "p95_seconds": 0.8051824679999982
+    },
+    "runs": 5,
+    "semantic_equivalent": true,
+    "warm_start_reparsed_zero_files": true,
+    "single_file_update_parsed_only_one": true,
+    "multi_file_update_parsed_only_two": true,
+    "working_tree_clean_after": true,
+    "mutation_paths": [
+      "context/repo_map.py",
+      "context/repository_state.py"
+    ]
+  },
+  "claim_boundary": "Retrieval metrics are the frozen commit-history protocol. Runtime numbers separate cold build, warm load, incremental update, and full rebuild; none is an end-to-end Agent latency claim."
+}

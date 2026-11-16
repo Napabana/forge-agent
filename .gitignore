@@ -1,0 +1,48 @@
+.venv/
+.venv-docs/
+.codex/
+.pytest_cache/
+*.egg-info/
+logs/
+__pycache__/
+*.pyc
+config/
+.claude
+.coverage
+htmlcov/
+site/
+/build/
+/dist/
+*.whl
+/NUL
+.yaml
+# Secrets — never commit API keys / tokens
+.env
+.env.*
+!.env.example
+
+# TaskEngine state (SQLite WAL)
+.forge/
+
+# Local-only collaboration details and historical documents
+/AGENTS.local.md
+/docs/**
+
+# Public project guidance and architecture knowledge base
+!/docs/README.md
+!/docs/PROJECT_STATE.md
+!/docs/source-navigation.md
+!/docs/interview-review.md
+!/docs/reference.md
+!/docs/design/
+!/docs/design/**
+!/docs/includes/
+!/docs/includes/**
+!/docs/stylesheets/
+!/docs/stylesheets/**
+!/docs/javascripts/
+!/docs/javascripts/**
+
+# Versioned architecture audit reports
+!/docs/research/
+!/docs/research/**

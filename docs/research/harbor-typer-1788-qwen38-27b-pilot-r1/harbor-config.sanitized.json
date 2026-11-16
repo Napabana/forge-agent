@@ -1,0 +1,18 @@
+{
+    "task": {
+        "path": "<R2E_WORKSPACE>/pr-runtime/tiangolo__typer-1788"
+    },
+    "trial_name": "tiangolo__typer-1788__2hqxjmQ",
+    "trials_dir": "<R2E_WORKSPACE>/experiments/first-python-task/forge-real/typer-1788-qwen38-27b-pilot-r1",
+    "agent": {
+        "name": "forge_harbor_agent:ForgeHarborAgent",
+        "extra_allowed_hosts": [
+            "api.siliconflow.cn"
+        ],
+        "kwargs": {
+            "agent_timeout_sec": 5400,
+            "config_path": "<FORGE_HOST_ROOT>/r2e_forge_runtime_qwen38_27b_pilot_r1.yaml"
+        }
+    },
+    "job_id": "c560a3e9-048a-448f-abb0-74486fbbd977"
+}

@@ -1,0 +1,180 @@
+diff --git a/calculator.py b/calculator.py
+index 458731a..38d039e 100644
+--- a/calculator.py
++++ b/calculator.py
+@@ -4,6 +4,6 @@ The operation implementations now live in ``src/calc_core/operations.py``.
+ These re-exports preserve the original public API exactly.
+ """
+ 
+-from calc_core.operations import add, clamp, divide, multiply, subtract
++from calc_core.operations import add, clamp, divide, multiply, power, subtract
+ 
+-__all__ = ["add", "subtract", "multiply", "divide", "clamp"]
+\ No newline at end of file
++__all__ = ["add", "subtract", "multiply", "divide", "clamp", "power"]
+\ No newline at end of file
+diff --git a/src/calc_core/__init__.py b/src/calc_core/__init__.py
+index 4c1e961..26f2bb5 100644
+--- a/src/calc_core/__init__.py
++++ b/src/calc_core/__init__.py
+@@ -1,6 +1,6 @@
+ """Public API for the calculator core package.
+ 
+-Re-exports the five operations, the error types, the operation registry
++Re-exports the core operations, the error types, the operation registry
+ and the high-level service so ``from calc_core import ...`` works.
+ """
+ 
+@@ -12,7 +12,7 @@ from .errors import (
+     OperationDisabledError,
+     UnknownOperationError,
+ )
+-from .operations import add, clamp, divide, multiply, subtract
++from .operations import add, clamp, divide, multiply, power, subtract
+ from .policy import OperationPolicy
+ from .registry import OperationRegistry
+ from .service import CalculatorService
+@@ -31,5 +31,6 @@ __all__ = [
+     "divide",
+     "multiply",
+     "operations",
++    "power",
+     "subtract",
+ ]
+\ No newline at end of file
+diff --git a/src/calc_core/operations.py b/src/calc_core/operations.py
+index bd3baee..eb33538 100644
+--- a/src/calc_core/operations.py
++++ b/src/calc_core/operations.py
+@@ -1,4 +1,4 @@
+-"""The five core calculator operations.
++"""The six core calculator operations.
+ 
+ These functions preserve the behavior of the original top-level
+ ``calculator.py`` implementation:
+@@ -37,4 +37,9 @@ def clamp(value: int, lower: int, upper: int) -> int:
+     """将 value 限制在 [lower, upper] 区间内；当 lower 大于 upper 时抛出 ValueError。"""
+     if lower > upper:
+         raise ValueError("lower must not exceed upper")
+-    return max(lower, min(value, upper))
+\ No newline at end of file
++    return max(lower, min(value, upper))
++
++
++def power(a: int, b: int) -> int:
++    """Return ``a`` raised to the power ``b`` (a ** b)."""
++    return a ** b
+\ No newline at end of file
+diff --git a/src/calc_core/service.py b/src/calc_core/service.py
+index 90654ae..6c9e33f 100644
+--- a/src/calc_core/service.py
++++ b/src/calc_core/service.py
+@@ -15,8 +15,8 @@ from .registry import OperationRegistry
+ class CalculatorService:
+     """Execute named arithmetic operations.
+ 
+-    A freshly constructed service has all five default operations
+-    registered: add, subtract, multiply, divide and clamp.
++    A freshly constructed service has all six default operations
++    registered: add, subtract, multiply, divide, clamp and power.
+ 
+     Behavior is governed by an optional :class:`OperationPolicy`. The
+     default policy preserves the original behavior: every registered
+@@ -29,6 +29,7 @@ class CalculatorService:
+         "multiply": operations.multiply,
+         "divide": operations.divide,
+         "clamp": operations.clamp,
++        "power": operations.power,
+     }
+ 
+     def __init__(
+diff --git a/tests/test_calc_core.py b/tests/test_calc_core.py
+index 1b00ac0..eb0fc5f 100644
+--- a/tests/test_calc_core.py
++++ b/tests/test_calc_core.py
+@@ -11,6 +11,7 @@ from calc_core import (
+     clamp,
+     divide,
+     multiply,
++    power,
+     subtract,
+ )
+ from calc_core import operations
+@@ -27,6 +28,13 @@ def test_operations_module_exposes_five_ops():
+     assert operations.clamp(5, 0, 10) == 5
+ 
+ 
++def test_operations_module_exposes_power():
++    assert operations.power(2, 3) == 8
++    assert operations.power(5, 0) == 1
++    assert operations.power(2, -1) == 0.5
++    assert operations.power(9, 0.5) == 3.0
++
++
+ def test_operations_divide_by_zero_raises():
+     with pytest.raises(ZeroDivisionError, match="division by zero"):
+         operations.divide(5, 0)
+@@ -70,7 +78,7 @@ def test_registry_unknown_name_raises_unknown_operation_error():
+ 
+ def test_service_has_all_default_operations():
+     service = CalculatorService()
+-    for name in ("add", "subtract", "multiply", "divide", "clamp"):
++    for name in ("add", "subtract", "multiply", "divide", "clamp", "power"):
+         assert service.registry.resolve(name) is not None
+ 
+ 
+@@ -81,6 +89,7 @@ def test_service_execute_dispatches_by_name():
+     assert service.execute("multiply", 4, 3) == 12
+     assert service.execute("divide", 7, 2) == 3.5
+     assert service.execute("clamp", 42, 0, 10) == 10
++    assert service.execute("power", 2, 5) == 32
+ 
+ 
+ def test_service_execute_unknown_operation_raises_unknown_operation_error():
+@@ -106,3 +115,10 @@ def test_facade_reexports_operations():
+     assert calculator.multiply is operations.multiply
+     assert calculator.divide is operations.divide
+     assert calculator.clamp is operations.clamp
++    assert calculator.power is operations.power
++
++
++def test_public_api_exposes_power():
++    assert power is operations.power
++    assert power(3, 2) == 9
++    assert "power" in __import__("calc_core").__all__
+diff --git a/tests/test_calculator.py b/tests/test_calculator.py
+index 5a93194..5446571 100644
+--- a/tests/test_calculator.py
++++ b/tests/test_calculator.py
+@@ -1,6 +1,6 @@
+ import pytest
+ 
+-from calculator import add, subtract, multiply, divide, clamp
++from calculator import add, subtract, multiply, divide, clamp, power
+ 
+ 
+ def test_add_positive_numbers():
+@@ -67,4 +67,20 @@ def test_clamp_equal_bounds():
+ def test_clamp_invalid_bounds_raises():
+     """下限大于上限时抛出 ValueError。"""
+     with pytest.raises(ValueError, match="lower must not exceed upper"):
+-        clamp(5, 10, 0)
+\ No newline at end of file
++        clamp(5, 10, 0)
++
++
++def test_power_positive_exponent():
++    assert power(2, 3) == 8
++
++
++def test_power_zero_exponent():
++    assert power(5, 0) == 1
++
++
++def test_power_negative_exponent():
++    assert power(2, -2) == 0.25
++
++
++def test_power_fractional_exponent():
++    assert power(9, 0.5) == 3.0
+\ No newline at end of file

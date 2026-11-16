@@ -1,0 +1,4 @@
+{"event_type":"task_start","task_id":"infrastructure","payload":{"run_id":"run-infrastructure","task":{"task_id":"infrastructure"}}}
+{"event_type":"tool_execution_started","task_id":"infrastructure","payload":{"tool_name":"shell"}}
+{"event_type":"acceptance","task_id":"infrastructure","payload":{"acceptance_status":"skipped"}}
+{"event_type":"run_terminated","task_id":"infrastructure","payload":{"run_id":"run-infrastructure","status":"failed","termination_reason":"infrastructure_error"}}

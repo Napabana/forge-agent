@@ -1,0 +1,13 @@
+diff --git a/src/calc_core/operations.py b/src/calc_core/operations.py
+index a3fe8d3..bd3baee 100644
+--- a/src/calc_core/operations.py
++++ b/src/calc_core/operations.py
+@@ -30,7 +30,7 @@ def divide(a: int, b: int) -> float:
+     """
+     if b == 0:
+         raise ZeroDivisionError("division by zero")
+-    return a // b
++    return a / b
+ 
+ 
+ def clamp(value: int, lower: int, upper: int) -> int:

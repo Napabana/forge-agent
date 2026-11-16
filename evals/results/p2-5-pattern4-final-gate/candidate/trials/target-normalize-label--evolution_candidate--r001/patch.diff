@@ -1,0 +1,9 @@
+--- a/label_utils.py
++++ b/label_utils.py
+@@ -1,2 +1,5 @@
++import re
++
++
+ def normalize_label(value):
+-    return value.strip().lower()
++    return re.sub(r"\s+", "-", value.strip().lower())

@@ -1,0 +1,31 @@
+{
+  "decision_id": "decision-27485676b7f40d21",
+  "status": "reject",
+  "candidate_id": "candidate-80bb153c9f364a1c",
+  "candidate_version": 1,
+  "candidate_hash": "88363e519e7d285a8058eb186261175a5ffba075f3a276fcfa599e9a4c36e5c5",
+  "evaluation_record_id": "evaluation-23fff45fc6bf750a",
+  "reasons": [
+    "candidate outcome failed for should-trigger-timeout-policy/r1",
+    "candidate regressed a baseline-success case: should-trigger-timeout-policy/r1",
+    "candidate was not loaded when required: should-trigger-timeout-policy/r1",
+    "candidate process grader failed for should-trigger-timeout-policy/r1",
+    "candidate outcome failed for target-normalize-label/r1",
+    "candidate regressed a baseline-success case: target-normalize-label/r1",
+    "candidate was not loaded when required: target-normalize-label/r1",
+    "candidate process grader failed for target-normalize-label/r1"
+  ],
+  "gate_config": {
+    "min_evidence_count": 2,
+    "max_step_overhead": 4,
+    "max_token_overhead_ratio": 0.5,
+    "max_token_overhead_absolute": 2000,
+    "required_roles": [
+      "target",
+      "should_trigger",
+      "should_not_trigger",
+      "non_regression"
+    ]
+  },
+  "created_at": "2026-09-21T12:42:25.784700+00:00"
+}

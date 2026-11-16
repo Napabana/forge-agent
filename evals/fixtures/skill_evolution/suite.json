@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "suite_id": "p2-5-skill-evolution-fixture",
+  "description": "Deterministic fixture suite for candidate Skill target/trigger/non-trigger/non-regression promotion checks.",
+  "defaults": {
+    "max_steps": 8,
+    "budget_tokens": 8000
+  },
+  "tasks": [
+    {
+      "id": "target-bug-fix",
+      "description": "Fix subtract(left, right) in calc.py so it returns left minus right.",
+      "files": {
+        "calc.py": "def subtract(left, right):\n    return left + right\n"
+      },
+      "reference_files": {
+        "calc.py": "def subtract(left, right):\n    return left - right\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": ["evolution-target", "bug-fix"],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from calc import subtract; assert subtract(7, 2) == 5"
+            ]
+          }
+        },
+        {
+          "id": "changed",
+          "kind": "repository_state",
+          "params": {
+            "changed": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "should-trigger-bug-fix",
+      "description": "Fix is_even(value) so odd values return False and even values return True.",
+      "files": {
+        "number.py": "def is_even(value):\n    return True\n"
+      },
+      "reference_files": {
+        "number.py": "def is_even(value):\n    return value % 2 == 0\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": ["evolution-should-trigger", "bug-fix"],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from number import is_even; assert is_even(4) is True; assert is_even(3) is False"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "should-not-trigger-config",
+      "description": "Update API_VERSION in config.py from 1 to 2 without changing any other behavior.",
+      "files": {
+        "config.py": "API_VERSION = 1\n"
+      },
+      "reference_files": {
+        "config.py": "API_VERSION = 2\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": ["evolution-should-not-trigger", "configuration"],
+      "graders": [
+        {
+          "id": "value",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "import config; assert config.API_VERSION == 2"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "non-regression-feature",
+      "description": "Add triple(value) to math_utils.py while keeping double(value) unchanged.",
+      "files": {
+        "math_utils.py": "def double(value):\n    return value * 2\n"
+      },
+      "reference_files": {
+        "math_utils.py": "def double(value):\n    return value * 2\n\n\ndef triple(value):\n    return value * 3\n"
+      },
+      "require_changes": true,
+      "require_tests": false,
+      "tags": ["evolution-non-regression", "feature"],
+      "graders": [
+        {
+          "id": "behavior",
+          "kind": "command",
+          "params": {
+            "command": [
+              "{python}",
+              "-c",
+              "from math_utils import double, triple; assert double(4) == 8; assert triple(4) == 12"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

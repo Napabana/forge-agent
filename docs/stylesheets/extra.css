@@ -1,0 +1,23 @@
+.md-grid {
+  max-width: 92rem;
+}
+
+.md-typeset .mermaid {
+  overflow-x: auto;
+  padding: 0.5rem 0;
+  text-align: center;
+}
+
+.md-typeset .mermaid svg {
+  height: auto;
+  max-width: 100%;
+}
+
+.md-typeset table:not([class]) {
+  display: table;
+  width: 100%;
+}
+
+.md-typeset code {
+  overflow-wrap: anywhere;
+}

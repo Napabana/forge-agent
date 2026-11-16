@@ -1,0 +1,143 @@
+#deepseek还用硅基流动的
+# llm:
+#   provider: openai
+#   #anthropic
+#   model: ${MODEL_ID}
+#   api_key: ${ANTHROPIC_API_KEY}
+#   base_url: ${ANTHROPIC_BASE_URL}
+#   max_tokens: 8192
+
+### Failed: LLM error: Error code: 403 - {'type': 'error', 'error': {'type': 'forbidden_error', 'message': 'your token is not authorized for any channel serving this model'}}
+# llm:
+#   provider: openai
+#   model: gpt-5.5
+#   api_key: ${KRILL_openai_API_KEY}
+#   base_url: https://api.krill-ai.net/codex/v1
+#   max_tokens: 1024
+
+#现在可以了，需要--no-stream运行
+# llm:
+#   provider: openai
+#   model: grok-4.5
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api-slb.krill-ai.net/v1
+#   max_tokens: 8192
+
+#这个能跑 krill说kimi支持两种provider: anthropic和openai
+# llm: 
+#   provider: anthropic
+#   model: kimi-k3
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api.krill-ai.net/coding
+#   max_tokens: 1024
+
+#这个也能跑，注意baseurl不同
+# llm: 
+#   provider: openai
+#   model: kimi-k3
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api-slb.krill-ai.net/coding/v1
+#   max_tokens: 1024
+
+#不行呀
+# llm:
+#   provider: anthropic
+#   model: claude-sonnet-4-6
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api.krill-ai.net/coding
+#   max_tokens: 1024
+
+
+# #"HTTP/1.1 500 Internal Server Error" 换一个UA再试试，先不管了
+# llm:
+#   provider: openai
+#   model: gemini-3.5-flash
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api-slb.krill-code.net/v1
+#   max_tokens: 8192
+
+# llm:
+#   provider: openai
+#   model: deepseek-v4-pro-0813
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api.krill-code.net/coding/v1 
+#   max_tokens: 8192
+
+#1.可以的
+# llm:
+#   provider: openai
+#   model: deepseek-v4.1-flash
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api.krill-code.net/coding/v1 
+#   # strict structured calling is opt-in until this compatible gateway is verified.
+#   strict_tool_schema: auto
+#   #https://api-slb.krill-ai.net/coding/v1
+#   context_window: 1000000
+#   model_max_output_tokens: 384000
+
+#   # Forge 这一次请求真正允许模型生成多少
+#   max_output_tokens: 50000
+
+# llm:
+#   provider: openai
+#   protocal: responses
+#   model: gpt-5.6-luna
+#   api_key: ${KRILL_API_KEY}
+#   base_url: https://api-slb.krill-code.net/codex/v1
+#   max_tokens: 8192
+
+# SILICONFLOW_API_KEY
+# llm:
+#   provider: openai
+#   model: deepseek-ai/DeepSeek-V4-Flash
+#   api_key: ${SILICONFLOW_API_KEY}
+#   base_url: https://api.siliconflow.cn/v1
+#   max_tokens: 8192
+
+llm:
+  provider: openai
+  model: Qwen/Qwen3.5-4B
+  api_key: ${SILICONFLOW_API_KEY}
+  base_url: https://api.siliconflow.cn/v1
+  strict_tool_schema: auto
+  # SiliconFlow 当前部署的实际窗口尚未在本仓库中核实，不伪造模型能力。
+  # context_window 留空时，Forge 使用下面的 context_budget_cap 作为保守 fallback。
+  # Forge 这一次请求真正允许模型生成多少
+  max_output_tokens: 8192
+
+agent:
+  max_steps: 40
+  planning_mode: "off" # off | auto | always；默认保持 baseline ReAct
+  recovery_mode: "off" # off | structured；P2-2 默认关闭以保持旧行为
+  recovery_max_attempts: 4
+  skills_enabled: false # P2-3 默认关闭；启用后仅 metadata 常驻，正文按需加载
+  skills_global_dir: "~/.forge-agent/skills"
+  skills_max_loaded: 3
+  skills_max_chars: 12000
+  skills_reference_max_chars: 8000
+  context_budget_cap: 131072 # Forge 运行期输入预算上限；不代表服务端原生窗口
+  context_safety_margin_tokens: 8192
+  log_dir: /home/jfm/.forge-agent/logs
+
+# MCP 默认关闭；server env 只显式传递这里声明的键值，不继承全部宿主环境。
+mcp:
+  enabled: false
+  servers: []
+
+tools:
+  shell:
+    timeout: 30 # 秒
+    max_output_tokens: 10000 # 截断长度
+  file:
+    max_view_lines: 100 # view 命令每次显示行数
+  test:
+    python_executable: null # null: LocalRuntime 使用当前 Python；DockerRuntime 使用 python3
+
+context:
+  repo_map_mode: incremental # none | static | query_aware | incremental
+  repo_map_budget: 12000 # Repo Map 硬上限，实际预算为 min(可用预算 * 15%, 此值)
+  compaction_mode: traceable # off | traceable；所有生产入口统一使用
+  compaction_threshold: 0.70
+  compaction_target_ratio: 0.50
+  compaction_keep_recent_tokens: 8000
+  history_window: 20 # deprecated：仅保留兼容，不会按消息数删除 canonical history

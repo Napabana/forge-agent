@@ -1,0 +1,79 @@
+{
+  "suite_id": "forge-agent-benchmark-v1-r2",
+  "task_id": "registry-contains-feature",
+  "trial_id": "registry-contains-feature--planning_recovery_skills--r001",
+  "variant": "planning_recovery_skills",
+  "repetition": 1,
+  "execution_status": "executed",
+  "evidence_kind": "real_model",
+  "real_model_executed": true,
+  "run_status": "success",
+  "termination_reason": "completion_satisfied",
+  "acceptance_status": "passed",
+  "success": true,
+  "metrics": {
+    "steps": 16,
+    "total_tokens": 169316,
+    "provider_usage": {
+      "llm_calls": 16,
+      "input_tokens": 165919,
+      "cached_tokens": 44288,
+      "cache_write_tokens": 0,
+      "output_tokens": 3397,
+      "reasoning_tokens": 0,
+      "estimated_calls": 0,
+      "unattributed_tokens": 0,
+      "total_tokens": 169316
+    },
+    "wall_time_seconds": 105.90566949599997,
+    "tool_call_count": 11,
+    "test_attempt_count": 1,
+    "completion_rejection_count": 0,
+    "reflection_count": 0,
+    "file_read_count": 3,
+    "shell_call_count": 4,
+    "plan_created_count": 1,
+    "plan_revision_count": 0,
+    "plan_step_completed_count": 2,
+    "planning_skipped": false,
+    "failure_classified_count": 3,
+    "recovery_selected_count": 3,
+    "recovery_replan_count": 0,
+    "recovery_exhausted_count": 0,
+    "skill_discovered_count": 3,
+    "skill_selected_count": 0,
+    "skill_loaded_count": 0,
+    "skill_reference_loaded_count": 0,
+    "mcp_tool_discovered_count": 0,
+    "mcp_tool_call_count": 0,
+    "mcp_tool_failure_count": 0
+  },
+  "grader_results": [
+    {
+      "grader_id": "behavior",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "skill-selection",
+      "kind": "skill_selection",
+      "passed": true,
+      "required": false,
+      "detail": "selected=[], expected_any=[], forbidden=['bug-fix', 'repository-navigation', 'test-and-verify']",
+      "evidence": {
+        "selected_skills": []
+      }
+    }
+  ],
+  "trace_ref": "trials/registry-contains-feature--planning_recovery_skills--r001/traces/registry-contains-feature--planning_recovery_skills--r001_20260922_161012.jsonl",
+  "patch_ref": "trials/registry-contains-feature--planning_recovery_skills--r001/patch.diff",
+  "final_state_ref": "trials/registry-contains-feature--planning_recovery_skills--r001/final_state.json",
+  "error": null
+}

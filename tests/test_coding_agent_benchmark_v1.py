@@ -1,0 +1,314 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+
+from evals.coding_agent.__main__ import (
+    _mcp_config_for_variant,
+    _planning_mode_for_variant,
+    _recovery_mode_for_variant,
+    _skills_enabled_for_variant,
+)
+from evals.coding_agent.runner import (
+    materialize_task_repo,
+    validate_suite_references,
+    write_not_executed,
+)
+from evals.coding_agent.schema import EvalTask, EvaluationSuite, RepositorySource
+from scripts.report_coding_agent_benchmark_v1 import (
+    BASELINE_VARIANT,
+    FULL_VARIANT,
+    build_summary,
+)
+
+ROOT = Path(__file__).parents[1]
+SUITE_PATH = ROOT / "evals" / "fixtures" / "coding_agent" / "benchmark_v1.json"
+REQUIRED_TAGS = {
+    "single-file-bug",
+    "single-file-feature",
+    "multi-file",
+    "navigation",
+    "recovery",
+    "change-approach",
+    "completion-guard",
+    "replan-candidate",
+    "skill-should-trigger",
+    "skill-should-not-trigger",
+}
+
+
+def _suite_sha256() -> str:
+    value = json.loads(SUITE_PATH.read_text(encoding="utf-8"))
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _run_metadata(*, full: bool) -> dict[str, object]:
+    return {
+        "provider": "openai",
+        "protocol": "chat_completions",
+        "model": "test-model",
+        "suite_sha256": _suite_sha256(),
+        "source_repository": "Napabana/pr-test",
+        "source_commit": "23019998f2e801e79dea59fd23fc49c58fc20038",
+        "max_steps": 30,
+        "budget_tokens": 60000,
+        "repo_map_mode": "incremental",
+        "planning_mode": "always" if full else "off",
+        "recovery_mode": "structured" if full else "off",
+        "skills_enabled": full,
+        "mcp_enabled": False,
+        "mcp_server_ids": [],
+    }
+
+
+def _write_real_artifact(
+    root: Path,
+    suite: EvaluationSuite,
+    *,
+    variant: str,
+    full: bool,
+    failed: set[tuple[str, int]] = frozenset(),
+) -> None:
+    root.mkdir()
+    metadata = {
+        "schema_version": 1,
+        "suite_id": suite.suite_id,
+        "variant": variant,
+        "repetitions": 2,
+        "task_count": len(suite.tasks),
+        "planned_trial_count": len(suite.tasks) * 2,
+        "execution_status": "executed",
+        "real_model_executed": True,
+        "run_metadata": _run_metadata(full=full),
+    }
+    (root / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    rows = []
+    for repetition in (1, 2):
+        for index, task in enumerate(suite.tasks):
+            success = (task.task_id, repetition) not in failed
+            should_trigger = "skill-should-trigger" in task.tags
+            should_not_trigger = "skill-should-not-trigger" in task.tags
+            loaded = bool(full and should_trigger)
+            graders = []
+            if should_trigger or should_not_trigger:
+                graders.append({
+                    "grader_id": "skill-selection",
+                    "kind": "skill_selection",
+                    "passed": loaded if should_trigger else not loaded,
+                    "required": False,
+                    "detail": "synthetic",
+                    "evidence": {"selected_skills": ["synthetic"] if loaded else []},
+                })
+            rows.append({
+                "suite_id": suite.suite_id,
+                "task_id": task.task_id,
+                "trial_id": f"{task.task_id}--{variant}--r{repetition:03d}",
+                "variant": variant,
+                "repetition": repetition,
+                "execution_status": "executed",
+                "evidence_kind": "real_model",
+                "real_model_executed": True,
+                "run_status": "success" if success else "gave_up",
+                "termination_reason": "completion_satisfied" if success else "model_gave_up",
+                "acceptance_status": "passed" if success else "not_run",
+                "success": success,
+                "metrics": {
+                    "steps": 4 + index,
+                    "total_tokens": 1000 + index * 100,
+                    "wall_time_seconds": 2.0 + index / 10,
+                    "test_attempt_count": 1 if "tests" in task.tags else 0,
+                    "completion_rejection_count": 0,
+                    "plan_revision_count": int(full and "replan-candidate" in task.tags),
+                    "recovery_selected_count": int(full and "recovery" in task.tags),
+                    "skill_selected_count": int(loaded),
+                    "skill_loaded_count": int(loaded),
+                },
+                "grader_results": graders,
+            })
+    (root / "raw.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+
+
+def test_benchmark_v1_suite_has_frozen_real_repository_identity_and_coverage():
+    suite = EvaluationSuite.load(SUITE_PATH)
+    assert suite.suite_id == "forge-agent-benchmark-v1-r2"
+    assert len(suite.tasks) == 12
+    assert suite.defaults == {"max_steps": 30, "budget_tokens": 60000}
+    assert suite.source == RepositorySource(
+        "Napabana/pr-test",
+        "23019998f2e801e79dea59fd23fc49c58fc20038",
+    )
+    tags = {tag for task in suite.tasks for tag in task.tags}
+    assert REQUIRED_TAGS <= tags
+    assert sum("skill-should-trigger" in task.tags for task in suite.tasks) >= 4
+    assert sum("skill-should-not-trigger" in task.tags for task in suite.tasks) >= 2
+    assert sum("recovery" in task.tags for task in suite.tasks) >= 3
+    required_file_graders = [
+        grader
+        for task in suite.tasks
+        for grader in task.graders
+        if grader.required and grader.kind == "file"
+    ]
+    assert required_file_graders == []
+    test_change_tasks = {
+        task.task_id
+        for task in suite.tasks
+        if any(grader.grader_id == "test-change" and grader.required for grader in task.graders)
+    }
+    assert test_change_tasks == {
+        "runtime-policy-mode-live",
+        "power-operation-integration",
+        "registry-case-insensitive",
+        "policy-deny-list",
+        "batch-stop-on-error",
+        "custom-registry-preserve-overrides",
+    }
+
+
+def test_real_repository_materialization_uses_exact_commit_and_strips_history(tmp_path: Path):
+    source = tmp_path / "source"
+    source.mkdir()
+    import subprocess
+
+    def git(repo: Path, *args: str) -> str:
+        completed = subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        )
+        return completed.stdout.strip()
+
+    git(source, "init", "-q")
+    git(source, "config", "user.email", "eval@example.invalid")
+    git(source, "config", "user.name", "Eval")
+    (source / "value.py").write_text("VALUE = 1\n", encoding="utf-8")
+    git(source, "add", "-A")
+    git(source, "commit", "-qm", "source")
+    source_commit = git(source, "rev-parse", "HEAD")
+
+    task = EvalTask.from_dict({
+        "id": "external-task",
+        "description": "Fix VALUE.",
+        "files": {"value.py": "VALUE = 0\n"},
+        "reference_files": {"value.py": "VALUE = 2\n"},
+        "graders": [{
+            "id": "value",
+            "kind": "command",
+            "params": {"command": ["{python}", "-c", "import value; assert value.VALUE == 2"]},
+        }],
+    })
+    suite = EvaluationSuite(
+        "external-suite",
+        (task,),
+        source=RepositorySource("example/source", source_commit),
+    )
+    validated = validate_suite_references(
+        suite,
+        tmp_path / "references",
+        source_repo_path=source,
+    )
+    assert validated == {"external-task": ["value"]}
+
+    trial = materialize_task_repo(
+        task,
+        tmp_path / "trial",
+        source_repo_path=source,
+        source_commit=source_commit,
+    )
+    assert (trial / "value.py").read_text(encoding="utf-8") == "VALUE = 0\n"
+    assert git(trial, "rev-list", "--count", "HEAD") == "1"
+    missing = subprocess.run(
+        ["git", "cat-file", "-e", f"{source_commit}^{{commit}}"],
+        cwd=trial,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing.returncode != 0
+
+
+def test_benchmark_v1_variant_mapping_keeps_mcp_out_of_main_ab():
+    assert _planning_mode_for_variant(BASELINE_VARIANT) == "off"
+    assert _recovery_mode_for_variant(BASELINE_VARIANT) == "off"
+    assert _skills_enabled_for_variant(BASELINE_VARIANT) is False
+    assert _mcp_config_for_variant(BASELINE_VARIANT).enabled is False
+
+    assert _planning_mode_for_variant(FULL_VARIANT) == "always"
+    assert _recovery_mode_for_variant(FULL_VARIANT) == "structured"
+    assert _skills_enabled_for_variant(FULL_VARIANT) is True
+    assert _mcp_config_for_variant(FULL_VARIANT).enabled is False
+
+
+def test_benchmark_v1_dry_run_records_24_planned_trials_and_frozen_metadata(tmp_path: Path):
+    suite = EvaluationSuite.load(SUITE_PATH)
+    report = write_not_executed(
+        suite,
+        tmp_path / "dry",
+        variant=FULL_VARIANT,
+        repetitions=2,
+        reason="benchmark_v1_freeze_check",
+        run_metadata=_run_metadata(full=True),
+    )
+    metadata = json.loads((tmp_path / "dry" / "metadata.json").read_text(encoding="utf-8"))
+    assert report["planned_trial_count"] == 24
+    assert metadata["planned_trial_count"] == 24
+    assert metadata["run_metadata"]["suite_sha256"] == _suite_sha256()
+    assert metadata["run_metadata"]["max_steps"] == 30
+    assert metadata["run_metadata"]["budget_tokens"] == 60000
+    assert metadata["real_model_executed"] is False
+
+
+def test_benchmark_v1_summary_uses_successful_only_metrics_and_complete_pairs(tmp_path: Path):
+    suite = EvaluationSuite.load(SUITE_PATH)
+    baseline_failed = {(suite.tasks[0].task_id, 1), (suite.tasks[1].task_id, 1)}
+    full_failed = {(suite.tasks[1].task_id, 1)}
+    baseline_dir, full_dir = tmp_path / "baseline", tmp_path / "full"
+    _write_real_artifact(
+        baseline_dir, suite, variant=BASELINE_VARIANT, full=False, failed=baseline_failed
+    )
+    _write_real_artifact(
+        full_dir, suite, variant=FULL_VARIANT, full=True, failed=full_failed
+    )
+    summary = build_summary(
+        suite_path=SUITE_PATH,
+        baseline_dir=baseline_dir,
+        full_dir=full_dir,
+    )
+    assert summary["planned_trials"] == 48
+    assert summary["primary_metric"]["baseline"]["observed_successes"] == 22
+    assert summary["primary_metric"]["full_p2"]["observed_successes"] == 23
+    assert summary["paired_outcomes"] == {"full_p2_wins": 1, "full_p2_losses": 0, "ties": 23}
+    assert summary["baseline"]["successful_only"]["steps"]["count"] == 22
+    assert summary["baseline"]["all_trials_audit"]["steps"]["count"] == 24
+    assert summary["full_p2"]["skills"]["false_trigger_rate"] == 0.0
+
+
+def test_benchmark_v1_summary_rejects_budget_drift(tmp_path: Path):
+    suite = EvaluationSuite.load(SUITE_PATH)
+    baseline_dir, full_dir = tmp_path / "baseline", tmp_path / "full"
+    _write_real_artifact(baseline_dir, suite, variant=BASELINE_VARIANT, full=False)
+    _write_real_artifact(full_dir, suite, variant=FULL_VARIANT, full=True)
+    metadata_path = full_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["run_metadata"]["budget_tokens"] = 50000
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="fairness violation"):
+        build_summary(suite_path=SUITE_PATH, baseline_dir=baseline_dir, full_dir=full_dir)
+
+def test_benchmark_v1_summary_rejects_source_commit_drift(tmp_path: Path):
+    suite = EvaluationSuite.load(SUITE_PATH)
+    baseline_dir, full_dir = tmp_path / "baseline", tmp_path / "full"
+    _write_real_artifact(baseline_dir, suite, variant=BASELINE_VARIANT, full=False)
+    _write_real_artifact(full_dir, suite, variant=FULL_VARIANT, full=True)
+    metadata_path = full_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["run_metadata"]["source_commit"] = "0" * 40
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="source_commit"):
+        build_summary(suite_path=SUITE_PATH, baseline_dir=baseline_dir, full_dir=full_dir)
+

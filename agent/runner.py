@@ -1,0 +1,693 @@
+"""Shared execution composition root for CLI, Chat, API, and fix-pr."""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import hashlib
+import logging
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Callable
+
+from agent.core import Agent, AgentConfig, PrepareNextTurn
+from agent.event_log import EventLog
+from agent.orchestrate import orchestrate_run
+from agent.task import EventType, RunResult, RunStatus, Task
+from agent.trace_v2 import bind_trace_context
+from context.history import ConversationHistory
+from context.repo_map import RepoMap
+from context.token_budget import TokenBudget
+from config.schema import MCPConfig
+from harness import ExecutionConstraints, Hooks, PermissionManager, ToolExecutor
+from llm.usage import SessionUsage
+from mcp_integration.registry import attach_mcp_tools
+from runtime.worktree import WorktreeResultPolicy
+from task.engine import TaskEngine, TaskNotFound
+from tools.base import ToolRegistry
+
+logger = logging.getLogger(__name__)
+
+
+def _merge_worker_usage(result: RunResult, coordinator, log: EventLog) -> None:
+    if not coordinator.delegation_count:
+        return
+    usage = coordinator.usage
+    result.worker_usage = usage.snapshot()
+    result.usage.add(usage)
+    result.total_tokens = result.usage.total_tokens
+    if not coordinator.usage_complete:
+        result.usage_complete = False
+    log.log_trace(EventType.WORKERS_SUMMARY, result.steps_taken,
+                  parent_task_id=result.task_id, worker_usage=usage.to_dict(),
+                  usage_complete=coordinator.usage_complete,
+                  worker_count=coordinator.worker_count,
+                  worker_failure_count=coordinator.worker_failure_count,
+                  worker_tool_calls=coordinator.worker_tool_calls)
+
+
+def _merge_context_policy_usage(result: RunResult, callback) -> None:
+    """Include semantic-compaction side calls in the run's provider usage totals."""
+    consume = getattr(callback, "consume_usage", None)
+    if not callable(consume):
+        return
+    side_usage = consume()
+    if side_usage is None or (
+        not side_usage.llm_calls and not side_usage.total_tokens
+    ):
+        return
+    if result.usage is None:
+        result.usage = SessionUsage()
+    result.usage.add(side_usage)
+    result.total_tokens = result.usage.total_tokens
+
+
+@dataclass(frozen=True)
+class AcceptanceContract:
+    require_changes: bool = False
+    require_tests: bool = False
+    required_paths: tuple[str, ...] = ()
+    forbidden_paths: tuple[str, ...] = ()
+    verifier: Callable[[Path], bool] | None = None  # Runner 持有，不写入 Agent History
+
+    @classmethod
+    def from_task(cls, task: Task) -> "AcceptanceContract":
+        return cls(task.require_changes, task.require_tests)
+
+    def apply(self, task: Task) -> Task:
+        return dataclasses.replace(
+            task,
+            require_changes=self.require_changes,
+            require_tests=self.require_tests,
+        )
+
+    def has_independent_checks(self) -> bool:
+        return bool(self.required_paths or self.forbidden_paths or self.verifier)
+
+
+@dataclass
+class RunRequest:
+    task: Task
+    history: ConversationHistory | None = None
+    isolate: bool = False
+    sandbox: bool = False
+    hooks: Hooks | None = None
+    permission: PermissionManager | None = None
+    cancel_event: object | None = None
+    prepare_next_turn: PrepareNextTurn | None = None
+    result_policy: WorktreeResultPolicy | str = WorktreeResultPolicy.KEEP_IF_CHANGED
+    acceptance: AcceptanceContract | None = None
+    session_id: str | None = None
+    # Product entrypoints may set this explicitly. None keeps current callers
+    # compatible and resolves from the existing request shape.
+    entrypoint: str | None = None
+    execution_constraints: ExecutionConstraints = ExecutionConstraints()
+
+
+class ExecutionRunner:
+    """Keep product-specific I/O outside the shared execution lifecycle."""
+
+    def __init__(
+        self,
+        *,
+        backend,
+        registry: ToolRegistry,
+        config: AgentConfig | None = None,
+        log_dir: str = "./logs",
+        registry_builder: Callable | None = None,
+        engine: TaskEngine | None = None,
+        confirm_callback=None,
+        bus=None,
+        mcp_config: MCPConfig | None = None,
+        worker_backend_factory: Callable[[str], object] | None = None,
+    ) -> None:
+        self.backend = backend
+        self.registry = registry
+        self.config = config or AgentConfig()
+        self.log_dir = log_dir
+        self.registry_builder = registry_builder
+        self.engine = engine
+        self.confirm_callback = confirm_callback
+        self.bus = bus
+        self.mcp_config = mcp_config
+        self.worker_backend_factory = worker_backend_factory
+        self._mcp_manager = None
+        self._owned_worker_engine = None
+        executor = ToolExecutor(
+            registry,
+            hooks=self.config.hooks,
+            confirm_callback=confirm_callback,
+        )
+        self.agent = Agent(backend, registry, self.config, executor=executor)
+        self._agent_key = None
+
+    def run(
+        self,
+        request: RunRequest,
+        *,
+        log: EventLog | None = None,
+        on_event=None,
+        on_log_created=None,
+    ) -> RunResult:
+        acceptance = request.acceptance or AcceptanceContract.from_task(request.task)
+        task = acceptance.apply(request.task)
+        entrypoint = _resolve_entrypoint(request)
+        contract_paths, path_error = _normalize_contract_paths(
+            acceptance.required_paths + acceptance.forbidden_paths
+        )
+        path_baseline, snapshot_error = (
+            (None, None)
+            if request.isolate or path_error
+            else _snapshot_paths(Path(task.repo_path), contract_paths)
+        )
+        acceptance_setup_error = path_error or snapshot_error
+        config = dataclasses.replace(
+            self.config,
+            hooks=request.hooks if request.hooks is not None else self.config.hooks,
+            cancel_event=(
+                request.cancel_event
+                if request.cancel_event is not None
+                else self.config.cancel_event
+            ),
+            prepare_next_turn=(
+                request.prepare_next_turn
+                if request.prepare_next_turn is not None
+                else self.config.prepare_next_turn
+            ),
+        )
+        if config.run_profile == "sandboxed" and not request.sandbox:
+            raise ValueError("sandboxed run profile requires Docker sandbox")
+        if config.run_profile == "safe":
+            request = dataclasses.replace(request, execution_constraints=ExecutionConstraints(read_only=True))
+        if config.run_profile == "benchmark":
+            config = dataclasses.replace(
+                config,
+                max_model_calls=config.max_model_calls or config.max_steps,
+                max_total_tokens=config.max_total_tokens or 100_000,
+            )
+        coordinator = None
+        owned_parent_engine = None
+
+        if request.isolate:
+            if request.history is not None:
+                raise ValueError("isolated runs do not support shared history")
+            if self.registry_builder is None:
+                raise ValueError("isolated runs require registry_builder")
+            engine = self.engine or TaskEngine(Path(self.log_dir) / "tasks.db")
+            trace_path = None
+
+            def log_created(task_id: str, path: str) -> None:
+                nonlocal trace_path
+                trace_path = path
+                if on_log_created is not None:
+                    on_log_created(task_id, path)
+
+            try:
+                # ContextVar propagation lets orchestrate_run/EventLog.create inherit
+                # product metadata without adding product concerns to orchestrator APIs.
+                with bind_trace_context(
+                    entrypoint=entrypoint,
+                    session_id=request.session_id,
+                ):
+                    result = asyncio.run(orchestrate_run(
+                        backend=self.backend,
+                        task=task,
+                        engine=engine,
+                        registry_builder=self.registry_builder,
+                        bus=self.bus,
+                        log_dir=self.log_dir,
+                        sandbox=request.sandbox,
+                        config=config,
+                        confirm_callback=self.confirm_callback,
+                        result_policy=request.result_policy,
+                        on_log_created=log_created,
+                        on_event=on_event,
+                        mcp_config=None if config.run_profile == "safe" else self.mcp_config,
+                        execution_constraints=request.execution_constraints,
+                        coordinator_factory=(self._make_coordinator if config.multi_agent_enabled else None),
+                    ))
+            except BaseException as exc:
+                if trace_path:
+                    _record_exception_trace(
+                        trace_path,
+                        task_id=task.task_id,
+                        entrypoint=entrypoint,
+                        session_id=request.session_id,
+                        error=exc,
+                    )
+                raise
+
+            _merge_context_policy_usage(result, config.prepare_next_turn)
+            _normalize_isolated_failure(result)
+            # Orchestrator attaches worker usage before returning.
+            result.trace_path = trace_path
+            _apply_independent_acceptance(
+                acceptance,
+                task,
+                result,
+                contract_paths,
+                path_baseline,
+                acceptance_setup_error,
+            )
+            if trace_path:
+                _record_post_run_trace(
+                    trace_path,
+                    result=result,
+                    acceptance_requested=acceptance.has_independent_checks(),
+                    entrypoint=entrypoint,
+                    session_id=request.session_id,
+                    on_event=on_event,
+                )
+            return result
+
+        if config.run_profile != "safe":
+            self._ensure_direct_mcp()
+        if config.multi_agent_enabled:
+            worker_engine = self.engine or self._worker_engine()
+            try:
+                worker_engine.get_task(task.task_id)
+            except TaskNotFound:
+                worker_engine.create_task(task.description[:80], task.description,
+                                          agent_id="lead", role="lead", task_id=task.task_id)
+                worker_engine.claim_task(task.task_id, owner="lead")
+                owned_parent_engine = worker_engine
+            coordinator = self._make_coordinator(
+                task.repo_path, task.task_id, config,
+                worker_engine,
+            )
+            from agent.coordinator import DelegateTasksTool
+            existing = self.registry.get_tool("delegate_tasks")
+            if existing is None:
+                self.registry.register(DelegateTasksTool(coordinator))
+            elif isinstance(existing, DelegateTasksTool):
+                existing.coordinator = coordinator
+            else:
+                raise ValueError("delegate_tasks is already registered by another tool")
+        else:
+            from agent.coordinator import DelegateTasksTool
+            if isinstance(self.registry.get_tool("delegate_tasks"), DelegateTasksTool):
+                self.registry.unregister("delegate_tasks")
+        executor = ToolExecutor(
+            self.registry,
+            hooks=config.hooks,
+            permission=request.permission or PermissionManager(
+                workspace=task.repo_path, registry=self.registry,
+                constraints=request.execution_constraints,
+                approval_mode=config.approval_mode,
+            ),
+            confirm_callback=self.confirm_callback,
+            constraints=request.execution_constraints,
+        )
+        key = (
+            id(config.hooks),
+            id(config.cancel_event),
+            id(config.prepare_next_turn),
+            id(request.permission),
+            config.repo_map_mode,
+            config.repo_map_budget,
+            config.repo_map_summary_budget,
+            config.repo_map_cache_dir,
+            config.run_profile,
+            config.finish_policy,
+            config.multi_agent_enabled,
+            config.max_model_calls,
+            config.max_total_tokens,
+            request.execution_constraints,
+        )
+        if key != self._agent_key:
+            if self._agent_key is None:
+                self.agent._cfg = config
+                self.agent._executor = executor
+            else:
+                self.agent = Agent(self.backend, self.registry, config, executor=executor)
+            self._agent_key = key
+
+        own_log = log is None
+        log = log or EventLog.create(
+            task,
+            log_dir=self.log_dir,
+            session_id=request.session_id,
+            entrypoint=entrypoint,
+        )
+        log.configure_trace(entrypoint=entrypoint, session_id=request.session_id)
+        if on_log_created is not None:
+            on_log_created(task.task_id, str(log.path))
+        if on_event is not None:
+            log.on_append(on_event)
+        self._record_mcp_capabilities(log)
+        try:
+            preparation_result = self._prepare_shared_history_boundary(
+                task=task,
+                history=request.history,
+                callback=config.prepare_next_turn,
+                log=log,
+                config=config,
+            )
+            result = (
+                preparation_result
+                if preparation_result is not None
+                else self.agent.run(task, log, history=request.history)
+            )
+            _merge_context_policy_usage(result, config.prepare_next_turn)
+            if coordinator is not None:
+                _merge_worker_usage(result, coordinator, log)
+            result.trace_path = str(log.path)
+            _apply_independent_acceptance(
+                acceptance,
+                task,
+                result,
+                contract_paths,
+                path_baseline,
+                acceptance_setup_error,
+            )
+            _record_post_run_trace_log(
+                log,
+                result=result,
+                acceptance_requested=acceptance.has_independent_checks(),
+            )
+            if owned_parent_engine is not None:
+                (owned_parent_engine.complete_task if result.is_success() else owned_parent_engine.fail_task)(task.task_id)
+            return result
+        except BaseException as exc:
+            try:
+                log.log_run_exception(task_id=task.task_id, error=exc)
+            except Exception as trace_exc:  # noqa: BLE001 — trace is best-effort
+                logger.warning("Failed to record runner exception trace: %s", trace_exc)
+            if owned_parent_engine is not None:
+                owned_parent_engine.fail_task(task.task_id)
+            raise
+        finally:
+            if on_event is not None:
+                log.on_append(None)
+            if own_log:
+                log.close()
+
+    def _make_coordinator(self, repo_path, parent_task_id, config, engine):
+        if self.worker_backend_factory is None:
+            raise ValueError("multi-agent requires a fresh worker backend factory")
+        from agent.coordinator import AgentCoordinator
+        if self.registry_builder is None:
+            from entry.cli import _build_run_registry
+            registry_builder = _build_run_registry
+        else:
+            registry_builder = self.registry_builder
+        return AgentCoordinator(
+            repo_path=repo_path, log_dir=self.log_dir, parent_task_id=parent_task_id,
+            backend_factory=self.worker_backend_factory, registry_factory=registry_builder,
+            agent_config=config, engine=engine, cancel_event=config.cancel_event,
+            max_workers=config.max_workers, max_tasks=config.max_delegate_tasks,
+            total_tokens=config.total_worker_tokens, timeout_seconds=config.worker_timeout_seconds,
+            sandbox_workers=config.run_profile == "sandboxed",
+        )
+
+    def _worker_engine(self):
+        if self._owned_worker_engine is None:
+            self._owned_worker_engine = TaskEngine(Path(self.log_dir) / "tasks.db")
+        return self._owned_worker_engine
+
+    def _record_mcp_capabilities(self, log: EventLog) -> None:
+        if self._mcp_manager is None:
+            return
+        for snapshot in self._mcp_manager.snapshots:
+            log.log_trace(
+                EventType.MCP_SERVER_CAPABILITIES,
+                0,
+                **dataclasses.asdict(snapshot),
+            )
+
+    def _ensure_direct_mcp(self) -> None:
+        if self._mcp_manager is None and self.mcp_config is not None and self.mcp_config.enabled:
+            self._mcp_manager = attach_mcp_tools(self.registry, self.mcp_config)
+
+    def close(self) -> None:
+        """Close long-lived external capability connections owned by this Runner."""
+        if self._mcp_manager is not None:
+            manager, self._mcp_manager = self._mcp_manager, None
+            manager.close()
+        if self._owned_worker_engine is not None:
+            self._owned_worker_engine.close()
+            self._owned_worker_engine = None
+
+    def _prepare_shared_history_boundary(
+        self,
+        *,
+        task: Task,
+        history: ConversationHistory | None,
+        callback: PrepareNextTurn | None,
+        log: EventLog,
+        config: AgentConfig,
+    ) -> RunResult | None:
+        """已有共享历史的新 run 在第一次模型调用前复用 Agent prepare 生命周期。
+
+        Fresh task / fresh Chat round 只有当前 user message，不进入该路径；Agent.run
+        内部 step>1 继续调用相同的 ``Agent._prepare_next_turn``。因此首轮共享历史
+        与后续 turn 对 prepare failure / cancel / Trace 使用同一生产语义。
+        """
+        if history is None or history.message_count <= 1 or callback is None:
+            return None
+
+        # Shared-history preflight runs before Agent.run; clear the previous run's
+        # transient plan so context pressure can never observe stale planning state.
+        self.agent.reset_run_runtime_state()
+        self.agent._current_repo_path = task.repo_path
+        self.agent._repo_map_query = task.description
+        cache_key = task.repo_path
+        if self.agent._repo_map_cache_key != cache_key:
+            self.agent.invalidate_repo_map_cache()
+            self.agent._repo_map_force_refresh = False
+            self.agent._repo_map_sync_requested = False
+            self.agent._repo_map_cache_key = cache_key
+            self.agent._repo_map_instance = self.agent._new_repo_map(task.repo_path)
+        elif getattr(self.agent, "_repo_map_cache_query", None) != task.description:
+            if hasattr(self.agent, "_repo_map_cache"):
+                del self.agent._repo_map_cache
+
+        token_budget = TokenBudget(
+            total=config.budget_tokens,
+            repo_map_cap=config.repo_map_budget,
+        )
+        repo_map = getattr(self.agent, "_repo_map_instance", None)
+        if repo_map is None:
+            repo_map = self.agent._new_repo_map(task.repo_path)
+            self.agent._repo_map_instance = repo_map
+        return self.agent._prepare_next_turn(
+            task,
+            1,
+            history,
+            repo_map,
+            token_budget,
+            log,
+            0,
+            SessionUsage(),
+        )
+
+
+def _normalize_isolated_failure(result: RunResult) -> None:
+    """Fill the one structured classification orchestrator cannot currently emit.
+
+    Sandbox preflight is a deterministic framework/runtime startup failure that happens
+    before Agent.run. Keep orchestrator APIs unchanged, but make the product Runner
+    expose the same ``infrastructure_error`` termination taxonomy as direct runs.
+    """
+    if (
+        result.status is RunStatus.FAILED
+        and result.termination_reason is None
+        and (result.error or "").startswith("Sandbox preflight failed:")
+    ):
+        result.termination_reason = "infrastructure_error"
+
+
+def _resolve_entrypoint(request: RunRequest) -> str:
+    """Resolve the four product entrypoints without breaking existing callers."""
+    if request.entrypoint:
+        return request.entrypoint
+    if request.task.issue_url:
+        return "github_issue"
+    if request.cancel_event is not None:
+        return "api"
+    if request.history is not None or request.session_id is not None:
+        return "chat"
+    return "cli"
+
+
+def _record_post_run_trace_log(
+    log: EventLog,
+    *,
+    result: RunResult,
+    acceptance_requested: bool,
+) -> None:
+    """Trace must never replace the execution result."""
+    try:
+        log.log_acceptance(result, requested=acceptance_requested)
+        log.log_run_termination(result)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to record runner completion trace: %s", exc)
+
+
+def _record_post_run_trace(
+    trace_path: str,
+    *,
+    result: RunResult,
+    acceptance_requested: bool,
+    entrypoint: str,
+    session_id: str | None,
+    on_event=None,
+) -> None:
+    try:
+        with EventLog.open_existing(
+            trace_path,
+            task_id=result.task_id,
+            entrypoint=entrypoint,
+            session_id=session_id,
+        ) as trace_log:
+            if on_event is not None:
+                trace_log.on_append(on_event)
+            _record_post_run_trace_log(
+                trace_log,
+                result=result,
+                acceptance_requested=acceptance_requested,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to append isolated runner trace: %s", exc)
+
+
+def _record_exception_trace(
+    trace_path: str,
+    *,
+    task_id: str,
+    entrypoint: str,
+    session_id: str | None,
+    error: BaseException,
+) -> None:
+    try:
+        with EventLog.open_existing(
+            trace_path,
+            task_id=task_id,
+            entrypoint=entrypoint,
+            session_id=session_id,
+        ) as trace_log:
+            trace_log.log_run_exception(task_id=task_id, error=error)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to append isolated exception trace: %s", exc)
+
+
+def _apply_independent_acceptance(
+    contract: AcceptanceContract,
+    task: Task,
+    result: RunResult,
+    contract_paths: set[str],
+    path_baseline: dict[str, str] | None,
+    setup_error: str | None,
+) -> None:
+    """在 Agent 返回后执行路径约束和隐藏 verifier，并保留两层独立状态。"""
+    if not contract.has_independent_checks():
+        return
+    if not result.is_success():
+        result.acceptance_status = "skipped"
+        result.acceptance_error = f"agent status is {result.status.value}"
+        return
+    if setup_error:
+        result.acceptance_status, result.acceptance_error = "failed", setup_error
+        return
+
+    workspace = (
+        Path(result.worktree.path)
+        if result.worktree and result.worktree.path
+        else Path(task.repo_path)
+    )
+    if result.worktree and result.worktree.path is None:
+        result.acceptance_status = "failed"
+        result.acceptance_error = "worktree is unavailable for independent acceptance"
+        return
+
+    if contract.required_paths or contract.forbidden_paths:
+        changed_paths, error = _changed_paths(
+            result,
+            workspace,
+            contract_paths,
+            path_baseline,
+        )
+        if error:
+            result.acceptance_status, result.acceptance_error = "failed", error
+            return
+        required_paths = {path.replace("\\", "/") for path in contract.required_paths}
+        forbidden_paths = {path.replace("\\", "/") for path in contract.forbidden_paths}
+        missing = sorted(required_paths - changed_paths)
+        forbidden = sorted(forbidden_paths & changed_paths)
+        if missing or forbidden:
+            reasons = (
+                [f"required paths not changed: {', '.join(missing)}"] if missing else []
+            ) + (
+                [f"forbidden paths changed: {', '.join(forbidden)}"] if forbidden else []
+            )
+            result.acceptance_status = "failed"
+            result.acceptance_error = "; ".join(reasons)
+            return
+
+    if contract.verifier is not None:
+        try:
+            verified = bool(contract.verifier(workspace))
+        except Exception as exc:
+            result.acceptance_status = "failed"
+            result.acceptance_error = (
+                f"hidden verifier raised {type(exc).__name__}: {exc}"
+            )
+            return
+        if not verified:
+            result.acceptance_status = "failed"
+            result.acceptance_error = "hidden verifier returned false"
+            return
+    result.acceptance_status = "passed"
+
+
+def _changed_paths(
+    result: RunResult,
+    workspace: Path,
+    contract_paths: set[str],
+    path_baseline: dict[str, str] | None,
+) -> tuple[set[str], str | None]:
+    """隔离运行读取产物，普通运行只比较契约文件的前后内容指纹。"""
+    if result.worktree is not None:
+        return {
+            path.replace("\\", "/") for path in result.worktree.changed_files
+        }, None
+    current, error = _snapshot_paths(workspace, contract_paths)
+    if error:
+        return set(), error
+    return {
+        path
+        for path in contract_paths
+        if path_baseline and path_baseline[path] != current[path]
+    }, None
+
+
+def _normalize_contract_paths(paths: tuple[str, ...]) -> tuple[set[str], str | None]:
+    """把契约路径统一为安全的 POSIX 相对路径。"""
+    normalized = set()
+    for raw in paths:
+        path = PurePosixPath(raw.replace("\\", "/"))
+        if not raw or path.is_absolute() or ".." in path.parts:
+            return set(), f"invalid acceptance path: {raw!r}"
+        normalized.add(path.as_posix())
+    return normalized, None
+
+
+def _snapshot_paths(root: Path, paths: set[str]) -> tuple[dict[str, str], str | None]:
+    """只读取契约指定文件，避免把运行前已有的用户修改计入本轮结果。"""
+    root = root.resolve()
+    states = {}
+    for relative in paths:
+        target = (root / relative).resolve()
+        if target != root and root not in target.parents:
+            return {}, f"acceptance path escapes repository: {relative}"
+        if target.is_dir():
+            return {}, f"acceptance path must be a file: {relative}"
+        try:
+            states[relative] = (
+                hashlib.sha256(target.read_bytes()).hexdigest()
+                if target.exists()
+                else "missing"
+            )
+        except OSError as exc:
+            return {}, f"cannot inspect acceptance path {relative}: {exc}"
+    return states, None

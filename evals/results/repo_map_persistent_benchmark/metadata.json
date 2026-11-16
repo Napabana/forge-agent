@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-16T14:47:24.772571+00:00",
+  "runner_revision": "840f158f10b7cda6298870532ee6fdf5aef11598",
+  "fixture_sha256": "18dfcebb3173eb996485eda3b39e552716accc398948117dbdf6f1b6baaaa4e5",
+  "python": "3.11.16",
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "retrieval_case_count": 12,
+  "performance_runs": 5,
+  "strict": true
+}

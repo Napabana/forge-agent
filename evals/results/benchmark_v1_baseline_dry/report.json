@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "suite_id": "forge-agent-benchmark-v1",
+  "execution_status": "not_executed",
+  "real_model_executed": false,
+  "trial_count": 0,
+  "task_count": 12,
+  "tasks": [
+    "subtract-regression-recovery",
+    "batch-boundary-recovery",
+    "divide-float-regression-recovery",
+    "square-operation-feature",
+    "registry-contains-feature",
+    "runtime-policy-mode-live",
+    "power-operation-integration",
+    "registry-case-insensitive",
+    "policy-deny-list",
+    "batch-stop-on-error",
+    "custom-registry-preserve-overrides",
+    "multiply-completion-guard"
+  ],
+  "planned_trial_count": 24,
+  "variants": [
+    "baseline_react"
+  ],
+  "reason": "provider_credentials_not_available_in_execution_environment",
+  "run_metadata": {
+    "suite_path": "/mnt/e/2806/forgeAgent/forge-agent/evals/fixtures/coding_agent/benchmark_v1.json",
+    "suite_sha256": "f0117c4ca39271401ba878c99afd30643b1dd7af28e0c0cdca9214f128b97f14",
+    "source_repository": "Napabana/pr-test",
+    "source_commit": "23019998f2e801e79dea59fd23fc49c58fc20038",
+    "source_repo_path": "/mnt/e/2806/forgeAgent/pr-test-agent-practice",
+    "config_source": "config/default.yaml",
+    "provider": "openai",
+    "protocol": "auto",
+    "model": "deepseek-v4.1-flash",
+    "max_steps": 20,
+    "budget_tokens": 40000,
+    "repo_map_mode": "incremental",
+    "planning_mode": "off",
+    "recovery_mode": "off",
+    "recovery_max_attempts": 4,
+    "skills_enabled": false,
+    "skills_global_dir": "~/.forge-agent/skills",
+    "mcp_enabled": false,
+    "mcp_server_ids": []
+  },
+  "claim_boundary": "The suite/reference validation and harness implementation may be inspected separately; this artifact contains no real-model success, token, step, or latency claim."
+}

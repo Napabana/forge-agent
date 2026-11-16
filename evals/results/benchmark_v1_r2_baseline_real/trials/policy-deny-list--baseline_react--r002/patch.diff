@@ -1,0 +1,107 @@
+diff --git a/src/calc_core/policy.py b/src/calc_core/policy.py
+index 41350a5..0ac2dae 100644
+--- a/src/calc_core/policy.py
++++ b/src/calc_core/policy.py
+@@ -17,6 +17,10 @@ class OperationPolicy:
+     Attributes:
+         enabled_operations: frozenset of allowed operation names, or
+             ``None`` to allow every registered operation.
++        disabled_operations: frozenset of explicitly denied operation
++            names, or ``None`` for no denials. A denied operation is
++            always disabled, even if it also appears in
++            ``enabled_operations``.
+         max_batch_size: maximum number of requests accepted by
+             ``execute_batch``, or ``None`` for no limit.
+         strict_validation: when ``True`` each batch request must contain
+@@ -24,11 +28,21 @@ class OperationPolicy:
+     """
+ 
+     enabled_operations: Optional[FrozenSet[str]] = None
++    disabled_operations: Optional[FrozenSet[str]] = None
+     max_batch_size: Optional[int] = None
+     strict_validation: bool = False
+ 
+     def is_operation_enabled(self, operation_name: str) -> bool:
+-        """Return whether ``operation_name`` is allowed by this policy."""
++        """Return whether ``operation_name`` is allowed by this policy.
++
++        The deny-list takes precedence: a name present in
++        ``disabled_operations`` is disabled even when the allow-list
++        would otherwise permit it.
++        """
++        if self.disabled_operations is not None and (
++            operation_name in self.disabled_operations
++        ):
++            return False
+         if self.enabled_operations is None:
+             return True
+         return operation_name in self.enabled_operations
+diff --git a/tests/test_policy.py b/tests/test_policy.py
+index c1dee57..b5bf93a 100644
+--- a/tests/test_policy.py
++++ b/tests/test_policy.py
+@@ -137,6 +137,64 @@ def test_unknown_operation_still_reported_when_restricted():
+     assert results[0]["error"]["type"] == "UnknownOperationError"
+ 
+ 
++# --- disabled_operations deny-list -----------------------------------------
++
++
++def test_policy_defaults_disabled_operations_is_none():
++    policy = OperationPolicy()
++    assert policy.disabled_operations is None
++    assert policy.is_operation_enabled("divide") is True
++
++
++def test_deny_list_disables_operation():
++    policy = OperationPolicy(disabled_operations=frozenset({"divide"}))
++    assert policy.is_operation_enabled("add") is True
++    assert policy.is_operation_enabled("divide") is False
++
++
++def test_deny_list_takes_precedence_over_enabled_operations():
++    policy = OperationPolicy(
++        enabled_operations=frozenset({"add", "divide"}),
++        disabled_operations=frozenset({"divide"}),
++    )
++    assert policy.is_operation_enabled("add") is True
++    assert policy.is_operation_enabled("divide") is False
++
++
++def test_execute_raises_when_operation_denied_even_if_enabled():
++    service = CalculatorService(
++        policy=OperationPolicy(
++            enabled_operations=frozenset({"add", "divide"}),
++            disabled_operations=frozenset({"divide"}),
++        )
++    )
++    assert service.execute("add", 1, 2) == 3
++    with pytest.raises(OperationDisabledError):
++        service.execute("divide", 6, 2)
++
++
++def test_execute_batch_captures_denied_operation_per_item():
++    service = CalculatorService(
++        policy=OperationPolicy(disabled_operations=frozenset({"divide"}))
++    )
++    results = service.execute_batch(
++        [
++            {"operation": "divide", "args": [6, 2]},
++            {"operation": "add", "args": [1, 2]},
++        ]
++    )
++    assert results[0]["ok"] is False
++    assert results[0]["error"]["type"] == "OperationDisabledError"
++    assert results[1] == {"ok": True, "value": 3}
++
++
++def test_empty_deny_list_preserves_default_behavior():
++    service = CalculatorService(
++        policy=OperationPolicy(disabled_operations=frozenset())
++    )
++    assert service.execute("divide", 6, 2) == 3
++
++
+ # --- max_batch_size --------------------------------------------------------
+ 
+ 

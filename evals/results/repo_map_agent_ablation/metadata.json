@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "runner_revision": "840f158f10b7cda6298870532ee6fdf5aef11598",
+  "fixture_sha256": "44688bb0782a2351f682d3dfd9241b3047524b612d7cfc5d321772882c25304d",
+  "python": "3.11.16",
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "case_count": 4,
+  "cases": [
+    "serializer-envelope-version",
+    "cross-file-display-label",
+    "retry-policy-boundary",
+    "registry-normalizer"
+  ],
+  "variants": [
+    "no_repo_map",
+    "static_repo_map",
+    "query_aware_repo_map",
+    "incremental_query_aware_repo_map"
+  ],
+  "max_steps": 12,
+  "budget_tokens": 40000,
+  "require_tests": false,
+  "evidence_level": "Real-model Small Sample (infrastructure only; not executed)",
+  "real_model_executed": false,
+  "execution_status": "not_executed",
+  "not_executed_reason": "provider_credentials_not_available_in_ci",
+  "repetitions": 0,
+  "run_count": 0
+}

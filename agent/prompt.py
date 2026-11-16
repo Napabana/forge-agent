@@ -1,0 +1,283 @@
+"""
+agent/prompt.py
+
+System prompt 模板管理。
+
+职责：
+- 维护 agent 的 system prompt 模板
+- 根据运行时信息（工具列表、repo 概况）渲染最终 prompt
+- 提供 Reflection prompt 模板
+
+设计原则：
+- prompt 集中在这里，修改 prompt 不需要改 core.py
+- 模板用 str.format() 而不是 jinja2，减少依赖
+- 每个 prompt 都有对应的函数，便于测试和调整
+"""
+
+from __future__ import annotations
+
+from llm.base import LLMToolSchema
+
+
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
+
+_SYSTEM_TEMPLATE = """\
+You are an autonomous coding agent. Your goal is to understand a coding task, \
+explore the repository, make the necessary code changes, and verify they work correctly.
+
+## Workflow
+1. **Explore**: Understand the repository structure and the problem
+2. **Plan**: Identify what needs to change and why
+3. **Edit**: Make precise, minimal changes using the available tools
+4. **Verify**: Run tests to confirm the fix works
+5. **Finish**: Return a concise final summary after the work is complete
+
+## Rules
+- Think step by step before each action (use the thought field)
+- After editing files, always run tests to verify your changes
+- If tests fail, read the error carefully and fix the root cause, not the symptom
+- If you are stuck after several attempts, reflect on your approach and try differently
+- Make the smallest change that fixes the problem
+- Prefer dedicated repository tools over shell when an equivalent tool exists
+- Prefer `file_edit` for a localized change to an existing file; use `file_write` for new files or intentional whole-file rewrites
+- Do not inspect byte-level line endings, CRLF/LF, or trailing-newline state unless tests, repository policy, or the diff shows they are relevant
+- After the intended minimal diff is present and post-edit verification passes, avoid redundant inspection and finish
+- When done, return a normal final response with a concise summary
+- Do not call a `finish` or `give_up` tool; they are terminal actions, not tools
+- FINISH means the requested task is completed and required verification has passed.
+- GIVE_UP means completion is infeasible or would violate a non-negotiable constraint.
+- Never use FINISH to report inability to complete. Begin that response with `GIVE_UP: <reason>`.
+- Example success: `Fixed subtraction; all required tests passed.` (normal final response / FINISH)
+- Example constraint conflict: `GIVE_UP: The required fix needs a repository edit forbidden by the no-write freeze.`
+- Incorrect: a normal final response saying `I cannot complete the task` (this is FINISH, not GIVE_UP).
+
+{execution_workspace_section}{runtime_context_section}## Available tools
+{tool_descriptions}
+
+## Repository
+Path: {repo_path}
+{repo_summary}
+"""
+
+_NO_REPO_SUMMARY = "(Repository summary not yet available — use find_files and file_read to explore)"
+
+_EXECUTION_WORKSPACE_TEMPLATE = """\
+## Execution workspace
+- Shell commands already start in `{workspace}`.
+- Prefer repository-relative paths; do not `cd` to host filesystem paths.
+- File tools use repository-relative paths within the repository workspace.
+
+"""
+
+
+def build_system_prompt(
+    repo_path: str,
+    tools: list[LLMToolSchema],
+    repo_summary: str | None = None,
+    execution_workspace: str | None = None,
+    runtime_context: str | None = None,
+) -> str:
+    """
+    渲染完整的 system prompt。
+
+    Args:
+        repo_path:    repo 根目录路径
+        tools:        已注册工具的 schema 列表
+        repo_summary: repo-map 生成的摘要（Day 5 接入，当前传 None）
+        execution_workspace: 模型可见的 shell 工作区；None 表示与宿主 repo_path 相同
+
+    Returns:
+        渲染好的 system prompt 字符串
+    """
+    tool_descriptions = _format_tool_descriptions(tools)
+    summary = repo_summary or _NO_REPO_SUMMARY
+    execution_workspace_section = (
+        _EXECUTION_WORKSPACE_TEMPLATE.format(workspace=execution_workspace)
+        if execution_workspace
+        else ""
+    )
+
+    runtime_context_section = (runtime_context.strip() + "\n\n") if runtime_context else ""
+
+    return _SYSTEM_TEMPLATE.format(
+        repo_path=repo_path,
+        repo_summary=summary,
+        tool_descriptions=tool_descriptions,
+        execution_workspace_section=execution_workspace_section,
+        runtime_context_section=runtime_context_section,
+    )
+
+
+def _format_tool_descriptions(tools: list[LLMToolSchema]) -> str:
+    """把工具列表格式化为易读的描述块。"""
+    if not tools:
+        return "(no tools available)"
+    lines = []
+    for tool in tools:
+        lines.append(f"- **{tool.name}**: {tool.description}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Reflection prompts
+# ---------------------------------------------------------------------------
+
+REFLECTION_TEST_FAILED = """\
+[REFLECTION] The tests just failed. Before your next action, consider:
+1. Read the full error message above carefully — what is the root cause?
+2. Is your last edit correct? Did it introduce a new bug?
+3. Do you need to look at more context before editing again?
+
+Be specific about what you will do differently. What is your next action?\
+"""
+
+REFLECTION_NO_EDIT = """\
+[REFLECTION] You have taken {n} steps without editing any file.
+You may be stuck in an exploration loop. Consider:
+1. Do you have enough context to make a change now?
+2. If yes — make the edit
+3. If no — identify exactly what you still need, get it in one targeted step, then edit
+
+What specific action will move the task forward?\
+"""
+
+REFLECTION_LOOP_DETECTED = """\
+[REFLECTION] A no-progress action cycle was detected: period {period}, repeated {repeats} times.
+Before your next action:
+1. State why the previous cycle produced no new observation, repository change, or test result.
+2. Choose a materially different tool, target, or hypothesis.
+3. Do not repeat the detected action pattern.
+
+A second no-progress cycle will terminate this run.\
+"""
+
+RESOURCE_BUDGET_LOW = """\
+[RESOURCE BUDGET LOW]
+
+Execution resources are running low.
+Do not claim completion unless the actual completion requirements are satisfied.
+Prioritize the highest-value unresolved requirement.
+Avoid optional exploration, cleanup, redundant inspection, or unnecessary commits.
+If all required changes and verification are already complete, return the final result.
+Otherwise continue with the most important unresolved requirement.\
+"""
+
+COMPLETION_REJECTED = """\
+[COMPLETION REJECTED]
+Reason: {code}
+Detail: {detail}
+
+The completion requirements are not yet satisfied. If completion remains feasible, fix the stated requirement and verify again.
+If completion is infeasible within the non-negotiable constraints, respond with `GIVE_UP: <reason>`.
+Do not violate a constraint to satisfy this check. A failed test alone does not require giving up.\
+"""
+
+STRUCTURED_RECOVERY = """\
+[STRUCTURED RECOVERY]
+Failure category: {category}
+Strategy: {strategy}
+Reason: {reason}
+Attempt: {attempt}/{max_attempts}
+{target_section}{replan_section}Use the failure evidence already present above. Do not repeat the same failed action unchanged unless the selected strategy explicitly allows a retry.\
+"""
+
+
+def reflection_test_failed() -> str:
+    return REFLECTION_TEST_FAILED
+
+
+def reflection_no_edit(n: int) -> str:
+    return REFLECTION_NO_EDIT.format(n=n)
+
+
+def reflection_loop_detected(repeats: int, period: int = 1) -> str:
+    return REFLECTION_LOOP_DETECTED.format(repeats=repeats, period=period)
+
+
+def step_budget_warning() -> str:
+    """生成仅供当前模型调用可见、且不暴露精确余量的资源提示。"""
+    return RESOURCE_BUDGET_LOW
+
+
+def completion_rejected(code: str, detail: str) -> str:
+    """把结构化完成拒绝渲染为 canonical 控制消息。"""
+    return COMPLETION_REJECTED.format(code=code, detail=detail)
+
+
+def structured_recovery(
+    *,
+    category: str,
+    strategy: str,
+    reason: str,
+    attempt: int,
+    max_attempts: int,
+    target_plan_step: str | None = None,
+    requires_plan_revision: bool = False,
+) -> str:
+    """Render one deterministic RecoveryDecision without adding a model call."""
+    target_section = (
+        f"Target plan step: {target_plan_step}\n" if target_plan_step else ""
+    )
+    replan_section = (
+        "Required: call plan_revise before repository mutation or FINISH.\n"
+        if requires_plan_revision
+        else ""
+    )
+    return STRUCTURED_RECOVERY.format(
+        category=category,
+        strategy=strategy,
+        reason=reason,
+        attempt=attempt,
+        max_attempts=max_attempts,
+        target_section=target_section,
+        replan_section=replan_section,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task prompt（用户消息，描述任务）
+# ---------------------------------------------------------------------------
+
+_TASK_TEMPLATE = """\
+Please fix the following issue in the repository at {repo_path}.
+
+## Task
+{description}
+{issue_section}
+## Instructions
+- Start by exploring the repository to understand the codebase
+- Make the minimal changes necessary to fix the issue
+- Run the tests to verify your fix works
+- When complete, return a concise final summary in normal text\
+"""
+
+_ISSUE_SECTION_TEMPLATE = """
+## GitHub Issue
+URL: {issue_url}
+"""
+
+
+def build_task_prompt(
+    description: str,
+    repo_path: str,
+    issue_url: str | None = None,
+) -> str:
+    """
+    构建任务描述的用户消息（对话的第一条 user 消息）。
+
+    Args:
+        description: 任务描述（自然语言）
+        repo_path:   repo 根目录
+        issue_url:   GitHub issue URL（可选）
+    """
+    issue_section = ""
+    if issue_url:
+        issue_section = _ISSUE_SECTION_TEMPLATE.format(issue_url=issue_url)
+
+    return _TASK_TEMPLATE.format(
+        repo_path=repo_path,
+        description=description.strip(),
+        issue_section=issue_section,
+    )

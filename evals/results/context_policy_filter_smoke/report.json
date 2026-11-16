@@ -1,0 +1,35 @@
+{
+  "metadata": {
+    "schema_version": 1,
+    "runner_revision": "5908d28d8a6ed3f8884051ea4a8a7a881d1abf86",
+    "fixture_sha256": "f9f57af5faead4715e52ba21ac247787107a3ad6622f8663759c7d34ab1ccece",
+    "semantic": {
+      "mode": "fixture"
+    },
+    "variants": [
+      "budget_trim_only",
+      "deterministic_pruning",
+      "hybrid_compaction"
+    ],
+    "case_count": 1
+  },
+  "aggregate": {
+    "hybrid_compaction": {
+      "runs": 1,
+      "passed": 1,
+      "pass_rate": 1.0,
+      "mean_raw_history_tokens": 5748,
+      "mean_final_tokens": 883,
+      "mean_compaction_ratio": 0.8463813500347948,
+      "mean_final_pressure_ratio": 0.25990809879379667,
+      "mean_hard_constraint_recall": 1.0,
+      "mean_recent_raw_recall": 1.0,
+      "orphan_actions": 0,
+      "orphan_observations": 0,
+      "summary_calls": 1,
+      "summary_total_tokens": 0,
+      "semantic_duration_ms": 0.18297399947186932
+    }
+  },
+  "rows": 1
+}

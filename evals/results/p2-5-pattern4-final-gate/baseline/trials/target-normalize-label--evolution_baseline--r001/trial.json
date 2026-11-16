@@ -1,0 +1,79 @@
+{
+  "suite_id": "p2-5-recovery-motif-real-gate",
+  "task_id": "target-normalize-label",
+  "trial_id": "target-normalize-label--evolution_baseline--r001",
+  "variant": "evolution_baseline",
+  "repetition": 1,
+  "execution_status": "executed",
+  "evidence_kind": "real_model",
+  "real_model_executed": true,
+  "run_status": "success",
+  "termination_reason": "completion_satisfied",
+  "acceptance_status": "passed",
+  "success": true,
+  "metrics": {
+    "steps": 8,
+    "total_tokens": 34504,
+    "provider_usage": {
+      "llm_calls": 8,
+      "input_tokens": 33181,
+      "cached_tokens": 11520,
+      "cache_write_tokens": 0,
+      "output_tokens": 1323,
+      "reasoning_tokens": 0,
+      "estimated_calls": 0,
+      "unattributed_tokens": 0,
+      "total_tokens": 34504
+    },
+    "wall_time_seconds": 55.371986206002475,
+    "tool_call_count": 7,
+    "test_attempt_count": 1,
+    "completion_rejection_count": 0,
+    "reflection_count": 0,
+    "file_read_count": 3,
+    "shell_call_count": 0,
+    "plan_created_count": 0,
+    "plan_revision_count": 0,
+    "plan_step_completed_count": 0,
+    "planning_skipped": false,
+    "failure_classified_count": 2,
+    "recovery_selected_count": 2,
+    "recovery_replan_count": 0,
+    "recovery_exhausted_count": 0,
+    "skill_discovered_count": 0,
+    "skill_selected_count": 0,
+    "skill_loaded_count": 0,
+    "skill_reference_loaded_count": 0,
+    "mcp_tool_discovered_count": 0,
+    "mcp_tool_call_count": 0,
+    "mcp_tool_failure_count": 0
+  },
+  "grader_results": [
+    {
+      "grader_id": "behavior",
+      "kind": "command",
+      "passed": true,
+      "required": true,
+      "detail": "returncode=0, expected=0",
+      "evidence": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "grader_id": "changed",
+      "kind": "repository_state",
+      "passed": true,
+      "required": true,
+      "detail": "changed=True, expected=True",
+      "evidence": {
+        "status_porcelain": " M label_utils.py\n?? __pycache__/\n?? tests/__pycache__/\n"
+      }
+    }
+  ],
+  "trace_ref": "trials/target-normalize-label--evolution_baseline--r001/traces/target-normalize-label--evolution_baseline--r001_20260921_123401.jsonl",
+  "patch_ref": "trials/target-normalize-label--evolution_baseline--r001/patch.diff",
+  "final_state_ref": "trials/target-normalize-label--evolution_baseline--r001/final_state.json",
+  "error": null
+}

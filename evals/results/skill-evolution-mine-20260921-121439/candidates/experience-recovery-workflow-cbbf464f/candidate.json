@@ -1,0 +1,42 @@
+{
+  "candidate_id": "candidate-dd520f4c738954ff",
+  "candidate_version": 1,
+  "content_hash": "594e978f0efd5e1245358a0adee14f0406b1a86095555f991d14c27b325b3ee1",
+  "created_at": "2026-09-21T12:14:40.418819+00:00",
+  "description": "Use after structured recovery classifies tool_failure and selects inspect; the observed next semantic action is INSPECT.",
+  "instructions": "# Recovery Motif\n\nUse only when the current structured failure classification matches this observed motif.\nObserved failure category: `tool_failure`.\nObserved recovery strategy: `inspect`.\nSource evidence: 2 accepted trajectory/trajectories.\n\nRecovery:\n1. Do not retry the failed action unchanged.\n2. Inspect the failure evidence and surrounding repository state before changing code or retrying.\n3. Inspect the smallest relevant repository evidence before editing.\n\nDo not treat a successful edit as completion by itself.\nKeep normal Forge permission, tool, acceptance, and verification boundaries unchanged.",
+  "parent_skill_hash": null,
+  "parent_skill_name": null,
+  "parent_skill_version": null,
+  "pattern_id": "pattern-10fb8c39cbbf464f",
+  "pattern_type": "recovery_workflow",
+  "skill_name": "experience-recovery-workflow-cbbf464f",
+  "source_trajectories": [
+    {
+      "acceptance_status": "passed",
+      "eval_task_id": null,
+      "run_id": "pr-practice-a-20260921-084810_20260921_084810",
+      "run_status": "success",
+      "suite_id": null,
+      "task_id": "pr-practice-a-20260921-084810",
+      "termination_reason": "completion_satisfied",
+      "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-a-20260921-084810_20260921_084810.jsonl",
+      "trace_sha256": "6a9fbf87da1aa28406c8b02ab3b3aa5ca6b35673fad89e58d62929a180832b02",
+      "trial_id": null,
+      "trial_result_ref": null
+    },
+    {
+      "acceptance_status": "passed",
+      "eval_task_id": null,
+      "run_id": "pr-practice-c-20260921-094855_20260921_094855",
+      "run_status": "success",
+      "suite_id": null,
+      "task_id": "pr-practice-c-20260921-094855",
+      "termination_reason": "completion_satisfied",
+      "trace_ref": "/mnt/e/2806/forgeAgent/forge-agent/evals/results/pr-test-practice-batch-20260921-082816/traces/pr-practice-c-20260921-094855_20260921_094855.jsonl",
+      "trace_sha256": "add5d5873b6596b8fcdd95de3e8a313331f2a7d8e736c7dcff01056137b668c8",
+      "trial_id": null,
+      "trial_result_ref": null
+    }
+  ]
+}

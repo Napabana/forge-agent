@@ -1,0 +1,19 @@
+{
+  "hybrid_compaction": {
+    "runs": 1,
+    "solved": 0,
+    "pass_at_1": 0.0,
+    "false_finish_rate": 0.0,
+    "mean_agent_tokens": 58733,
+    "mean_semantic_tokens": 6493,
+    "mean_total_tokens_with_context": 65226,
+    "tokens_per_solved": 0.0,
+    "mean_latency_seconds": 79.17120003699983,
+    "p95_latency_seconds": 79.17120003699983,
+    "tool_calls": 8,
+    "context_trigger_rate": 1.0,
+    "semantic_calls": 1,
+    "semantic_error_count": 0,
+    "mean_max_pressure_ratio": 1.0370588235294118
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "runner_revision": "ad5546b619916c3b8c16ca2cd21868a6b56368e3",
+  "fixture_sha256": "f47979744e68583074aa3f7ad01a3ef5b9af3f7828b82ea659886fa9b5d5ac4d",
+  "model": "deepseek-v4.1-flash",
+  "provider": "openai",
+  "protocol": "auto",
+  "budget_tokens": 8000,
+  "max_steps": 12,
+  "cases": [
+    "huge-tool-history"
+  ],
+  "variants": [
+    "baseline"
+  ],
+  "run_count": 1
+}

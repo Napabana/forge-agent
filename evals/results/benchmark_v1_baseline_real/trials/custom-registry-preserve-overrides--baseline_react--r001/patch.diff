@@ -1,0 +1,52 @@
+diff --git a/src/calc_core/service.py b/src/calc_core/service.py
+index 90654ae..1ab64f4 100644
+--- a/src/calc_core/service.py
++++ b/src/calc_core/service.py
+@@ -7,6 +7,7 @@ from .errors import (
+     BatchSizeExceededError,
+     InvalidRequestError,
+     OperationDisabledError,
++    UnknownOperationError,
+ )
+ from .policy import DEFAULT_POLICY, OperationPolicy
+ from .registry import OperationRegistry
+@@ -39,7 +40,10 @@ class CalculatorService:
+         self.registry = registry if registry is not None else OperationRegistry()
+         self.policy = policy if policy is not None else DEFAULT_POLICY
+         for name, operation in self.DEFAULT_OPERATIONS.items():
+-            self.registry.register(name, operation)
++            try:
++                self.registry.resolve(name)
++            except UnknownOperationError:
++                self.registry.register(name, operation)
+ 
+     def execute(self, operation_name: str, *args: object) -> object:
+         """Execute the operation registered under ``operation_name``."""
+diff --git a/tests/test_calc_core.py b/tests/test_calc_core.py
+index 1b00ac0..f15937b 100644
+--- a/tests/test_calc_core.py
++++ b/tests/test_calc_core.py
+@@ -95,6 +95,23 @@ def test_service_execute_preserves_divide_by_zero():
+         service.execute("divide", 5, 0)
+ 
+ 
++def test_service_custom_registry_preserves_preregistered_operations():
++    def custom_add(a, b):
++        return 100
++
++    registry = OperationRegistry()
++    registry.register("add", custom_add)
++    service = CalculatorService(registry=registry)
++
++    # The pre-registered override must be preserved, not clobbered.
++    assert service.registry.resolve("add") is custom_add
++    assert service.execute("add", 2, 3) == 100
++
++    # Missing default operations are still installed.
++    for name in ("subtract", "multiply", "divide", "clamp"):
++        assert service.registry.resolve(name) is not None
++
++
+ # --- facade ----------------------------------------------------------------
+ 
+ 

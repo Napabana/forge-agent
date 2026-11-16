@@ -1,0 +1,34 @@
+llm:
+  provider: openai
+  model: Qwen/Qwen3.5-4B
+  api_key: ${SILICONFLOW_API_KEY}
+  base_url: https://api.siliconflow.cn/v1
+  strict_tool_schema: auto
+  max_output_tokens: 8192
+
+agent:
+  max_steps: 40
+  planning_mode: "off"
+  recovery_mode: "off"
+  skills_enabled: false
+  context_budget_cap: 384000
+  context_safety_margin_tokens: 40000
+  log_dir: /logs/agent/forge
+
+mcp:
+  enabled: false
+  servers: []
+
+tools:
+  shell:
+    timeout: 30
+    max_output_tokens: 10000
+  file:
+    max_view_lines: 100
+  test:
+    # Harbor task image 的系统 Python 持有项目及测试依赖；不要使用 Forge 自身 venv。
+    python_executable: python3
+
+context:
+  repo_map_budget: 12000
+  history_window: 20

@@ -1,0 +1,52 @@
+diff --git a/src/calc_core/policy.py b/src/calc_core/policy.py
+index 41350a5..c1fbcce 100644
+--- a/src/calc_core/policy.py
++++ b/src/calc_core/policy.py
+@@ -21,11 +21,16 @@ class OperationPolicy:
+             ``execute_batch``, or ``None`` for no limit.
+         strict_validation: when ``True`` each batch request must contain
+             exactly the keys ``"operation"`` and ``"args"``.
++        stop_on_error: when ``True`` ``execute_batch`` stops at the first
++            failed request, returning results up to and including it and
++            never executing later requests. When ``False`` (the default)
++            processing continues per item.
+     """
+ 
+     enabled_operations: Optional[FrozenSet[str]] = None
+     max_batch_size: Optional[int] = None
+     strict_validation: bool = False
++    stop_on_error: bool = False
+ 
+     def is_operation_enabled(self, operation_name: str) -> bool:
+         """Return whether ``operation_name`` is allowed by this policy."""
+diff --git a/src/calc_core/service.py b/src/calc_core/service.py
+index 90654ae..513affb 100644
+--- a/src/calc_core/service.py
++++ b/src/calc_core/service.py
+@@ -77,11 +77,16 @@ class CalculatorService:
+ 
+         Each result is either ``{"ok": True, "value": ...}`` or
+         ``{"ok": False, "error": {"type": ..., "message": ...}}``.
+-        A failing request never aborts the remaining requests.
++        A failing request never aborts the remaining requests unless the
++        policy sets ``stop_on_error``.
+ 
+         If the policy sets ``max_batch_size`` the batch is measured before
+         processing: a batch larger than the limit raises
+         :class:`BatchSizeExceededError` without producing results.
++
++        When the policy sets ``stop_on_error`` to ``True`` processing stops
++        at the first failed request: the returned list contains results up
++        to and including that failure and no later request is executed.
+         """
+         items = list(requests)
+         if not self.policy.check_batch_size(len(items)):
+@@ -101,6 +106,8 @@ class CalculatorService:
+                         },
+                     }
+                 )
++                if self.policy.stop_on_error:
++                    break
+             else:
+                 results.append({"ok": True, "value": value})
+         return results

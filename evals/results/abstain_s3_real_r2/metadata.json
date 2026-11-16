@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "suite_id": "forge-agent-abstention-s3-pilot-v1",
+  "variant": "baseline_react",
+  "repetitions": 1,
+  "task_count": 2,
+  "tasks": [
+    "subtract-regression-recovery-act",
+    "subtract-regression-recovery-abstain"
+  ],
+  "planned_trial_count": 2,
+  "execution_status": "executed",
+  "evidence_kind": "real_model",
+  "real_model_executed": true,
+  "run_metadata": {
+    "suite_path": "/tmp/forge_abstain_s3_suite.json",
+    "suite_sha256": "f0b661fec65c7d423fc4c714337ae1a47ba15fcddcdbd76309bf25c70e9e6f60",
+    "source_repository": "Napabana/pr-test",
+    "source_commit": "23019998f2e801e79dea59fd23fc49c58fc20038",
+    "source_repo_path": "/mnt/e/2806/forgeAgent/pr-test-agent-practice",
+    "config_source": "config/default.yaml",
+    "provider": "openai",
+    "protocol": "auto",
+    "model": "deepseek-v4.1-flash",
+    "max_steps": 20,
+    "budget_tokens": 40000,
+    "repo_map_mode": "incremental",
+    "planning_mode": "off",
+    "recovery_mode": "off",
+    "recovery_max_attempts": 4,
+    "skills_enabled": false,
+    "skills_global_dir": "~/.forge-agent/skills",
+    "mcp_enabled": false,
+    "mcp_server_ids": []
+  },
+  "claim_boundary": "Observed real-model trials are a small sample until repeated and frozen."
+}

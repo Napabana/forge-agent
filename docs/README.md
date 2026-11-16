@@ -1,0 +1,117 @@
+# Forge Agent 文档索引
+
+这是 **Forge Agent — Architecture & Implementation** 的本地知识库首页。当前源码是实现事实，
+`docs/design/` 的 Markdown 与 Mermaid 记录经核查的架构基线，不替代根目录的项目介绍与使用说明。
+全文搜索覆盖 Context Compaction、Git Worktree 等跨专题概念，结果始终回到当前知识库页面。
+
+## 整体架构
+
+--8<-- "docs/includes/system-architecture.md.inc"
+
+[阅读完整系统架构](design/Forge-Agent-当前代码架构.md) ·
+[按源码符号导航](source-navigation.md)
+
+## 快速导航
+
+| 主题 | 解决的问题 | 入口 |
+|---|---|---|
+| Agent Execution | 四入口如何汇合到 Runner，direct 与 isolate 如何分叉 | [任务执行主链](design/01-任务执行主链.md) |
+| Tool Lifecycle & Security | ReAct、权限、Hooks、只读约束和 Completion Guard 如何协作 | [Agent 与 Tool](design/02-Agent与Tool生命周期.md) |
+| Context Engineering | History、Token Budget、Repo Map、Compaction 和 Session 如何分工 | [Context 与 Repo Map](design/03-Context与RepoMap.md) |
+| Planning & Recovery | typed plan、失败分类、恢复预算和 replan gate 如何运行 | [Planning 与 Recovery](design/04-Planning与Recovery.md) |
+| Skills & MCP | progressive disclosure 和外部工具桥接的边界是什么 | [Skills 与 MCP](design/05-Skills与MCP.md) |
+| Isolation & Acceptance | Worktree、Runtime、独立验收和 GitHub 交付如何隔离 | [隔离与独立验收](design/06-隔离与独立验收.md) |
+| Evaluation & Evolution | 冻结评测与离线 Candidate promotion 如何保持证据边界 | [Evaluation 与 Evolution](design/07-Evaluation与Evolution.md) |
+| Supervisor-Worker | Lead 委派只读 Worker 的并发、预算、Trace 和验收 | [Multi-Agent 架构](design/09-Supervisor-Worker架构.md) |
+
+## 推荐阅读路径
+
+- **理解整个项目**：整体架构 → 任务执行主链 → Agent/Tool → Context → Planning/Recovery →
+  Skills/MCP → 隔离验收 → Evaluation/Evolution。
+- **面试前快速复习**：从[面试复习入口](interview-review.md)开始，遇到类名或函数名时进入
+  [源码导航](source-navigation.md)。
+
+本目录把“当前目标”“架构快照”和“历史过程”分开。新对话先读仓库根目录的 `AGENTS.md`
+和 [当前项目状态](PROJECT_STATE.md)；本机有 `docs/changes/CURRENT.md` 时再读本地交接。随后核对实际分支、源码与架构文档顶部基线。
+
+## 本地网站使用
+
+WSL 中一次性安装独立文档环境：
+
+```bash
+python3 -m venv ~/.venvs/forge-agent-docs
+~/.venvs/forge-agent-docs/bin/pip install -r requirements-docs.txt
+```
+
+预览和构建：
+
+```bash
+bash scripts/serve_docs.sh
+~/.venvs/forge-agent-docs/bin/python -m zensical build --clean --strict
+```
+
+静态输出位于 `site/`。offline 模式使用相对 HTML 链接与本地 worker polyfill，可直接打开
+`site/index.html`；浏览器自动化验证边界记录在阶段二变更日志中。
+
+## 当前入口与历史基线
+
+- [`PROJECT_STATE.md`](PROJECT_STATE.md)：可同步的当前目标、代码基线、近期试验证据和下一步。细节性的本机实验状态放在不公开的 `docs/changes/CURRENT.md`。
+- `docs/design/`：原架构核查基线为 2026-11-12；两篇专题另有 11 月 13 日运行期修复补记。后续 Harbor/Harness 改动应先检查源码、分支和 PR 合入状态，再更新受影响专题。
+- [`TODO-P0-P1.md`](https://github.com/Napabana/forge-agent/blob/dev/TODO-P0-P1.md)、[`Forge-Agent-P0-P1-实施计划.md`](https://github.com/Napabana/forge-agent/blob/dev/Forge-Agent-P0-P1-%E5%AE%9E%E6%96%BD%E8%AE%A1%E5%88%92.md)：P0/P1 阶段历史状态与方案，不作为当前开发队列。
+- [`README.md`](https://github.com/Napabana/forge-agent/blob/dev/README.md)：项目能力、安装与使用入口。
+- [`USAGE.md`](https://github.com/Napabana/forge-agent/blob/dev/USAGE.md)：详细运行配置和命令。
+
+## 设计文档
+
+架构知识库以当前源码为事实源，推荐按以下顺序阅读：
+
+1. [`design/Forge-Agent-当前代码架构.md`](design/Forge-Agent-当前代码架构.md)：总架构、五条执行路径、任务生命周期与状态边界。
+2. [`design/01-任务执行主链.md`](design/01-任务执行主链.md)：四入口、Runner、Orchestrator 和任务生命周期。
+3. [`design/02-Agent与Tool生命周期.md`](design/02-Agent与Tool生命周期.md)：同步 ReAct、Tool lifecycle、Completion Guard 和 Trace。
+4. [`design/03-Context与RepoMap.md`](design/03-Context与RepoMap.md)：History、Token Budget、Persistent Repo Map、Compaction 和 Session。
+5. [`design/04-Planning与Recovery.md`](design/04-Planning与Recovery.md)：typed Planning、failure classification、Recovery budget 和 replan gate。
+6. [`design/05-Skills与MCP.md`](design/05-Skills与MCP.md)：progressive disclosure、MCP client/adapter 与权限边界。
+7. [`design/06-隔离与独立验收.md`](design/06-隔离与独立验收.md)：TaskEngine、Worktree、Docker、read-only、Acceptance 和 PR delivery。
+8. [`design/07-Evaluation与Evolution.md`](design/07-Evaluation与Evolution.md)：Evaluation Harness、Benchmark 与离线 Candidate promotion gate。
+9. [`design/源码索引.md`](design/源码索引.md)：功能→源码→测试和源码→功能→测试双向索引。
+10. [`design/MAINTENANCE.md`](design/MAINTENANCE.md)：开发前后影响分析、文档同步与分级验证协议。
+
+这些 Markdown 与其中的 Mermaid 是本地 HTML 文档站的唯一内容源；不要另行维护一套 HTML 正文。
+
+## 架构审计与开源实现对标
+
+[Forge Agent Architecture Audit 研究总索引](research/architecture-audit/README.md) ·
+[阶段 0：112 项功能与源码审计清单](research/architecture-audit/00-研究计划与功能总清单.md) ·
+[审计决策记录](research/architecture-audit/decisions/审计决策记录.md)。
+
+此目录逐阶段保存源码级横向研究、评分、实习项目适用性及 Benchmark/训练准入判断；
+它不替代上述 `docs/design/` 的当前架构事实。未验证的外部对比或改进假设不得写成已实现能力。
+
+## 历史计划与变更
+
+历史计划、施工日志和证据通常只保留在本地，不代表当前待办。本轮运行期修复规划与实施记录
+作为代码变更的验收契约单独版本化：
+
+- `docs/plans/`：历史实施方案和归档计划。
+- [`docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md`](https://github.com/Napabana/forge-agent/blob/dev/docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md)：本轮修复范围、设计决策和本地验收命令（`changes/**` 不进入本地站点构建）。
+- `docs/changes/`：其他按日期追加的开发记录。
+- `docs/changes/archive/`：从根 `AGENTS.md` 移出的历史交接原文；仅作追溯。
+- `docs/evidence/`：证据索引和可说/不可说边界。
+
+## 评测证据
+
+- [Harbor × Forge：Typer 1788 历史 v5/v6/v7 实验报告](research/Harbor-Typer-1788实验报告.md)：区分 Provider failure、Harness 污染与可评分 max-steps 结果。
+- [Qwen3.8-27B Typer 1788 单次 Pilot R1](research/harbor-typer-1788-qwen38-27b-pilot-r1/报告.md)：trial 内 Verifier 通过但 Agent 被 Harbor 外层 timeout 取消；同目录公开脱敏后的完整 Trace、console、result、Verifier、配置、启动命令与 manifest。当前只将其用作 Harness/Evaluation 审计证据，不开展 SFT 或 GRPO。
+
+评测原始输出保持在 `evals/results/`，不移动到文档目录：
+
+- `evals/results/context_policy_benchmark/report.json`：B1，7 cases × 3 variants 的离线 fixture benchmark。
+- `evals/results/context_policy_agent_ablation_v2/report.json`：B2 v2 对照基线。
+- [`evals/results/context_policy_agent_ablation_v3/report.md`](https://github.com/Napabana/forge-agent/blob/dev/evals/results/context_policy_agent_ablation_v3/report.md)：B2 v3 人类可读报告；同目录保留 `raw.jsonl`、`report.json` 和 traces。
+- `evals/results/repo_map_ablation/report.json`：Repo Map retrieval 与性能消融。
+
+## 阅读规则
+
+- 判断“现在做什么”先看用户当前要求、`PROJECT_STATE.md` 与实际分支/源码；本机有 `docs/changes/CURRENT.md` 时再核对本地运行状态。旧 TODO 仅作历史参考。
+- 历史日志中的“下一步”保留当时语境，不自动恢复为当前待办。
+- fixture、单次真实案例和小样本 Agent 实验必须按各自证据边界表述，不外推总体成功率。

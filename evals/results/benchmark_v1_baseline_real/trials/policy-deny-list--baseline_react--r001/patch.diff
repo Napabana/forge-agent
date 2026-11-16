@@ -1,0 +1,112 @@
+diff --git a/src/calc_core/policy.py b/src/calc_core/policy.py
+index 41350a5..326c402 100644
+--- a/src/calc_core/policy.py
++++ b/src/calc_core/policy.py
+@@ -21,14 +21,28 @@ class OperationPolicy:
+             ``execute_batch``, or ``None`` for no limit.
+         strict_validation: when ``True`` each batch request must contain
+             exactly the keys ``"operation"`` and ``"args"``.
++        disabled_operations: frozenset of operation names that are always
++            denied, or ``None`` for no denials. A denied operation takes
++            precedence over ``enabled_operations``: it is disabled even when
++            it also appears in the allow-list.
+     """
+ 
+     enabled_operations: Optional[FrozenSet[str]] = None
+     max_batch_size: Optional[int] = None
+     strict_validation: bool = False
++    disabled_operations: Optional[FrozenSet[str]] = None
+ 
+     def is_operation_enabled(self, operation_name: str) -> bool:
+-        """Return whether ``operation_name`` is allowed by this policy."""
++        """Return whether ``operation_name`` is allowed by this policy.
++
++        A name in ``disabled_operations`` is always denied, even if it is
++        also present in ``enabled_operations``.
++        """
++        if (
++            self.disabled_operations is not None
++            and operation_name in self.disabled_operations
++        ):
++            return False
+         if self.enabled_operations is None:
+             return True
+         return operation_name in self.enabled_operations
+diff --git a/tests/test_policy.py b/tests/test_policy.py
+index c1dee57..e1b31ed 100644
+--- a/tests/test_policy.py
++++ b/tests/test_policy.py
+@@ -36,6 +36,7 @@ def test_policy_defaults():
+     assert policy.enabled_operations is None
+     assert policy.max_batch_size is None
+     assert policy.strict_validation is False
++    assert policy.disabled_operations is None
+ 
+ 
+ def test_policy_is_immutable():
+@@ -51,6 +52,31 @@ def test_policy_is_operation_enabled():
+     assert restricted.is_operation_enabled("divide") is False
+ 
+ 
++def test_policy_deny_list_disables_operation():
++    policy = OperationPolicy(disabled_operations=frozenset({"divide"}))
++    assert policy.is_operation_enabled("divide") is False
++    assert policy.is_operation_enabled("add") is True
++
++
++def test_policy_deny_list_overrides_enabled_operations():
++    policy = OperationPolicy(
++        enabled_operations=frozenset({"add", "divide"}),
++        disabled_operations=frozenset({"divide"}),
++    )
++    assert policy.is_operation_enabled("add") is True
++    assert policy.is_operation_enabled("divide") is False
++
++
++def test_policy_empty_deny_list_denies_nothing():
++    policy = OperationPolicy(disabled_operations=frozenset())
++    assert policy.is_operation_enabled("add") is True
++    assert policy.is_operation_enabled("divide") is True
++
++
++def test_default_policy_has_no_denials():
++    assert OperationPolicy().is_operation_enabled("divide") is True
++
++
+ def test_policy_check_batch_size_boundary():
+     assert OperationPolicy().check_batch_size(10 ** 6) is True
+     limited = OperationPolicy(max_batch_size=3)
+@@ -137,6 +163,33 @@ def test_unknown_operation_still_reported_when_restricted():
+     assert results[0]["error"]["type"] == "UnknownOperationError"
+ 
+ 
++def test_execute_raises_for_deny_listed_operation():
++    service = CalculatorService(
++        policy=OperationPolicy(
++            enabled_operations=frozenset({"add", "divide"}),
++            disabled_operations=frozenset({"divide"}),
++        )
++    )
++    assert service.execute("add", 1, 2) == 3
++    with pytest.raises(OperationDisabledError):
++        service.execute("divide", 6, 2)
++
++
++def test_execute_batch_captures_deny_listed_operation_per_item():
++    service = CalculatorService(
++        policy=OperationPolicy(disabled_operations=frozenset({"divide"}))
++    )
++    results = service.execute_batch(
++        [
++            {"operation": "divide", "args": [6, 2]},
++            {"operation": "add", "args": [1, 2]},
++        ]
++    )
++    assert results[0]["ok"] is False
++    assert results[0]["error"]["type"] == "OperationDisabledError"
++    assert results[1] == {"ok": True, "value": 3}
++
++
+ # --- max_batch_size --------------------------------------------------------
+ 
+ 

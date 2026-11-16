@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "task": {
+    "id": "default/tiangolo__typer-1788",
+    "repository_ref": "959a356fec72cedcfd4ee3f84790789f8e961989",
+    "model": "Qwen/Qwen3.5-4B",
+    "max_steps": 40
+  },
+  "runs": [
+    {
+      "id": "v5",
+      "forge_status": "failed",
+      "termination_reason": "provider_error",
+      "gradable_model_outcome": false,
+      "repository_changed": false,
+      "provider_usage": {
+        "input_tokens": 1048565,
+        "output_tokens": 5823,
+        "reasoning_tokens": 4282,
+        "total_tokens": 1054388
+      }
+    },
+    {
+      "id": "v6",
+      "harbor_exception": "CancelledError",
+      "reward": null,
+      "verifier_result": null,
+      "gradable_model_outcome": false,
+      "repository_changed": true,
+      "patch_correct": true,
+      "contamination": "test tool used Forge private Python without pytest before external cancellation"
+    },
+    {
+      "id": "v7",
+      "forge_status": "incomplete",
+      "termination_reason": "resource_exhausted",
+      "resource_reason": "max_steps",
+      "gradable_model_outcome": true,
+      "repository_changed": false,
+      "steps": 40,
+      "provider_usage": {
+        "input_tokens": 1758740,
+        "output_tokens": 5814,
+        "reasoning_tokens": 3786,
+        "total_tokens": 1764554,
+        "cached_tokens": 0,
+        "cost_usd": null
+      },
+      "historical_verifier_executed": false,
+      "equivalent_pristine_state_verifier": {
+        "reward": 0.0,
+        "f2p_passed": 0,
+        "f2p_total": 1,
+        "p2p_passed": 22,
+        "p2p_total": 22,
+        "regressions": []
+      }
+    }
+  ],
+  "wheel_sha256": {
+    "v5": "c57256821ad674c4e9b280b5790ca453c7c149078b0ed6108bb94d71e0b359a5",
+    "v6": "bdd57931c7d99dadc7704b502d64a93d329a93a2dffec9d82e60b77111ef67cb",
+    "v7": "237521f488d541919855f834cfa344e4081744318b8ba7c3e7aaf11d938c167c"
+  }
+}

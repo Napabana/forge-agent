@@ -1,0 +1,39 @@
+diff --git a/src/app/runtime.py b/src/app/runtime.py
+index bc92afe..0a72890 100644
+--- a/src/app/runtime.py
++++ b/src/app/runtime.py
+@@ -1,5 +1,5 @@
+-from .config import POLICY_MODE
++from . import config
+ 
+ 
+ def policy_mode() -> str:
+-    return POLICY_MODE
++    return config.POLICY_MODE
+diff --git a/tests/test_policy_runtime.py b/tests/test_policy_runtime.py
+index 343ce9e..7fb41f5 100644
+--- a/tests/test_policy_runtime.py
++++ b/tests/test_policy_runtime.py
+@@ -3,6 +3,7 @@ import sys
+ 
+ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+ 
++from app import config
+ from app.runtime import policy_mode
+ 
+ 
+@@ -10,3 +11,14 @@ def test_policy_mode_is_configured_string():
+     value = policy_mode()
+     assert isinstance(value, str)
+     assert value
++
++
++def test_policy_mode_reads_current_config_value():
++    original = config.POLICY_MODE
++    try:
++        config.POLICY_MODE = "strict"
++        assert policy_mode() == "strict"
++        config.POLICY_MODE = "legacy"
++        assert policy_mode() == "legacy"
++    finally:
++        config.POLICY_MODE = original
