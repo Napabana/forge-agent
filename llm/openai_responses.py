@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from agent.task import Action, ActionType, ToolCall
 from llm.base import LLMBackend, LLMMessage, LLMResponse, LLMToolSchema, StreamCallback
+from llm.openai_compat import _parse_pseudo_tool_call
 from llm.tool_schema import strictify_tool_parameters
 from llm.usage import TokenUsage
 
@@ -204,7 +206,7 @@ def _parse_response(response: Any, input_items: list[dict[str, Any]]) -> LLMResp
     if function_call is not None:
         action = _function_call_action(function_call, reasoning or text)
     elif text:
-        action = Action(ActionType.FINISH, reasoning, message=text)
+        action = _text_action(text, reasoning)
     else:
         error = _field(response, "error", None)
         error_message = _string_value(_field(error, "message", ""))
@@ -235,6 +237,18 @@ def _function_call_action(item: Any, thought: str) -> Action:
         thought,
         tool_call=ToolCall(name=name, params=params),
     )
+
+
+def _text_action(text: str, reasoning: str) -> Action:
+    pseudo_call = _parse_pseudo_tool_call(text)
+    if pseudo_call is not None:
+        return pseudo_call
+    if re.search(r"(?im)^\s*(?:Action\s*[:：]|\[Tool\s*[:：])", text):
+        return Action(
+            ActionType.PROTOCOL_ERROR, reasoning or text,
+            message="Malformed text tool call; send a native tool call with valid JSON arguments.",
+        )
+    return Action(ActionType.FINISH, reasoning, message=text)
 
 
 def _response_output_text(response: Any, output: list[Any]) -> str:
@@ -330,7 +344,7 @@ def _parse_stream_fallback(
         }
         action = _function_call_action(call, full_reasoning or full_text)
     elif full_text:
-        action = Action(ActionType.FINISH, full_reasoning, message=full_text)
+        action = _text_action(full_text, full_reasoning)
     else:
         action = Action(
             ActionType.GIVE_UP,

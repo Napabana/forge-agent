@@ -45,6 +45,7 @@ def configured_agent_options(config):
         "repo_map_budget": config.context.repo_map_budget,
         "repo_map_summary_budget": config.context.repo_map_summary_budget,
         "test_python_executable": config.tools.test.python_executable,
+        "memory_config": config.memory,
     }
 
 

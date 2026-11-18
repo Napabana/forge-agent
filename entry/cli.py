@@ -27,11 +27,14 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import click
+import yaml
 
 # 把项目根加入 path（直接跑脚本时需要）
 _ROOT = Path(__file__).parent.parent
@@ -175,7 +178,7 @@ def _build_run_registry(
 @click.option(
     "--config", "-c",
     default=None,
-    help="Path to config YAML file (default: config/default.yaml)",
+    help="Config YAML (default: ~/.config/forge-agent/config.yaml when present)",
 )
 @click.option("--profile", type=click.Choice(["interactive", "safe", "benchmark", "sandboxed"]), default=None,
               help="Run profile; overrides agent.run_profile in YAML")
@@ -210,6 +213,73 @@ def config_commands() -> None:
     """Inspect the resolved configuration."""
 
 
+@cli.group("memory")
+def memory_commands() -> None:
+    """Inspect and approve local project memory."""
+
+
+def _memory_for_cli(ctx: click.Context, repo: str):
+    from project_memory.runtime import MemoryRuntime
+    settings = _load_cli_config(ctx).memory
+    return MemoryRuntime(repo, root=settings.root, budget=settings.context_budget_tokens,
+                         max_results=settings.max_results)
+
+
+@memory_commands.command("status")
+@click.option("--repo", default=".")
+@click.pass_context
+def memory_status(ctx: click.Context, repo: str) -> None:
+    runtime = _memory_for_cli(ctx, repo)
+    click.echo(json.dumps({"project_id": runtime.store.identity.project_id,
+        "path": str(runtime.store.base), "formal_count": len(runtime.store.read_records()),
+        "pending_count": sum(row.get("status") == "pending" for row in runtime.writer.pending()),
+        "latest_activity": (runtime.store.read_activity()[-1:] or [None])[0]}, ensure_ascii=False, indent=2))
+
+
+@memory_commands.command("show")
+@click.option("--repo", default=".")
+@click.pass_context
+def memory_show(ctx: click.Context, repo: str) -> None:
+    path = _memory_for_cli(ctx, repo).store.path("memory/MEMORY.md")
+    click.echo(path.read_text(encoding="utf-8") if path.exists() else "No project memory yet.")
+
+
+@memory_commands.command("search")
+@click.argument("query")
+@click.option("--repo", default=".")
+@click.pass_context
+def memory_search(ctx: click.Context, query: str, repo: str) -> None:
+    runtime = _memory_for_cli(ctx, repo)
+    for row in runtime.retrieval.search(query, limit=runtime.max_results):
+        click.echo(f"{row['memory_id']}\t{row['title']}\t{row.get('path', '')}\tstale={row['stale']}")
+
+
+@memory_commands.command("approve")
+@click.argument("candidate_id")
+@click.option("--repo", default=".")
+@click.pass_context
+def memory_approve(ctx: click.Context, candidate_id: str, repo: str) -> None:
+    try:
+        runtime = _memory_for_cli(ctx, repo)
+        runtime.writer.resolve(candidate_id, status="approved", repo=runtime.repo)
+    except (OSError, ValueError, KeyError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Approved {candidate_id}")
+
+
+@memory_commands.command("reject")
+@click.argument("candidate_id")
+@click.option("--repo", default=".")
+@click.pass_context
+def memory_reject(ctx: click.Context, candidate_id: str, repo: str) -> None:
+    try:
+        runtime = _memory_for_cli(ctx, repo)
+        runtime.writer.resolve(candidate_id, status="rejected", repo=runtime.repo)
+    except (OSError, ValueError, KeyError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Rejected {candidate_id}")
+
+
 @config_commands.command("show")
 @click.option("--provider", default=None)
 @click.option("--protocol", default=None)
@@ -226,7 +296,129 @@ def show_config(ctx: click.Context, provider: str | None, protocol: str | None,
     data["llm"]["api_key"] = "<redacted>" if data["llm"]["api_key"] else ""
     for profile in data["model_profiles"].values():
         profile["api_key"] = "<redacted>" if profile["api_key"] else ""
+    for server in data["mcp"]["servers"]:
+        server["env"] = {key: "<redacted>" for key in server["env"]}
     click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+@config_commands.command("path")
+@click.pass_context
+def config_path(ctx: click.Context) -> None:
+    """Show the YAML file Forge reads for this command."""
+    selected = ctx.obj.get("config_path")
+    user = Path.home() / ".config" / "forge-agent" / "config.yaml"
+    click.echo(Path(selected).expanduser() if selected else user if user.exists()
+               else Path(__file__).parent.parent / "config" / "default.yaml")
+
+
+@config_commands.command("models")
+@click.pass_context
+def config_models(ctx: click.Context) -> None:
+    """List configured model names without showing credentials."""
+    config = _load_cli_config(ctx)
+    for name, model in sorted(config.model_profiles.items()):
+        click.echo(f"{name}\t{model.provider}\t{model.model}")
+    if not config.model_profiles:
+        click.echo("No named models configured. Add entries under models: in config.yaml.")
+
+
+@cli.group("skill")
+def skill_commands() -> None:
+    """Install or list Agent Skills."""
+
+
+@skill_commands.command("add")
+@click.argument("source")
+@click.option("--local", "project", is_flag=True, help="Install in the target repository")
+@click.option("--repo", default=".", help="Target repository for --local")
+@click.pass_context
+def skill_add(ctx: click.Context, source: str, project: bool, repo: str) -> None:
+    """Install one local Skill folder or GitHub tree URL."""
+    from entry.resource_commands import install_skill
+
+    root = (Path(repo).resolve() / ".agents" / "skills") if project else None
+    if root is None:
+        global_dir = _load_cli_config(ctx).agent.skills_global_dir
+        if global_dir is None:
+            raise click.ClickException("Global Skill directory is disabled; use --local")
+        root = Path(global_dir)
+    try:
+        installed = install_skill(source, root)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Installed Skill: {installed}")
+    click.echo("Use run --skills to make it available to the agent.")
+
+
+@skill_commands.command("list")
+@click.option("--repo", default=".", help="Repository whose project Skills are included")
+@click.pass_context
+def skill_list(ctx: click.Context, repo: str) -> None:
+    """List Skills visible in the current repository."""
+    from skills.catalog import SkillCatalog
+
+    catalog = SkillCatalog.discover(Path(repo).resolve(),
+                                    global_root=_load_cli_config(ctx).agent.skills_global_dir)
+    for skill in catalog.skills:
+        click.echo(f"{skill.name}\t{skill.source}\t{skill.root}")
+    if not catalog.skills:
+        click.echo("No Skills found. Use forgeAgent skill add SOURCE.")
+    for issue in catalog.issues:
+        click.echo(f"Invalid Skill {issue.directory}: {issue.error}", err=True)
+
+
+@cli.group("mcp")
+def mcp_commands() -> None:
+    """Configure or list MCP servers."""
+
+
+@mcp_commands.command("add")
+@click.argument("name")
+@click.option("--url", help="Streamable HTTP MCP endpoint")
+@click.option("--command", help="Stdio MCP server executable")
+@click.option("--arg", "args", multiple=True, help="One stdio argument; repeat as needed")
+@click.option("--env", "env_names", multiple=True, help="Pass an existing environment variable by name")
+@click.pass_context
+def mcp_add(ctx: click.Context, name: str, url: str | None, command: str | None,
+            args: tuple[str, ...], env_names: tuple[str, ...]) -> None:
+    """Add one MCP server to the existing config.yaml."""
+    from entry.resource_commands import add_mcp_server
+
+    if bool(url) == bool(command):
+        raise click.UsageError("Provide exactly one of --url or --command")
+    if url and (args or env_names):
+        raise click.UsageError("--arg and --env are for stdio servers")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", name):
+        raise click.UsageError("MCP name must match [A-Za-z][A-Za-z0-9_-]{0,63}")
+    if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in env_names):
+        raise click.UsageError("--env expects environment variable names, not values")
+    server = {"id": name, "transport": "streamable_http" if url else "stdio"}
+    if url:
+        server["url"] = url
+    else:
+        server.update(command=command, args=list(args))
+        if env_names:
+            server["env"] = {key: "${" + key + "}" for key in env_names}
+    selected = ctx.obj.get("config_path")
+    config_path = Path(selected).expanduser() if selected else Path.home() / ".config" / "forge-agent" / "config.yaml"
+    template = None if selected else Path(__file__).parent.parent / "config" / "default.yaml"
+    try:
+        add_mcp_server(config_path, server, default_template=template)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Added MCP server {name} to {config_path}")
+    click.echo("Use run --mcp to enable configured servers for a run.")
+
+
+@mcp_commands.command("list")
+@click.pass_context
+def mcp_list(ctx: click.Context) -> None:
+    """List configured MCP servers without displaying credentials."""
+    servers = _load_cli_config(ctx).mcp.servers
+    for server in servers:
+        click.echo(f"{server.id}\t{server.transport}\t{'enabled' if server.enabled else 'disabled'}")
+    if not servers:
+        click.echo("No MCP servers configured. Use forgeAgent mcp add NAME --url URL.")
 
 
 # ---------------------------------------------------------------------------
@@ -237,9 +429,12 @@ def show_config(ctx: click.Context, provider: str | None, protocol: str | None,
 @click.option("--repo", "-r", default=".", show_default=True, help="Path to the target repository (default: current directory)")
 @click.option("--task", "-t", default=None, help="Task description (natural language)")
 @click.option("--task-file", "-f", default=None, help="Read task description from file")
-@click.option("--model", "-m", default=None, help="Override LLM model name")
+@click.option("--model", "-m", default=None, help="Select a configured model name or override the model ID")
 @click.option("--provider", "-p", default=None, help="Override LLM provider")
 @click.option("--protocol", default=None, help="Override LLM protocol: chat_completions or responses")
+@click.option("--plan/--no-plan", default=None, help="Enable or disable planning for this run")
+@click.option("--skills/--no-skills", default=None, help="Enable or disable skills for this run")
+@click.option("--mcp/--no-mcp", default=None, help="Enable or disable configured MCP servers for this run")
 @click.option("--max-steps", default=None, type=int, help="Override max steps")
 @click.option("--stream/--no-stream", "-s", default=True, help="Enable or disable streaming output (default: on)",)
 @click.option(
@@ -271,6 +466,9 @@ def run(
     model: str | None,
     provider: str | None,
     protocol: str | None,
+    plan: bool | None,
+    skills: bool | None,
+    mcp: bool | None,
     max_steps: int | None,
     stream: bool,
     reasoning_stream: bool | None,
@@ -295,6 +493,14 @@ def run(
     config = merge_cli_overrides(
         config, provider=provider, protocol=protocol, model=model, max_steps=max_steps
     )
+    if plan is not None:
+        config.agent.planning_mode = "always" if plan else "off"
+    if skills is not None:
+        config.agent.skills_enabled = skills
+    if mcp is not None:
+        if mcp and not config.mcp.servers:
+            raise click.UsageError("--mcp requires mcp.servers in the user config")
+        config.mcp = replace(config.mcp, enabled=mcp)
     if config.agent.run_profile == "sandboxed":
         sandbox = True
 
@@ -321,6 +527,7 @@ def run(
     click.echo(f"  Provider : {config.llm.provider}")
     click.echo(f"  Protocol : {config.llm.protocol}")
     click.echo(f"  Model    : {config.llm.model}")
+    click.echo(f"  Features : plan={config.agent.planning_mode}, skills={config.agent.skills_enabled}, mcp={config.mcp.enabled}, workers={config.agent.multi_agent_enabled}")
     click.echo(f"  Repo     : {repo_path}")
     click.echo(f"  Max steps: {config.agent.max_steps}\n")
 
@@ -531,7 +738,7 @@ def _chat_backend(config):
 
 @cli.command()
 @click.option("--repo", "-r", default=".", show_default=True, help="Path to the target repository (default: current directory)")
-@click.option("--model", "-m", default=None, help="Override LLM model name")
+@click.option("--model", "-m", default=None, help="Select a configured model name or override the model ID")
 @click.option("--provider", "-p", default=None, help="Override LLM provider")
 @click.option("--protocol", default=None, help="Override LLM protocol: chat_completions or responses")
 @click.option("--max-steps", default=None, type=int, help="Max steps per round")

@@ -1,5 +1,7 @@
 # Forge Agent
 
+Project Memory：同一 Git 项目的 Run、Chat、Worktree 和只读 Worker 可共享本地文件记忆；命令与配置见 [USAGE.md](USAGE.md)。评测默认关闭记忆。
+
 Forge Agent 是一个面向软件工程任务的本地 Coding Agent。项目的核心不是单独实现一个 ReAct 循环，而是把“模型决策、仓库上下文、受控工具执行、隔离工作区、任务状态、可恢复会话、独立验收和可审计交付”组织成一条可解释、可测试的工程链路。
 
 当前 `dev` 的主线架构已经收口：CLI `run`、交互式 `chat`、HTTP API 与 GitHub Issue 入口共享 `ExecutionRunner → Agent → ToolExecutor → EventLog/Trace` 的生产路径；隔离任务在此基础上接入 SQLite WAL TaskEngine、Git Worktree 和可选 Docker Runtime；Chat 额外接入持久化 Session 与两阶段 Context Compaction；GitHub Issue 自动 PR 则在 Agent 结束后增加独立 Acceptance 与确定性交付门禁。

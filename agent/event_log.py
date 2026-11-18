@@ -40,18 +40,24 @@ _TRACE_STARTED = {
     EventType.LLM_CALL_STARTED,
     EventType.TOOL_EXECUTION_STARTED,
     EventType.CONTEXT_COMPACTION_STARTED,
+    EventType.MEMORY_RETRIEVAL_STARTED,
+    EventType.MEMORY_CONSOLIDATION_STARTED,
 }
 _TRACE_FAILED = {
     EventType.PREPARE_NEXT_TURN_FAILED,
     EventType.LLM_CALL_FAILED,
     EventType.TOOL_EXECUTION_FAILED,
     EventType.CONTEXT_COMPACTION_FAILED,
+    EventType.MEMORY_RETRIEVAL_FAILED,
+    EventType.MEMORY_CONSOLIDATION_FAILED,
 }
 _TRACE_FINISHED = {
     EventType.PREPARE_NEXT_TURN_FINISHED,
     EventType.LLM_CALL_FINISHED,
     EventType.TOOL_EXECUTION_FINISHED,
     EventType.CONTEXT_COMPACTED,
+    EventType.MEMORY_RETRIEVAL_FINISHED,
+    EventType.MEMORY_CONSOLIDATION_FINISHED,
 }
 
 
@@ -74,6 +80,8 @@ def _span_type(event_type: EventType) -> str:
         return "skill"
     if event_type.name.startswith("MCP_"):
         return "mcp"
+    if event_type.name.startswith("MEMORY_"):
+        return "memory"
     if event_type is EventType.COMPLETION_REJECTED:
         return "completion"
     if event_type is EventType.ACCEPTANCE:
@@ -101,6 +109,10 @@ def _span_family(event_type: EventType) -> str:
         return "tool"
     if event_type.name.startswith("CONTEXT_COMPACTION_") or event_type is EventType.CONTEXT_COMPACTED:
         return "compaction"
+    if event_type.name.startswith("MEMORY_RETRIEVAL_"):
+        return "memory_retrieval"
+    if event_type.name.startswith("MEMORY_CONSOLIDATION_"):
+        return "memory_consolidation"
     return _span_type(event_type)
 
 
@@ -253,14 +265,22 @@ class EventLog:
         raw_content: str = "",
         usage: TokenUsage | None = None,
     ) -> str:
+        action_payload = action.to_dict()
         if action.tool_call is not None:
-            self._tool_args_by_step[step] = dict(action.tool_call.params)
+            arguments = dict(action.tool_call.params)
+            if action.tool_call.name == "memory_propose":
+                arguments = {"redacted": True}
+                action_payload["tool_call"]["params"] = arguments
+                action_payload["thought"] = "[MEMORY_PROPOSAL]"
+                action_payload["message"] = "[MEMORY_PROPOSAL]"
+                raw_content = "[MEMORY_PROPOSAL]"
+            self._tool_args_by_step[step] = arguments
         event = Event(
             event_type=EventType.ACTION,
             task_id=self._current_task_id,
             payload={
                 "step": step,
-                "action": action.to_dict(),
+                "action": action_payload,
                 "raw_content": raw_content,
                 "usage": usage.to_dict() if usage else None,
             },
@@ -582,7 +602,7 @@ class EventLog:
                 "tool": tool,
                 "decision": decision,
                 "reason": reason,
-                "params": params,
+                "params": {"redacted": True} if tool == "memory_propose" else params,
             },
         ))
 

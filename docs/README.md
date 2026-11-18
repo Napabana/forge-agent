@@ -23,6 +23,7 @@
 | Isolation & Acceptance | Worktree、Runtime、独立验收和 GitHub 交付如何隔离 | [隔离与独立验收](design/06-隔离与独立验收.md) |
 | Evaluation & Evolution | 冻结评测与离线 Candidate promotion 如何保持证据边界 | [Evaluation 与 Evolution](design/07-Evaluation与Evolution.md) |
 | Supervisor-Worker | Lead 委派只读 Worker 的并发、预算、Trace 和验收 | [Multi-Agent 架构](design/09-Supervisor-Worker架构.md) |
+| Project Memory | 项目身份、文件存储、检索、候选和跨 Run 复用 | [Project Memory 架构](design/10-Project-Memory-架构.md) |
 
 ## 推荐阅读路径
 

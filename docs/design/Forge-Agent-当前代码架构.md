@@ -128,6 +128,8 @@ verifier 不进入 History。Acceptance 失败不会反写主循环继续修复�
 
 ## 8. 当前实现范围与未实现项
 
+2026-11-18 未提交工作树增量：`project_memory/` 在各产品入口的 Runner 与 isolate Agent 之间按项目 ID 共享本地 Markdown/JSON/JSONL；首次请求加载有预算的历史资料，Lead 提交 pending 候选，Runner 在独立验收后进行确定性升级并追加精简 Activity。Worker 只读，评测默认关闭。架构与证据边界见 [10-Project-Memory-架构](10-Project-Memory-架构.md)。本段以下的旧基线范围描述以该增量为准进行修订。
+
 已实现：四入口统一 Runner、同步 ReAct、三种 LLM backend、persistent query-aware Repo Map、
 Chat Session/Compaction、structured Planning/Recovery、Skills、MCP Tool integration、Tool lifecycle、
 Worktree/Docker、Trace v2、Independent Acceptance、Evaluation Harness 和离线 Evolution pipeline。

@@ -175,6 +175,8 @@ class ExecutionRunner:
                 else self.config.prepare_next_turn
             ),
         )
+        memory = self._memory_runtime(task.repo_path, config, entrypoint)
+        config = dataclasses.replace(config, memory_runtime=memory)
         if config.run_profile == "sandboxed" and not request.sandbox:
             raise ValueError("sandboxed run profile requires Docker sandbox")
         if config.run_profile == "safe":
@@ -235,6 +237,8 @@ class ExecutionRunner:
                         session_id=request.session_id,
                         error=exc,
                     )
+                if memory is not None and config.memory_config.auto_capture:
+                    memory.record_exception(task, exc, trace_path=trace_path, isolate=True)
                 raise
 
             _merge_context_policy_usage(result, config.prepare_next_turn)
@@ -249,6 +253,18 @@ class ExecutionRunner:
                 path_baseline,
                 acceptance_setup_error,
             )
+            if memory is not None and config.memory_config.auto_capture and isinstance(result, RunResult):
+                try:
+                    if trace_path:
+                        with EventLog.open_existing(trace_path, task_id=task.task_id,
+                                                    entrypoint=entrypoint, session_id=request.session_id) as memory_log:
+                            memory.conclude(result, task=task, acceptance=result.acceptance_status,
+                                            trace_path=trace_path, isolate=True, log=memory_log)
+                    else:
+                        memory.conclude(result, task=task, acceptance=result.acceptance_status,
+                                        trace_path=None, isolate=True)
+                except Exception as exc:  # noqa: BLE001 - memory must not change the run result
+                    logger.warning("Isolated memory finalization failed: %s", exc)
             if trace_path:
                 _record_post_run_trace(
                     trace_path,
@@ -262,6 +278,18 @@ class ExecutionRunner:
 
         if config.run_profile != "safe":
             self._ensure_direct_mcp()
+        if memory is not None:
+            from project_memory.tools import MemoryProposeTool, MemoryReadTool, MemorySearchTool
+            for tool in (MemorySearchTool(memory), MemoryReadTool(memory)):
+                self.registry.unregister(tool.name)
+                self.registry.register(tool)
+            self.registry.unregister("memory_propose")
+            if entrypoint != "worker" and config.memory_config.auto_capture:
+                self.registry.register(MemoryProposeTool(memory, run_id=task.task_id,
+                    session_id=request.session_id))
+        else:
+            for name in ("memory_search", "memory_read", "memory_propose"):
+                self.registry.unregister(name)
         if config.multi_agent_enabled:
             worker_engine = self.engine or self._worker_engine()
             try:
@@ -321,6 +349,7 @@ class ExecutionRunner:
             else:
                 self.agent = Agent(self.backend, self.registry, config, executor=executor)
             self._agent_key = key
+        self.agent._cfg = config
 
         own_log = log is None
         log = log or EventLog.create(
@@ -332,9 +361,16 @@ class ExecutionRunner:
         log.configure_trace(entrypoint=entrypoint, session_id=request.session_id)
         if on_log_created is not None:
             on_log_created(task.task_id, str(log.path))
+        proposal = self.registry.get_tool("memory_propose")
+        if proposal is not None and hasattr(proposal, "log"):
+            proposal.log = log
+            proposal.trace_path = str(log.path)
         if on_event is not None:
             log.on_append(on_event)
         self._record_mcp_capabilities(log)
+        if memory is not None and request.history is not None and request.history.message_count > 1 and config.prepare_next_turn is not None:
+            self.agent._memory_context = memory.context(task.description,
+                TokenBudget(total=config.budget_tokens).counter, log=log)
         try:
             preparation_result = self._prepare_shared_history_boundary(
                 task=task,
@@ -360,6 +396,9 @@ class ExecutionRunner:
                 path_baseline,
                 acceptance_setup_error,
             )
+            if memory is not None and config.memory_config.auto_capture:
+                memory.conclude(result, task=task, acceptance=result.acceptance_status,
+                                trace_path=str(log.path), log=log)
             _record_post_run_trace_log(
                 log,
                 result=result,
@@ -369,6 +408,8 @@ class ExecutionRunner:
                 (owned_parent_engine.complete_task if result.is_success() else owned_parent_engine.fail_task)(task.task_id)
             return result
         except BaseException as exc:
+            if memory is not None and config.memory_config.auto_capture:
+                memory.record_exception(task, exc, trace_path=str(log.path))
             try:
                 log.log_run_exception(task_id=task.task_id, error=exc)
             except Exception as trace_exc:  # noqa: BLE001 — trace is best-effort
@@ -399,6 +440,19 @@ class ExecutionRunner:
             total_tokens=config.total_worker_tokens, timeout_seconds=config.worker_timeout_seconds,
             sandbox_workers=config.run_profile == "sandboxed",
         )
+
+    @staticmethod
+    def _memory_runtime(repo_path, config, entrypoint):
+        settings = config.memory_config
+        if settings is None or not settings.enabled or (entrypoint == "eval" and not settings.evaluation_enabled):
+            return None
+        try:
+            from project_memory.runtime import MemoryRuntime
+            return MemoryRuntime(repo_path, root=settings.root,
+                                 budget=settings.context_budget_tokens, max_results=settings.max_results)
+        except Exception as exc:  # noqa: BLE001 - optional memory cannot stop a run
+            logger.warning("Memory initialization failed: %s", exc)
+            return None
 
     def _worker_engine(self):
         if self._owned_worker_engine is None:

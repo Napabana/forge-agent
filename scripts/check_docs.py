@@ -355,6 +355,7 @@ def validate_built_site(repo_root: Path, mapping: dict) -> tuple[list[str], dict
         "docs/design/06-隔离与独立验收.md": "design/06-隔离与独立验收.html",
         "docs/design/07-Evaluation与Evolution.md": "design/07-Evaluation与Evolution.html",
         "docs/design/09-Supervisor-Worker架构.md": "design/09-Supervisor-Worker架构.html",
+        "docs/design/10-Project-Memory-架构.md": "design/10-Project-Memory-架构.html",
         "docs/design/MAINTENANCE.md": "design/MAINTENANCE.html",
     }
     for document, expected_count in mapping["mermaid_documents"].items():

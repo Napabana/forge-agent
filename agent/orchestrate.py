@@ -339,6 +339,17 @@ async def orchestrate_run(
                 agent_cfg, confirm_callback, runtime,
                 default_cwd=wt.path, workspace=wt.path,
             )
+            if agent_cfg.memory_runtime is not None:
+                from project_memory.runtime import MemoryRuntime
+                from project_memory.tools import MemoryProposeTool, MemoryReadTool, MemorySearchTool
+                settings = agent_cfg.memory_config
+                memory = MemoryRuntime(str(wt.path), root=settings.root,
+                                       budget=settings.context_budget_tokens, max_results=settings.max_results)
+                runtime_cfg = dataclasses.replace(runtime_cfg, memory_runtime=memory)
+                registry.register(MemorySearchTool(memory)).register(MemoryReadTool(memory))
+                if settings.auto_capture:
+                    registry.register(MemoryProposeTool(memory, run_id=task_id, trace_path=str(log.path),
+                                                        log=log, isolate=True))
             if coordinator_factory is not None:
                 from agent.coordinator import DelegateTasksTool
                 coordinator = coordinator_factory(str(wt.path), task_id, runtime_cfg, engine)

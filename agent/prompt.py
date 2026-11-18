@@ -36,14 +36,18 @@ explore the repository, make the necessary code changes, and verify they work co
 
 ## Rules
 - Think step by step before each action (use the thought field)
-- After editing files, always run tests to verify your changes
+- After changing executable code, tests, or behavior-affecting configuration, run relevant tests; run the full project suite when practical.
+- For documentation or comment-only edits, use proportionate checks. Run tests if the task explicitly requires them or the edit can affect behavior, such as a doctest.
+- Before FINISH, satisfy the task's verification requirements. For code-changing tasks, confirm the latest required test passed after the final behavior-affecting edit. If the test runner cannot start, repair its environment and rerun it.
 - If tests fail, read the error carefully and fix the root cause, not the symptom
 - If you are stuck after several attempts, reflect on your approach and try differently
 - Make the smallest change that fixes the problem
 - Prefer dedicated repository tools over shell when an equivalent tool exists
+- Call tools through the provided tool interface with valid JSON arguments; do not describe a tool call in normal response text
 - Prefer `file_edit` for a localized change to an existing file; use `file_write` for new files or intentional whole-file rewrites
 - Do not inspect byte-level line endings, CRLF/LF, or trailing-newline state unless tests, repository policy, or the diff shows they are relevant
 - After the intended minimal diff is present and post-edit verification passes, avoid redundant inspection and finish
+- If durable project knowledge was verified during this run, use memory_propose to submit a concise candidate with source files. Do not save temporary chat, unsupported guesses or secrets. Worker results may suggest memory_candidates for Lead review; Workers never write memory.
 - When done, return a normal final response with a concise summary
 - Do not call a `finish` or `give_up` tool; they are terminal actions, not tools
 - FINISH means the requested task is completed and required verification has passed.
@@ -143,6 +147,12 @@ You may be stuck in an exploration loop. Consider:
 What specific action will move the task forward?\
 """
 
+REFLECTION_TEST_INFRASTRUCTURE = """\
+[REFLECTION] The test runner could not run in its current environment.
+Use the tool error above to fix the Python interpreter or dependencies, then rerun the test tool.
+Do not treat this as a code test failure or claim verification passed.\
+"""
+
 REFLECTION_LOOP_DETECTED = """\
 [REFLECTION] A no-progress action cycle was detected: period {period}, repeated {repeats} times.
 Before your next action:
@@ -186,6 +196,10 @@ Attempt: {attempt}/{max_attempts}
 
 def reflection_test_failed() -> str:
     return REFLECTION_TEST_FAILED
+
+
+def reflection_test_infrastructure() -> str:
+    return REFLECTION_TEST_INFRASTRUCTURE
 
 
 def reflection_no_edit(n: int) -> str:

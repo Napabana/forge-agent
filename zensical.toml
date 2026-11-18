@@ -15,6 +15,7 @@ nav = [
   { "核心机制" = [
     { "Agent 与 Tool Lifecycle" = "design/02-Agent与Tool生命周期.md" },
     { "Context Engineering" = "design/03-Context与RepoMap.md" },
+    { "Project Memory" = "design/10-Project-Memory-架构.md" },
     { "Planning 与 Recovery" = "design/04-Planning与Recovery.md" },
     { "Skills 与 MCP" = "design/05-Skills与MCP.md" },
     { "隔离与独立验收" = "design/06-隔离与独立验收.md" },

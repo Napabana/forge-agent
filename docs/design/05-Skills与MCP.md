@@ -40,6 +40,10 @@ Catalog 扫描 project 与 global root，解析 `SKILL.md` frontmatter；同名 
 Skill 只形成 discovery issue。首轮 system context 只含 name/description/resources manifest；
 模型调用 `skill_load` 后完整 instructions 进入每轮 runtime context，reference 需再显式加载。
 
+CLI 的 `skill add` 接受本地目录、`SKILL.md` 路径或 GitHub `tree/REF/PATH` URL，只安装一个通过现有 Catalog 校验的 Skill；`--local` 选 project 目录，默认使用配置的 global root。`skill list` 展示当前仓库可发现的 Skill。
+
+`mcp add` 接受 stdio command/args 或 streamable HTTP URL，向同一个 `config.yaml` 的 `mcp.servers` 增量插入一项；写入前解析并核对其他 YAML 值不变，写入时保留原始注释及权限。`mcp list` 只显示服务标识和 transport。启用运行时仍用 `run --mcp` 或配置中的 `mcp.enabled`。
+
 MCP manager 在专用线程启动 asyncio loop，为每个 server 建 official `Client` context，分页发现
 tools，生成 bounded descriptor/snapshot。Adapter 注册为 `mcp__<server>__<tool>`；调用时先走
 ToolExecutor，再用 thread-safe future 执行 async `call_tool`。direct/Chat manager 可复用；
@@ -69,6 +73,7 @@ isolate 每 run 创建并关闭。
 
 - Skill path/reference 解析受 root 边界限制，单个资源按字符上限加载；manifest 不等于执行权限。
 - 已加载 Skill/Reference 每轮重注入，跨 compaction 保持；重复 load 不算 semantic progress。
+- 已加载 Skill 从下一轮 `skill_load` 可选名称中移除；重复调用只返回已加载提示，不再读取正文。达到加载上限时不再向模型提供 `skill_load`，已加载正文和 reference 能力仍保留。
 - remote description/schema/tool count/output 都有上限，防止 capability metadata 无界占用 Context。
 - ToolAnnotations 默认不可信；只有 server 配置显式信任且 `read_only_hint=true` 才映射 READ_ONLY，
   否则 MAY_MUTATE 并要求确认。

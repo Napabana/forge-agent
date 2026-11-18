@@ -81,6 +81,36 @@ def test_parallel_workers_have_independent_trace_task_and_usage(tmp_path):
         coordinator.delegate([WorkerRequest("explorer", "Again")])
 
 
+def test_default_worker_budget_allows_two_24k_workers(tmp_path, monkeypatch):
+    coordinator = _coordinator(tmp_path, lambda role: SlowBackend(_tracker(), role, delay=0.01))
+    allocated = []
+    run_worker = coordinator._run_worker
+
+    def capture_budget(task_id, agent_id, request, token_limit, cancel):
+        allocated.append(token_limit)
+        return run_worker(task_id, agent_id, request, token_limit, cancel)
+
+    monkeypatch.setattr(coordinator, "_run_worker", capture_budget)
+    results = coordinator.delegate([
+        WorkerRequest("explorer", "Find code"),
+        WorkerRequest("test_analyst", "Find tests"),
+    ])
+    assert all(result.status == "success" for result in results)
+    assert allocated == [24_000, 24_000]
+
+
+def test_worker_can_finish_read_only_analysis_when_lead_requires_plan(tmp_path):
+    backend = SlowBackend(_tracker(), "explorer", delay=0)
+    coordinator = _coordinator(tmp_path, lambda role: backend)
+    coordinator.agent_config = dataclasses.replace(coordinator.agent_config, planning_mode="always")
+
+    result = coordinator.delegate([WorkerRequest("explorer", "Inspect the code")])[0]
+
+    assert result.status == "success"
+    assert result.findings
+    assert "[Structured Planning]" not in backend.received_messages[0][0].content
+
+
 def test_worker_registry_cannot_write_shared_workspace(tmp_path):
     target = tmp_path / "forbidden.py"
 

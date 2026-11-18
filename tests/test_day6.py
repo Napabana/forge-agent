@@ -209,6 +209,24 @@ agent:
 
 
 class TestMergeCliOverrides:
+    def test_named_model_uses_its_connection_and_shared_key(self):
+        config = _parse({
+            "llm": {"provider": "openai", "model": "original", "api_key": "shared-key", "base_url": "https://old.invalid/v1"},
+            "models": {
+                "fast": {"model": "fast-id", "api_key": "shared-key", "base_url": "https://fast.invalid/v1"},
+                "smart": {"model": "smart-id", "api_key": "shared-key", "base_url": "https://smart.invalid/v1"},
+            },
+        })
+        merge_cli_overrides(config, model="smart")
+        assert (config.llm.model, config.llm.api_key, config.llm.base_url) == (
+            "smart-id", "shared-key", "https://smart.invalid/v1"
+        )
+        merge_cli_overrides(config, model="fast")
+        assert (config.llm.model, config.llm.api_key, config.llm.base_url) == (
+            "fast-id", "shared-key", "https://fast.invalid/v1"
+        )
+        assert config.model_profiles["default"].model == "original"
+
     def test_override_model(self):
         config = _parse({})
         config = merge_cli_overrides(config, model="gpt-4o")

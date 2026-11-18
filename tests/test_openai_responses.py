@@ -67,6 +67,21 @@ class TestResponsesComplete:
         assert kwargs["max_output_tokens"] == 4096
         assert "stream" not in kwargs
 
+    @pytest.mark.parametrize("text, expected", [
+        ('Action: file_read\nParams: {"path":"foo.py"}', ActionType.TOOL_CALL),
+        ('Action：file_read\nParams：{"path</arg_key><arg_value>foo.py"}', ActionType.PROTOCOL_ERROR),
+    ])
+    def test_text_tool_call_is_not_finish(self, text, expected):
+        backend = _backend()
+        backend._client.responses.create.return_value = _response(text=text, usage=_usage())
+
+        result = backend.complete([LLMMessage("user", "inspect")], [_tool("file_read")])
+
+        assert result.action.action_type is expected
+        if expected is ActionType.TOOL_CALL:
+            assert result.action.tool_call.name == "file_read"
+            assert result.action.tool_call.params == {"path": "foo.py"}
+
     def test_function_call_is_tool_action(self):
         backend = _backend()
         call = SimpleNamespace(
@@ -182,6 +197,16 @@ class TestResponsesComplete:
 
 
 class TestResponsesStream:
+    def test_text_tool_call_fallback_is_not_finish(self):
+        backend = _backend()
+        backend._client.responses.create.return_value = iter([
+            SimpleNamespace(type="response.output_text.delta", delta="Action: file_read\nParams: {bad}"),
+        ])
+
+        result = backend.stream([LLMMessage("user", "inspect")], [_tool("file_read")])
+
+        assert result.action.action_type is ActionType.PROTOCOL_ERROR
+
     def test_text_and_reasoning_events_are_streamed(self):
         backend = _backend()
         final = _response(text="hello", usage=_usage())

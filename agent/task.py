@@ -86,6 +86,13 @@ class EventType(str, Enum):
     ACCEPTANCE = "acceptance"
     DELIVERY = "delivery"
     WORKERS_SUMMARY = "workers_summary"
+    MEMORY_RETRIEVAL_STARTED = "memory_retrieval_started"
+    MEMORY_RETRIEVAL_FINISHED = "memory_retrieval_finished"
+    MEMORY_RETRIEVAL_FAILED = "memory_retrieval_failed"
+    MEMORY_CANDIDATE_CREATED = "memory_candidate_created"
+    MEMORY_CONSOLIDATION_STARTED = "memory_consolidation_started"
+    MEMORY_CONSOLIDATION_FINISHED = "memory_consolidation_finished"
+    MEMORY_CONSOLIDATION_FAILED = "memory_consolidation_failed"
 
 
 class ActionType(str, Enum):

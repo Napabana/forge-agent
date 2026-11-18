@@ -379,7 +379,7 @@ def _parse_openai_response(choice: Any, thought: str) -> Action:
             pseudo_call = _parse_pseudo_tool_call(thought)
             if pseudo_call is not None:
                 return pseudo_call
-            if re.search(r"(?im)^\s*(?:Action\s*:|\[Tool\s*:)", thought):
+            if re.search(r"(?im)^\s*(?:Action\s*[:：]|\[Tool\s*[:：])", thought):
                 return Action(
                     action_type=ActionType.PROTOCOL_ERROR,
                     thought=thought,
@@ -411,8 +411,8 @@ def _parse_openai_response(choice: Any, thought: str) -> Action:
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _INLINE_JSON_RE = re.compile(r"\{[^{}]+\}", re.DOTALL)
 _PSEUDO_TOOL_CALL_RE = re.compile(
-    r"(?im)^\s*Action\s*:\s*([A-Za-z_][\w.-]*)\s*(?:\r?\n|\s+)"
-    r"Params\s*:\s*",
+    r"(?im)^\s*Action\s*[:：]\s*([A-Za-z_][\w.-]*)\s*(?:\r?\n|\s+)"
+    r"Params\s*[:：]\s*",
     re.IGNORECASE | re.DOTALL,
 )
 _FINISH_KEYWORDS = ("task complete", "task is complete", "i have finished", "all done")

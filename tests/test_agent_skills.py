@@ -490,3 +490,21 @@ def test_skill_load_is_semantic_progress_but_duplicate_load_is_not(tmp_path: Pat
     assert len(no_progress_indices) == 1
     assert no_progress_indices[0] > loaded_indices[1]
     assert rows[no_progress_indices[0]]["payload"]["step_id"] == rows[loaded_indices[1]]["payload"]["step_id"]
+
+
+def test_loaded_skill_is_removed_from_load_schema_and_duplicate_is_explicit(tmp_path: Path):
+    repo = tmp_path / "repo-skill-reload"
+    repo.mkdir()
+    _write_skill(repo / ".agents" / "skills", "verify", description="Verify code.", body="Run tests.")
+    from skills.runtime import SkillRuntime
+
+    runtime = SkillRuntime(SkillCatalog.discover(repo), enabled=True)
+    assert "skill_load" in [schema.name for schema in runtime.schemas()]
+
+    first = runtime.apply_control("skill_load", {"name": "verify"})
+    second = runtime.apply_control("skill_load", {"name": "verify"})
+
+    assert first.payload["already_loaded"] is False
+    assert second.payload["already_loaded"] is True
+    assert "Do not load it again" in second.message
+    assert "skill_load" not in [schema.name for schema in runtime.schemas()]

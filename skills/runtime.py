@@ -25,10 +25,13 @@ class SkillControlResult:
     payload: dict[str, Any]
 
 
-def skill_control_schemas(catalog: SkillCatalog) -> tuple[LLMToolSchema, ...]:
+def skill_control_schemas(
+    catalog: SkillCatalog, available_names: tuple[str, ...] | None = None,
+) -> tuple[LLMToolSchema, ...]:
     if not catalog.names:
         return ()
-    return (
+    available_names = catalog.names if available_names is None else available_names
+    load_schema = (
         LLMToolSchema(
             name=SKILL_LOAD,
             description=(
@@ -38,12 +41,14 @@ def skill_control_schemas(catalog: SkillCatalog) -> tuple[LLMToolSchema, ...]:
             parameters={
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "enum": list(catalog.names)},
+                    "name": {"type": "string", "enum": list(available_names)},
                 },
                 "required": ["name"],
                 "additionalProperties": False,
             },
         ),
+    ) if available_names else ()
+    return load_schema + (
         LLMToolSchema(
             name=SKILL_REFERENCE_LOAD,
             description=(
@@ -92,7 +97,11 @@ class SkillRuntime:
     def schemas(self) -> tuple[LLMToolSchema, ...]:
         if not self.enabled:
             return ()
-        return skill_control_schemas(self.catalog)
+        available = (
+            tuple(name for name in self.catalog.names if name not in self._loaded)
+            if len(self._loaded) < self.max_loaded else ()
+        )
+        return skill_control_schemas(self.catalog, available)
 
     def is_control(self, name: str) -> bool:
         return self.enabled and name in SKILL_CONTROL_NAMES
@@ -112,7 +121,8 @@ class SkillRuntime:
                 f"scripts={len(skill.scripts)}]"
             )
         lines.append(
-            "Load a skill only when its description is relevant. Do not load every skill. "
+            "Load a relevant skill once; [loaded] skills already have their instructions below. "
+            "Do not load every skill. "
             "Use skill_load for full instructions and skill_reference_load only for a "
             "specific declared reference. Skill scripts are never auto-executed."
         )
@@ -158,10 +168,16 @@ class SkillRuntime:
                 f"loaded skill limit reached ({self.max_loaded}); do not load every skill"
             )
         already_loaded = name in self._loaded
-        self._loaded[name] = skill.render(max_chars=self.skill_max_chars)
+        if not already_loaded:
+            self._loaded[name] = skill.render(max_chars=self.skill_max_chars)
         return SkillControlResult(
             accepted=True,
-            message=f"[SKILL] Loaded {name}. Follow its instructions when relevant.",
+            message=(
+                f"[SKILL] {name} is already loaded; its instructions are in the current context. "
+                "Do not load it again; continue the task."
+                if already_loaded else
+                f"[SKILL] Loaded {name}. Follow its instructions when relevant."
+            ),
             event_type=EventType.SKILL_LOADED,
             payload={
                 "skill": name,

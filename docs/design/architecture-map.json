@@ -17,6 +17,7 @@
     "docs/design/06-隔离与独立验收.md",
     "docs/design/07-Evaluation与Evolution.md",
     "docs/design/09-Supervisor-Worker架构.md",
+    "docs/design/10-Project-Memory-架构.md",
     "docs/design/源码索引.md",
     "docs/design/MAINTENANCE.md"
   ],
@@ -31,6 +32,7 @@
     "docs/design/06-隔离与独立验收.md": 1,
     "docs/design/07-Evaluation与Evolution.md": 1,
     "docs/design/09-Supervisor-Worker架构.md": 1,
+    "docs/design/10-Project-Memory-架构.md": 1,
     "docs/design/MAINTENANCE.md": 1
   },
   "search_terms": [
@@ -50,6 +52,7 @@
     "PromotionGate",
     "Git Worktree",
     "Docker",
+    "Project Memory",
     "设计取舍"
   ],
   "source_roots": [
@@ -63,6 +66,7 @@
     "ipc",
     "llm",
     "mcp_integration",
+    "project_memory",
     "runtime",
     "skills",
     "task",
@@ -116,6 +120,8 @@
         "harness/hooks.py",
         "harness/permission.py",
         "llm/base.py",
+        "llm/openai_compat.py",
+        "llm/openai_responses.py",
         "llm/errors.py",
         "llm/router.py",
         "llm/tool_schema.py",
@@ -193,6 +199,7 @@
       "source_patterns": [
         "agent/core.py",
         "mcp_integration/*.py",
+        "entry/resource_commands.py",
         "skills/*.py"
       ],
       "related_documents": [
@@ -236,6 +243,34 @@
         {"path": "tools/runtime.py", "name": "DockerRuntime"},
         {"path": "agent/runner.py", "name": "AcceptanceContract"},
         {"path": "agent/runner.py", "name": "_apply_independent_acceptance"}
+      ]
+    },
+    {
+      "id": "project_memory",
+      "name": "Project Memory",
+      "document": "docs/design/10-Project-Memory-架构.md",
+      "source_patterns": [
+        "project_memory/*.py",
+        "agent/core.py",
+        "agent/runner.py",
+        "agent/orchestrate.py",
+        "agent/coordinator.py",
+        "entry/context_common.py",
+        "entry/cli.py",
+        "config/schema.py"
+      ],
+      "related_documents": [
+        "docs/design/03-Context与RepoMap.md",
+        "docs/design/09-Supervisor-Worker架构.md",
+        "docs/design/源码索引.md"
+      ],
+      "cross_impacts": ["task_execution", "context_engineering"],
+      "symbols": [
+        {"path": "project_memory/identity.py", "name": "ProjectIdentityResolver"},
+        {"path": "project_memory/store.py", "name": "MemoryStore"},
+        {"path": "project_memory/writer.py", "name": "MemoryWriter"},
+        {"path": "project_memory/retrieval.py", "name": "MemoryRetrieval"},
+        {"path": "project_memory/runtime.py", "name": "MemoryRuntime"}
       ]
     },
     {

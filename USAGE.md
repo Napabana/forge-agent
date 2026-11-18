@@ -13,6 +13,30 @@
 
 项目整体架构与实现文件说明见 [`README.md`](README.md)。
 
+## Project Memory（当前未提交工作树）
+
+生产 Run/Chat 默认启用本地项目记忆；评测入口默认关闭。记忆保存在 `~/.forge-agent/projects/<project_id>/memory/`，与仓库代码、Chat Session 和 Trace 分开。可在用户级 `~/.config/forge-agent/config.yaml` 中配置：
+
+```yaml
+memory:
+  enabled: true
+  root: null
+  auto_capture: true
+  context_budget_tokens: 2000
+  max_results: 5
+  evaluation_enabled: false
+```
+
+```bash
+forgeAgent memory status --repo /path/to/repo
+forgeAgent memory show --repo /path/to/repo
+forgeAgent memory search --repo /path/to/repo "authentication"
+forgeAgent memory approve --repo /path/to/repo CANDIDATE_ID
+forgeAgent memory reject --repo /path/to/repo CANDIDATE_ID
+```
+
+示例闭环：先用 `forgeAgent run --repo /path/to/repo --task "实现功能并验证"` 完成一次开发；Agent 可调用 `memory_propose` 保存候选。检查 `memory status`、`memory show` 和 pending JSON 后，新开 `forgeAgent chat --repo /path/to/repo` 提相关任务，首次请求会获得有预算的相关记忆；`memory_search`、`memory_read` 可再按需查询。只有成功且有独立验收的 feature/experience 才会自动升级；其余候选可由用户在检查内容后 approve/reject。历史记忆须与当前源码核对，隔离 worktree 的未合入成果保持 pending。
+
 ## 1. 运行前准备
 
 ### 1.1 获取 `dev`
@@ -49,6 +73,10 @@ forgeAgent run --repo /path/to/repo --task "修复问题并运行测试"
 ```
 
 `forgeAgent run` 在交互终端会询问任务，默认仓库为当前目录。默认配置优先读取 `~/.config/forge-agent/config.yaml`，否则使用包内默认配置；`--config` 可显式覆盖。私有 `env` 自动读取且不覆盖已有进程环境变量；密钥不放进 Git。脚本用用户目录中的独立 venv，不需要 `source activate`；更新代码后重跑安装脚本。换新机器时仍需安装 Python 3.11+ 和 Forge，并在新机器配置自己的 API Key。WSL 安装只提供 Linux 命令，PowerShell 需要另行安装。
+
+本地 `test` 工具默认使用 Forge CLI 的 Python；安装包已包含 pytest。被测仓库有额外依赖或指定虚拟环境时，在同一用户级 YAML 中设置 `tools.test.python_executable: /path/to/python`。测试解释器缺少 pytest 属于环境故障，Forge 会要求修复环境并重跑 `test`，不会把它计为代码测试通过。
+
+日常只需维护一份 `~/.config/forge-agent/config.yaml`。在其中保留模型目录和 MCP server 定义，运行时用 `forgeAgent --multi-agent run --model NAME --plan --skills --mcp ...` 按次启用能力；`--no-plan`、`--no-skills`、`--no-mcp` 可按次关闭。`--plan` 对应 planning_mode=always；`--mcp` 需要配置里至少有一个 server。启动摘要会显示本次生效的能力开关。
 
 以下手动 venv 步骤仍适用于源码开发和测试：
 
@@ -200,7 +228,7 @@ agent:
   multi_agent_enabled: true
   max_workers: 3
   max_delegate_tasks: 3
-  total_worker_tokens: 36000
+  total_worker_tokens: 72000
   worker_timeout_seconds: 120
   worker_models: {} # 可选：explorer/test_analyst/reviewer 分别覆盖模型
 ```
@@ -347,6 +375,16 @@ Infrastructure failure 不会因为开启 Recovery 就被包装成普通 retry�
 
 ### 3.3 Skills：创建一个 project Skill
 
+也可以直接安装已有 Skill：
+
+```bash
+forgeAgent skill add https://github.com/DietrichGebert/ponytail/tree/main/skills/ponytail
+forgeAgent skill list --repo .
+forgeAgent run --repo . --skills --task "检查当前代码"
+```
+
+默认安装到 `agent.skills_global_dir`；`skill add SOURCE --local --repo PATH` 安装到目标仓库的 `.agents/skills/`。`SOURCE` 可为本地 Skill 目录、`SKILL.md` 路径或 GitHub `tree/REF/PATH` URL。安装只复制 Skill 文件，不执行仓库中的安装脚本或 hooks。
+
 项目 Skill 目录：
 
 ```text
@@ -380,6 +418,17 @@ project 同名 Skill 覆盖 global。Forge 首轮只放 metadata；需要时模�
 Trace 可检查 `skill_discovered`、`skill_selected`、`skill_loaded`、`skill_reference_loaded`、`skill_rejected`。不要期待每个任务都加载 Skill；should-not-trigger 本身也是正确行为。
 
 ### 3.4 MCP：把远端 capability 接成普通 Forge Tool
+
+可用命令把服务追加到现有用户级 YAML，保留其他配置和注释：
+
+```bash
+forgeAgent mcp add docs --command python3 --arg /absolute/path/to/mcp_server.py
+forgeAgent mcp add remote_docs --url https://example.internal/mcp
+forgeAgent mcp list
+forgeAgent run --repo . --mcp --task "使用文档工具检查项目"
+```
+
+`--env TOKEN_NAME` 可重复传入已有环境变量名称；配置中只保存 `${TOKEN_NAME}` 引用。指定配置文件时可在顶层加 `--config FILE`。`forgeAgent config path` 显示当前 YAML 路径；`forgeAgent config models` 列出具名模型，不显示 Key。
 
 stdio：
 
@@ -900,21 +949,28 @@ agent --config ~/forge-agent-local.yaml chat --repo "$TARGET_REPO"
 
 交互终端中输入 `/` 会显示命令候选；输入 `@` 会显示目标仓库下的文件和目录，可继续输入相对路径缩小范围，例如 `@src/`。选择路径只会把路径放进消息，不自动读取文件内容。
 
-跨 provider 切换时，在私有的 `~/.config/forge-agent/config.yaml` 中一次性定义具名选项：
+在私有的 `~/.config/forge-agent/config.yaml` 中追加具名模型；同一环境变量可供不同模型和地址使用，原有 `llm` 不需改动：
 
 ```yaml
 llm:
-  provider: ollama
-  model: local-model
+  provider: openai
+  model: original-model
+  base_url: https://original.example/v1
+  api_key: ${SHARED_API_KEY}
 models:
   fast:
     provider: openai
-    model: your-model-id
-    base_url: https://your-provider.example/v1
-    api_key: ${FAST_API_KEY}
+    model: fast-model-id
+    base_url: https://fast.example/v1
+    api_key: ${SHARED_API_KEY}
+  smart:
+    provider: openai
+    model: smart-model-id
+    base_url: https://smart.example/v1
+    api_key: ${SHARED_API_KEY}
 ```
 
-`default` 是 `llm` 原配置。新环境须自行设置各 provider 的 Key；Forge 不会改写 YAML 或把 Key 写进模型选择文件。显式 `--config` 使用给定配置，`/model` 的选择只在当前 Chat 进程生效；`--model` 命令行参数仍可覆盖启动模型。
+`default` 是 `llm` 原配置。`forgeAgent run --model smart` 或 `forgeAgent chat --model smart` 会选中该项的模型、地址和 Key；`--model` 传入未配置的名称时，仍按原语义仅覆盖模型 ID。新环境须自行设置 Key；Forge 不会改写 YAML 或把 Key 写进模型选择文件。显式 `--config` 使用给定配置，Chat 中 `/model` 的选择只在当前进程生效；默认用户配置会跨进程记住 `/model` 选择。
 
 ### 7.4 从新进程恢复
 

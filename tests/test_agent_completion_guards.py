@@ -10,7 +10,7 @@ from agent.task import (
     Action, ActionType, EventType, RunStatus, Task, ToolCall, infer_completion_requirements,
 )
 from llm.base import MockBackend
-from tools.base import BaseTool, FailingTool, NoopTool, ToolRegistry, ToolResult
+from tools.base import BaseTool, FailingTool, NoopTool, ToolErrorType, ToolRegistry, ToolResult
 
 
 def _tool_action(name: str) -> Action:
@@ -133,6 +133,31 @@ def test_finish_rejected_after_failed_test(tmp_path):
     assert result.resource_reason == "max_steps"
     assert any(event.event_type == EventType.COMPLETION_REJECTED for event in events)
     assert events[-1].event_type == EventType.TASK_INCOMPLETE
+
+
+def test_test_environment_failure_is_not_reported_as_code_test_failure(tmp_path):
+    class MissingPytest(FailingTool):
+        def execute(self, params):
+            return ToolResult(
+                success=False, output="No module named pytest",
+                error="pytest is not installed in the configured test Python",
+                error_type=ToolErrorType.INFRASTRUCTURE,
+            )
+
+    result, _, events = _run(
+        tmp_path, [_tool_action("test"), _finish_action()],
+        ToolRegistry().register(MissingPytest("test", "missing pytest")),
+        require_tests=True,
+    )
+    assert result.status is RunStatus.INCOMPLETE
+    assert any(e.event_type is EventType.REFLECTION and e.payload.get("reason") == "test_infrastructure" for e in events)
+    assert any(e.event_type is EventType.COMPLETION_REJECTED and e.payload.get("code") == "TEST_INFRASTRUCTURE_ERROR" for e in events)
+    assert not any(e.event_type is EventType.COMPLETION_REJECTED and e.payload.get("code") == "LATEST_TEST_FAILED" for e in events)
+    assert any(
+        e.event_type is EventType.REFLECTION
+        and "test runner could not run" in e.payload.get("prompt", "").lower()
+        for e in events
+    )
 
 
 def test_finish_allowed_after_successful_test(tmp_path):
@@ -612,9 +637,23 @@ def test_openai_stop_text_action_is_recovered_as_tool_call():
     assert action.tool_call.params["path"] == "calculator.py"
 
 
+def test_openai_stop_text_fullwidth_action_is_recovered_as_tool_call():
+    from llm.openai_compat import _parse_openai_response
+
+    text = 'Thought：inspect\nAction：file_read\nParams：{"path": "src/calc_core/service.py"}'
+    choice = SimpleNamespace(
+        finish_reason="stop", message=SimpleNamespace(content=text, tool_calls=None),
+    )
+    action = _parse_openai_response(choice, text)
+    assert action.action_type is ActionType.TOOL_CALL
+    assert action.tool_call.name == "file_read"
+    assert action.tool_call.params == {"path": "src/calc_core/service.py"}
+
+
 @pytest.mark.parametrize("text", [
     '[Tool: file_read]\n{"path</arg_key><arg_value>"src/calc_core/__init__.py"}',
     'Thought: inspect\nAction: shell\nParams: {"cmd</arg_key><arg_value>pytest"}',
+    'Thought：inspect\nAction：file_read\nParams：{"path</arg_key><arg_value>"x"}',
 ])
 def test_malformed_text_tool_call_is_protocol_error_not_finish(text):
     from llm.openai_compat import _parse_openai_response

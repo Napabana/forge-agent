@@ -126,6 +126,8 @@ reference-count 71.26× 是子步骤，不是 Agent E2E。
 
 ## 10. 面试理解重点
 
+Project Memory 的已核查增量见 [10-Project-Memory-架构](10-Project-Memory-架构.md)。`MemoryRuntime.context` 在首次模型请求前以当前 `TokenBudget.counter` 选取历史项目知识，作为标注为低可信数据的 runtime context 进入 system prompt 和同一请求压力计算；canonical History、Chat Session JSON、RepoMap SQLite 均不承载记忆。Chat 恢复在 Runner 预处理前也准备这段上下文。
+
 **为什么 compaction 不覆盖 History？** History 是事实源和恢复基础，压缩只应改变本次模型视图。
 **增量 Repo Map 如何决定更新？** 比较持久化 RepositoryState 与当前状态；可靠 changed paths 局部
 重解析，不可靠原因 full rebuild。

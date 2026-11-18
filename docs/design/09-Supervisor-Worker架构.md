@@ -45,9 +45,11 @@ sequenceDiagram
 
 ## 配置、上下文和权限
 
-`agent.multi_agent_enabled` 默认为 false，CLI `--multi-agent` 可开启。三个角色是 explorer、test_analyst、reviewer，各有 Prompt、工具白名单、步数和 Token 上限；默认继承 Lead 模型，`agent.worker_models` 可按角色覆盖。每个 Worker 新建 Backend、Registry、Executor、History、RepoMap cache、EventLog 与取消视图；只共享仓库文件和只读配置值。默认最多 3 个并行 Worker、每次最多 3 项、每项最多 12 步/12K Token，整次运行 Worker 总预算 36K，单次委派超时 120 秒；这些限制可由配置覆盖总量和并发，角色上限仍固定。
+`agent.multi_agent_enabled` 默认为 false，CLI `--multi-agent` 只提供委派工具，由 Lead 决定是否调用；任务文本也可能明确要求调用。三个角色是 explorer、test_analyst、reviewer，各有 Prompt、工具白名单、步数和 Token 上限；默认继承 Lead 模型，`agent.worker_models` 可按角色覆盖。每个 Worker 新建 Backend、Registry、Executor、History、RepoMap cache、EventLog 与取消视图；只共享仓库文件和只读配置值。默认最多 3 个并行 Worker、每次最多 3 项、每项最多 12 步/24K Token，整次运行 Worker 总预算 72K，单次委派超时 120 秒；配置可覆盖总量和并发，角色上限仍固定。
 
 Worker 注册的查询工具由角色白名单选择；没有 file_write、shell、test、MCP 或 `delegate_tasks`。Runner 再强制 safe/read_only，工作区路径经 PermissionManager 检查。全局限制优先于角色工具。LocalRuntime 的进程环境过滤不等于 OS 隔离；当 Lead 选用 sandboxed Profile 时，每个 Worker 另建只读根文件系统、只读仓库挂载和断网的 DockerRuntime，并在 Provider 调用前做 preflight。文件/搜索工具仍由宿主只读实现且受 workspace 边界限制；不能把 Docker 路径称为全部宿主代码隔离。
+
+Worker 的结构化 Planning 固定为 off：只读分析可以直接返回发现，不继承 Lead 的强制 Plan 门槛。Lead 的 Plan 仍由自身配置决定。
 
 Lead 的工具 Trace 包含 Worker 结构化结果和子 Trace 路径；子 Trace 的 Task 带 parent_task_id/agent_id/role。Runner 的 `worker_usage` 单独保存，并并入整次 `usage`。超时或异常中无法核实未返回的 Provider Usage 时，`usage_complete=false`；不把未知成本当作 0。超时/取消通过 Event 在调用边界传播，已发出的同步 Provider 请求不能强制终止，Coordinator 关闭后不接受新的委派。
 
@@ -64,5 +66,7 @@ Runner 的 Independent Acceptance 始终在 Lead 运行后执行；Worker 分析
 - [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams)：把 Peer-to-Peer、共享任务沟通和多个写入者视作另一种协作模式；本轮只实现 Lead/Worker 结果返回。
 
 ## 验证与边界
+
+Project Memory 增量：Lead 可使用 `memory_search`、`memory_read` 和仅写 pending 的 `memory_propose`；Worker 的独立 Registry 仅注册前两个工具，`memory_candidates` 只作为结构化建议返回 Lead，Worker 不写正式记忆。各 Worker 从相同项目 ID 读取自己的检索结果，Runner 在独立验收后统一记录活动并处理 Lead 候选。详见 [10-Project-Memory-架构](10-Project-Memory-架构.md)。
 
 `tests/test_agent_coordinator.py` 覆盖两个 Worker 真实线程并发、独立 Backend/Trace、角色只读、部分失败、父级取消、超时、预算、旧库迁移、direct/isolate 集成与 Independent Acceptance。MockBackend 只能证明控制流和权限；Docker 动态路径未在无 Docker 的环境中验收，也不能证明真实 Provider 成功率。正式四类 A/B 的冻结任务与验收合同尚待补齐；货币成本需要模型价格输入，本轮仅汇总可核实的 Token 与调用次数。

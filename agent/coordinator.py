@@ -32,16 +32,16 @@ class AgentProfile:
 
 PROFILES = {
     "explorer": AgentProfile(
-        "explorer", "Explore the repository structure and call paths. Return concise JSON with summary, findings and recommendations. Do not change files.",
-        frozenset({"file_read", "file_view", "search_text", "find_files", "find_symbol", "git_status"}), 12, 12_000,
+        "explorer", "Explore the repository structure and call paths. Return concise JSON with summary, findings, recommendations and optional memory_candidates for Lead review. Do not change files.",
+        frozenset({"file_read", "file_view", "search_text", "find_files", "find_symbol", "git_status", "memory_search", "memory_read"}), 12, 24_000,
     ),
     "test_analyst": AgentProfile(
-        "test_analyst", "Inspect existing tests and likely regressions. Return concise JSON with summary, findings and recommendations. Do not run tests or change files.",
-        frozenset({"file_read", "file_view", "search_text", "find_files", "find_symbol", "git_status"}), 12, 12_000,
+        "test_analyst", "Inspect existing tests and likely regressions. Return concise JSON with summary, findings, recommendations and optional memory_candidates for Lead review. Do not run tests or change files.",
+        frozenset({"file_read", "file_view", "search_text", "find_files", "find_symbol", "git_status", "memory_search", "memory_read"}), 12, 24_000,
     ),
     "reviewer": AgentProfile(
-        "reviewer", "Review the current diff for bugs and safety risks. Return concise JSON with summary, findings and recommendations, including file and line evidence. Do not change files.",
-        frozenset({"file_read", "file_view", "search_text", "find_files", "find_symbol", "git_status", "git_diff"}), 12, 12_000,
+        "reviewer", "Review the current diff for bugs and safety risks. Return concise JSON with summary, findings, recommendations and optional memory_candidates for Lead review, including file and line evidence. Do not change files.",
+        frozenset({"file_read", "file_view", "search_text", "find_files", "find_symbol", "git_status", "git_diff", "memory_search", "memory_read"}), 12, 24_000,
     ),
 }
 
@@ -66,6 +66,7 @@ class WorkerResult:
     trace_reference: str | None
     parent_task_id: str
     usage_complete: bool | None = None
+    memory_candidates: list[dict] | None = None
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -89,7 +90,7 @@ class AgentCoordinator:
         backend_factory: Callable[[str], object], registry_factory: Callable,
         agent_config: AgentConfig, engine: TaskEngine,
         cancel_event=None, max_workers: int = 3, max_tasks: int = 3,
-        total_tokens: int = 36_000, timeout_seconds: float = 120.0,
+        total_tokens: int = 72_000, timeout_seconds: float = 120.0,
         sandbox_workers: bool = False,
     ) -> None:
         if min(max_workers, max_tasks, total_tokens) < 1 or timeout_seconds <= 0:
@@ -207,15 +208,24 @@ class AgentCoordinator:
                 tool = registry.get_tool(name)
                 if tool is not None:
                     worker_tools.register(tool)
+            if self.agent_config.memory_config is not None and self.agent_config.memory_config.enabled:
+                from project_memory.runtime import MemoryRuntime
+                from project_memory.tools import MemoryReadTool, MemorySearchTool
+                settings = self.agent_config.memory_config
+                memory = MemoryRuntime(self.repo_path, root=settings.root,
+                                       budget=settings.context_budget_tokens, max_results=settings.max_results)
+                worker_tools.register(MemorySearchTool(memory)).register(MemoryReadTool(memory))
             cfg = dataclasses.replace(
                 self.agent_config, run_profile="safe", finish_policy="advisory",
-                multi_agent_enabled=False,
+                multi_agent_enabled=False, planning_mode="off",
                 max_steps=profile.max_steps, max_model_calls=profile.max_steps,
                 max_total_tokens=token_limit, cancel_event=cancel,
                 budget_tokens=budget_tokens,
                 prepare_next_turn=None, skills_enabled=False,
                 execution_workspace=CONTAINER_WORKDIR if self.sandbox_workers else None,
                 repo_map_cache_dir=str(Path(self.log_dir) / "worker-cache" / task_id),
+                memory_config=(dataclasses.replace(self.agent_config.memory_config, auto_capture=False)
+                               if self.agent_config.memory_config is not None else None),
             )
             runner = ExecutionRunner(backend=backend, registry=worker_tools, config=cfg,
                                      log_dir=self.log_dir, mcp_config=None)
@@ -232,19 +242,22 @@ class AgentCoordinator:
         finally:
             if runtime is not None:
                 runtime.cleanup()
-        summary, findings, recommendations = result.summary, [], []
+        summary, findings, recommendations, memory_candidates = result.summary, [], [], []
         try:
             parsed = json.loads(result.summary)
             if isinstance(parsed, dict):
                 summary = str(parsed.get("summary", summary))
                 findings = parsed.get("findings", []) if isinstance(parsed.get("findings", []), list) else []
                 recommendations = parsed.get("recommendations", []) if isinstance(parsed.get("recommendations", []), list) else []
+                raw_candidates = parsed.get("memory_candidates", [])
+                memory_candidates = ([item for item in raw_candidates if isinstance(item, dict)][:5]
+                                     if isinstance(raw_candidates, list) else [])
         except (ValueError, TypeError):
             pass
         return WorkerResult(task_id, agent_id, request.role, result.status.value, summary,
                             findings, recommendations, result.usage.to_dict(),
                             time.monotonic() - started, result.trace_path, self.parent_task_id,
-                            result.usage_complete)
+                            result.usage_complete, memory_candidates)
 
 
 class DelegateTasksTool(BaseTool):

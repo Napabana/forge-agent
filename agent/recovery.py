@@ -304,6 +304,11 @@ class RecoveryPolicy:
 
         if context.category is FailureCategory.COMPLETION_REJECTED:
             code = context.completion_code or ""
+            if code == "TEST_INFRASTRUCTURE_ERROR":
+                return (
+                    RecoveryStrategy.INSPECT,
+                    "Fix the test runner environment before rerunning verification or requesting completion.",
+                )
             if code in {"REQUIRED_TEST_MISSING", "FINAL_STATE_UNVERIFIED"}:
                 return (
                     RecoveryStrategy.RERUN_TEST,

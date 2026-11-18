@@ -66,6 +66,9 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(".", tools)
         assert "shell" in prompt
         assert "file_read" in prompt
+        assert "provided tool interface with valid JSON arguments" in prompt
+        assert "documentation or comment-only edits" in prompt
+        assert "latest required test passed after the final behavior-affecting edit" in prompt
 
     def test_no_tools_placeholder(self):
         prompt = build_system_prompt(".", [])

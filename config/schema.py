@@ -71,7 +71,7 @@ class AgentCfg:
     multi_agent_enabled: bool = False
     max_workers: int = 3
     max_delegate_tasks: int = 3
-    total_worker_tokens: int = 36_000
+    total_worker_tokens: int = 72_000
     worker_timeout_seconds: float = 120.0
     worker_models: dict[str, str] = field(default_factory=dict)
     max_model_calls: int | None = None
@@ -147,6 +147,16 @@ class MCPConfig:
     servers: tuple[MCPServerConfig, ...] = ()
 
 
+@dataclass(frozen=True)
+class MemoryConfig:
+    enabled: bool = True
+    root: str | None = None
+    auto_capture: bool = True
+    context_budget_tokens: int = 2000
+    max_results: int = 5
+    evaluation_enabled: bool = False
+
+
 @dataclass
 class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -155,6 +165,7 @@ class AppConfig:
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
 
 _ENV_RE = re.compile(r"\$\{(\w+)\}")
@@ -279,6 +290,30 @@ def save_selected_model(name: str, *, profile: bool = False) -> None:
 def _parse(data: dict[str, Any]) -> AppConfig:
     llm_raw = data.get("llm", {})
     agent_raw = data.get("agent", {})
+    memory_raw = data.get("memory", {})
+    if not isinstance(memory_raw, dict):
+        raise ValueError("memory must be an object")
+    unknown_memory = set(memory_raw) - {"enabled", "root", "auto_capture", "context_budget_tokens",
+                                         "max_results", "evaluation_enabled"}
+    if unknown_memory:
+        raise ValueError(f"unknown memory setting: {sorted(unknown_memory)[0]}")
+    for key in ("enabled", "auto_capture", "evaluation_enabled"):
+        if type(memory_raw.get(key, getattr(MemoryConfig(), key))) is not bool:
+            raise ValueError(f"memory.{key} must be boolean")
+    memory_root = memory_raw.get("root")
+    if memory_root is not None and (not isinstance(memory_root, str) or not memory_root.strip()):
+        raise ValueError("memory.root must be a non-empty path or null")
+    if memory_root is not None:
+        memory_root = str(Path(memory_root).expanduser())
+        if not Path(memory_root).is_absolute():
+            raise ValueError("memory.root must be an absolute path")
+    memory = MemoryConfig(
+        enabled=memory_raw.get("enabled", True), root=memory_root,
+        auto_capture=memory_raw.get("auto_capture", True),
+        context_budget_tokens=_optional_positive_int(memory_raw, "context_budget_tokens") or 2000,
+        max_results=_optional_positive_int(memory_raw, "max_results") or 5,
+        evaluation_enabled=memory_raw.get("evaluation_enabled", False),
+    )
     finish_policy = agent_raw.get("finish_policy", "balanced")
     if not isinstance(finish_policy, str) or finish_policy not in {"strict", "balanced", "advisory"}:
         raise ValueError("agent.finish_policy must be strict, balanced, or advisory")
@@ -290,7 +325,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
         raise ValueError("agent.multi_agent_enabled must be boolean")
     max_workers = _optional_positive_int(agent_raw, "max_workers") or 3
     max_delegate_tasks = _optional_positive_int(agent_raw, "max_delegate_tasks") or 3
-    total_worker_tokens = _optional_positive_int(agent_raw, "total_worker_tokens") or 36_000
+    total_worker_tokens = _optional_positive_int(agent_raw, "total_worker_tokens") or 72_000
     worker_timeout_seconds = float(agent_raw.get("worker_timeout_seconds", 120.0))
     if worker_timeout_seconds <= 0:
         raise ValueError("agent.worker_timeout_seconds must be positive")
@@ -576,12 +611,15 @@ def _parse(data: dict[str, Any]) -> AppConfig:
         if "max_tokens" in settings and "max_output_tokens" not in settings:
             profile.max_output_tokens = settings["max_tokens"]
         profiles[name] = profile
-    config = AppConfig(llm=llm, model_profiles=profiles, agent=agent, tools=tools, context=context, mcp=mcp)
+    config = AppConfig(llm=llm, model_profiles=profiles, agent=agent, tools=tools, context=context, mcp=mcp, memory=memory)
     _refresh_budget_bridges(config)
     return config
 
 
 def merge_cli_overrides(config: AppConfig, provider: str | None = None, protocol: str | None = None, model: str | None = None, api_key: str | None = None, max_steps: int | None = None) -> AppConfig:
+    if model in config.model_profiles:
+        select_model(config, model)
+        model = None
     if provider:
         config.llm.provider = provider
     if protocol:

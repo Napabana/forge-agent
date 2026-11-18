@@ -54,6 +54,7 @@ from agent.prompt import (
     reflection_loop_detected,
     reflection_no_edit,
     reflection_test_failed,
+    reflection_test_infrastructure,
     step_budget_warning,
     structured_recovery,
 )
@@ -114,7 +115,7 @@ class AgentConfig:
     multi_agent_enabled: bool = False
     max_workers: int = 3
     max_delegate_tasks: int = 3
-    total_worker_tokens: int = 36_000
+    total_worker_tokens: int = 72_000
     worker_timeout_seconds: float = 120.0
     reflection_no_edit_steps: int = 6
     loop_detection_window: int = 3
@@ -158,6 +159,8 @@ class AgentConfig:
     repo_map_summary_budget: int | None = None
     test_python_executable: str | None = None
     repo_map_cache_dir: str | None = None
+    memory_config: object = None
+    memory_runtime: object = None
 
 
 class Agent:
@@ -269,6 +272,7 @@ class Agent:
         self._current_repo_path = task.repo_path
         self._model_repo_path = self._cfg.execution_workspace or task.repo_path
         self._repo_map_query = task.description
+        self._memory_context = ""
         self._repo_map_located_file = None
         cache_key = task.repo_path
         if self._repo_map_cache_key != cache_key:
@@ -282,6 +286,10 @@ class Agent:
                 del self._repo_map_cache
 
         log.log_task_start(task)
+        runtime = self._cfg.memory_runtime
+        if runtime is not None:
+            counter = TokenBudget(total=self._cfg.budget_tokens).counter
+            self._memory_context = runtime.context(task.description, counter, log=log)
         log.log_trace(
             EventType.EXECUTION_CONSTRAINTS, 0,
             read_only=self._executor.constraints.read_only,
@@ -362,6 +370,7 @@ class Agent:
         )
         test_attempted = False
         last_test_passed: bool | None = None
+        last_test_error_type: str | None = None
         last_successful_test_content_state: str | None = None
         # Progress/loop detection keeps the Git-aware repository fingerprint, while
         # completion verification separately tracks checkout-visible file content.
@@ -721,6 +730,12 @@ class Agent:
                     verification_error = (
                         "Task requires test verification, but no test tool was run."
                     )
+                elif test_attempted and last_test_error_type == ToolErrorType.INFRASTRUCTURE.value and (task.require_tests or self._cfg.finish_policy == "strict"):
+                    rejection_code = "TEST_INFRASTRUCTURE_ERROR"
+                    verification_error = (
+                        "The latest test could not run because its environment failed. "
+                        "Fix the test Python or dependencies, then rerun the test tool."
+                    )
                 elif test_attempted and last_test_passed is not True and (task.require_tests or self._cfg.finish_policy == "strict"):
                     rejection_code = "LATEST_TEST_FAILED"
                     verification_error = (
@@ -1050,6 +1065,7 @@ class Agent:
                 if tc.name in self._cfg.test_tool_names:
                     test_attempted = True
                     last_test_passed = observation.is_success()
+                    last_test_error_type = observation.error_type
                     test_evidence_advanced = semantic_progress.mark_once(
                         "test",
                         self._observation_evidence_key(tc.name, observation),
@@ -1297,14 +1313,17 @@ class Agent:
                     and not observation.is_success()
                     and not self._structured_recovery_enabled()
                 ):
-                    reflect_prompt = reflection_test_failed()
+                    infrastructure = observation.error_type == ToolErrorType.INFRASTRUCTURE.value
+                    reflect_prompt = (
+                        reflection_test_infrastructure() if infrastructure else reflection_test_failed()
+                    )
                     log.log_reflection(
                         step=step,
-                        reason="test_failed",
+                        reason="test_infrastructure" if infrastructure else "test_failed",
                         prompt=reflect_prompt,
                     )
                     history.add(LLMMessage(role="user", content=reflect_prompt))
-                    logger.debug("Reflection triggered: test_failed at step %d", step)
+                    logger.debug("Reflection triggered: %s at step %d", "test_infrastructure" if infrastructure else "test_failed", step)
                 elif (
                     steps_without_semantic_progress >= self._cfg.reflection_no_edit_steps
                     and failure_category is not FailureCategory.INFRASTRUCTURE
@@ -1783,7 +1802,8 @@ class Agent:
             if self._executor.constraints.read_only else ""
         )
         runtime_context = "\n\n".join(
-            part for part in (constraint_context, planning_context, recovery_context, skill_context) if part
+            part for part in (constraint_context, planning_context, recovery_context, skill_context,
+                             getattr(self, "_memory_context", "")) if part
         )
         system_content = build_system_prompt(
             repo_path=getattr(self, "_model_repo_path", "."),
