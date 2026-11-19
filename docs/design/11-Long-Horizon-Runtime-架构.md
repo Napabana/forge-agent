@@ -184,10 +184,10 @@ ArchiveRead 只读取当前 Run 被授权的 scope。Chat Session 的跨 round A
 |---|---|---|
 | runtime_meta | key、value_json | schema_version、project_identity、store_format、迁移信息 |
 | runtime_scopes | scope_id、owner_instance_id、owner_epoch、host_id、boot_id、pid、process_start、revision | Scope 所有权和写入代次 |
-| runs | run_id、task_id、parent_run_id、session_id、scope_id、entrypoint、status、repo_identity、repo_root、worktree_path、config_digest、tool_registry_digest、checkpoint_id、step、revision、owner_epoch、timestamps | Run 生命周期 |
+| runs | run_id、task_id、task_snapshot_json、parent_run_id、session_id、scope_id、entrypoint、status、repo_identity、repo_root、worktree_path、request_snapshot_json、acceptance_contract_json、config_digest、tool_registry_digest、checkpoint_id、step、cancel_requested、revision、owner_epoch、timestamps | Run 生命周期 |
 | run_checkpoints | checkpoint_id、run_id、revision、kind、payload_json/blob_ref、payload_digest、owner_epoch、created_at | 完整可恢复检查点 |
 | model_calls | model_call_id、run_id、step_id、request_digest、request_fingerprint、status、action_json、usage_json、provider_request_id、created_at、finished_at | 模型请求和动作持久化 |
-| operations | operation_id、run_id、scope_id、parent_operation_id、step_id、action_event_id、tool_call_id、operation_kind、name、args_json/blob_ref、args_digest、effect、replay_policy、permission_json、approval_ref、policy_digest、state、result_json/blob_ref、observation_json、result_digest、owner_epoch、timestamps | Tool 和外部副作用操作日志 |
+| operations | operation_id、run_id、scope_id、parent_operation_id、step_id、action_event_id、tool_call_id、operation_kind、name、args_json/blob_ref、args_digest、expected_postcondition_json、effect、replay_policy、permission_json、approval_ref、policy_digest、state、result_json/blob_ref、observation_json、result_digest、owner_epoch、timestamps | Tool 和外部副作用操作日志 |
 | recovery_decisions | decision_id、run_id、operation_id、action、actor、explanation、evidence_json、request_digest、created_at、owner_epoch | 不可变恢复决策 |
 | archive_records | archive_id、scope_id、sequence、kind、payload_json/blob_ref、payload_digest、source_ids_json、previous_id、redaction_version、created_at | 不可变上下文归档 |
 | archive_projections | scope_id、projection_kind、revision、lineage_json、messages_digest、updated_at | Canonical 与 Model View 投影 |
@@ -278,6 +278,7 @@ Durable Run Lifecycle 单独记录执行过程：
 | acceptance_failed | Independent Acceptance 未通过 |
 | delivery_pending | 已授权执行交付操作 |
 | delivered | GitHub/外部交付已确认完成 |
+| acceptance_skipped | 当前 Run 未请求 Independent Acceptance | 
 | completed | Run 生命周期结束 |
 | failed | 执行框架或任务失败 |
 | canceled | Run 被取消 |
@@ -291,9 +292,9 @@ Durable Run Lifecycle 单独记录执行过程：
     running -> reconciliation_required
     running -> agent_finished
     agent_finished -> acceptance_pending
-    acceptance_pending -> acceptance_passed / acceptance_failed
+    acceptance_pending -> acceptance_passed / acceptance_failed / acceptance_skipped
     acceptance_passed -> delivery_pending -> delivered
-    agent_finished / acceptance_passed / acceptance_failed -> completed
+    agent_finished / acceptance_passed / acceptance_failed / acceptance_skipped -> completed
     running -> failed / canceled / incomplete
 
 终态记录保留原始 RunResult、Acceptance 和 Delivery 的独立结果，不把 Agent SUCCESS 等同于 Acceptance 成功或 PR 已交付。
@@ -310,6 +311,10 @@ Durable Run Lifecycle 单独记录执行过程：
         revision
         step
         next_step
+        task_snapshot
+        run_request_snapshot
+        acceptance_contract
+        cancel_requested
 
         canonical_history:
             role
@@ -409,6 +414,7 @@ model_calls 状态：
         tool_name
         arguments_digest
         arguments_payload_ref
+        expected_postcondition
         effect
         replay_policy
         permission_decision
@@ -488,7 +494,7 @@ ToolExecutor 保留当前生命周期，在 Permission/Confirmation 完成后接
 - Intent 提交失败时 Tool 不执行。
 - Started 提交失败时 Tool 不执行。
 - mark_started 必须先于 TOOL_INVOCATION_STARTED 和 Tool.execute。
-- Tool 已执行但 Result 提交失败时，停止 Agent 后续模型请求；Run 进入 reconciliation_required，operation 保持 started，后续恢复转为 outcome_unknown。
+- Tool 已执行但 Result 提交失败时，停止 Agent 后续模型请求，并在进程内将 Run 标记为 durable_commit_failed；operation 保持 started。Store 恢复可写后持久化 reconciliation_required；若进程已经退出，下一次接管直接将 started 转为 outcome_unknown。
 - Result 已提交但 History/Checkpoint 尚未提交时，恢复流程从 operation.result 和 operation.observation 补齐 History，不再调用 Tool。
 - PostToolUse 仍然是副作用发生后的观察 Hook，其异常写入 diagnostics，不覆盖真实 ToolResult。
 - 所有 MCP Tool 继续通过同一 ToolExecutor 和 Journal。
@@ -570,11 +576,11 @@ Reconciler 是只读核查接口，不执行原操作。
 
 | 工具/操作 | 核查方式 |
 |---|---|
-| file_write | 读取目标文件，比较目标内容摘要 |
-| file_edit | 检查目标文件当前摘要及预期变更内容 |
-| git commit | 查询 HEAD、commit SHA 和提交内容 |
-| git push | 查询远端 ref 与本地目标 commit |
-| GitHub create PR | 按 repository、head branch、base branch 查询已有 PR |
+| file_write | 读取目标文件，比较 Intent.expected_postcondition 中的目标内容摘要 |
+| file_edit | 检查目标文件当前摘要及 Intent.expected_postcondition 中的目标变更摘要 |
+| git commit | 根据 parent SHA、目标 tree SHA 和 commit message 查询 HEAD 与提交内容 |
+| git push | 根据 Intent.expected_postcondition 中的 remote、ref 和 target commit 查询远端 ref |
+| GitHub create PR | 按 repository、head branch、base branch 和预期 commit 查询已有 PR |
 | GitHub push/merge | 查询远端分支、PR 状态和 commit SHA |
 | MCP | 仅使用 server 显式提供的只读查询合同 |
 | shell | 通用 Shell 不提供自动语义核查，使用人工核实或具体工具 Reconciler |
@@ -867,7 +873,7 @@ cache_key 由 provider、endpoint_identity、model、protocol 和不包含密钥
     forgeAgent workspace trust
     forgeAgent workspace status
 
-首次运行 forgeAgent run 或 forgeAgent chat 时，如果没有有效用户配置且当前为交互 TTY，启动 Onboarding。非交互环境输出明确配置要求，不等待交互输入。
+首次运行 forgeAgent run 或 forgeAgent chat 时，如果没有有效用户配置、凭据引用缺失或 Backend 无法初始化，且当前为交互 TTY，启动 Onboarding。显式 --config 指向不存在的文件时按配置路径错误处理，不切换到默认向导。非交互环境输出明确配置要求，不等待交互输入。
 
 init 支持：
 
