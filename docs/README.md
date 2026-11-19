@@ -24,6 +24,7 @@
 | Evaluation & Evolution | 冻结评测与离线 Candidate promotion 如何保持证据边界 | [Evaluation 与 Evolution](design/07-Evaluation与Evolution.md) |
 | Supervisor-Worker | Lead 委派只读 Worker 的并发、预算、Trace 和验收 | [Multi-Agent 架构](design/09-Supervisor-Worker架构.md) |
 | Project Memory | 项目身份、文件存储、检索、候选和跨 Run 复用 | [Project Memory 架构](design/10-Project-Memory-架构.md) |
+| CLI Terminal UI | Chat 与 Run 的统一终端渲染、流式输出、工具卡片和最终 Summary | [CLI Terminal UI 架构](design/12-CLI-Terminal-UI-架构.md) |
 | Long-horizon Runtime | 持久化 Run、Tool Journal、Unknown Outcome、Context Archive、Cache Audit 与 Onboarding | [Long-horizon Runtime 架构](design/11-Long-Horizon-Runtime-架构.md) |
 
 ## 推荐阅读路径
@@ -78,6 +79,7 @@ bash scripts/serve_docs.sh
 9. [`design/源码索引.md`](design/源码索引.md)：功能→源码→测试和源码→功能→测试双向索引。
 10. [`design/MAINTENANCE.md`](design/MAINTENANCE.md)：开发前后影响分析、文档同步与分级验证协议。
 11. [`design/11-Long-Horizon-Runtime-架构.md`](design/11-Long-Horizon-Runtime-架构.md)：持久化执行、工具结果状态机、未知副作用恢复、原始上下文归档、缓存审计和首次启动引导。
+12. [`design/12-CLI-Terminal-UI-架构.md`](design/12-CLI-Terminal-UI-架构.md)：Chat 与 Run 共用的 Inline Terminal UI、Rich 渲染、流式输出、Tool Card 和最终结果面板。
 
 这些 Markdown 与其中的 Mermaid 是本地 HTML 文档站的唯一内容源；不要另行维护一套 HTML 正文。
 
