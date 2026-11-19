@@ -18,6 +18,7 @@
     "docs/design/07-Evaluation与Evolution.md",
     "docs/design/09-Supervisor-Worker架构.md",
     "docs/design/10-Project-Memory-架构.md",
+    "docs/design/11-Long-Horizon-Runtime-架构.md",
     "docs/design/源码索引.md",
     "docs/design/MAINTENANCE.md"
   ],
@@ -53,7 +54,15 @@
     "Git Worktree",
     "Docker",
     "Project Memory",
-    "设计取舍"
+    "设计取舍",
+    "Long-horizon Runtime",
+    "Durable Runtime Store",
+    "Tool Journal",
+    "Unknown Outcome",
+    "Context Archive",
+    "ArchiveRead",
+    "Prefix Cache Audit",
+    "Onboarding"
   ],
   "source_roots": [
     "agent",
@@ -97,12 +106,27 @@
         "docs/design/源码索引.md",
         "docs/README.md"
       ],
-      "cross_impacts": ["agent_tool_lifecycle", "isolation_acceptance"],
+      "cross_impacts": [
+        "agent_tool_lifecycle",
+        "isolation_acceptance"
+      ],
       "symbols": [
-        {"path": "agent/runner.py", "name": "ExecutionRunner"},
-        {"path": "agent/orchestrate.py", "name": "orchestrate_run"},
-        {"path": "agent/coordinator.py", "name": "AgentCoordinator"},
-        {"path": "task/engine.py", "name": "TaskEngine"}
+        {
+          "path": "agent/runner.py",
+          "name": "ExecutionRunner"
+        },
+        {
+          "path": "agent/orchestrate.py",
+          "name": "orchestrate_run"
+        },
+        {
+          "path": "agent/coordinator.py",
+          "name": "AgentCoordinator"
+        },
+        {
+          "path": "task/engine.py",
+          "name": "TaskEngine"
+        }
       ]
     },
     {
@@ -139,12 +163,28 @@
         "docs/design/06-隔离与独立验收.md",
         "docs/design/源码索引.md"
       ],
-      "cross_impacts": ["planning_recovery", "context_engineering", "isolation_acceptance"],
+      "cross_impacts": [
+        "planning_recovery",
+        "context_engineering",
+        "isolation_acceptance"
+      ],
       "symbols": [
-        {"path": "agent/core.py", "name": "Agent.run"},
-        {"path": "harness/executor.py", "name": "ToolExecutor.execute"},
-        {"path": "harness/permission.py", "name": "PermissionManager.check"},
-        {"path": "tools/base.py", "name": "ToolRegistry"}
+        {
+          "path": "agent/core.py",
+          "name": "Agent.run"
+        },
+        {
+          "path": "harness/executor.py",
+          "name": "ToolExecutor.execute"
+        },
+        {
+          "path": "harness/permission.py",
+          "name": "PermissionManager.check"
+        },
+        {
+          "path": "tools/base.py",
+          "name": "ToolRegistry"
+        }
       ]
     },
     {
@@ -163,13 +203,31 @@
         "docs/design/Forge-Agent-当前代码架构.md",
         "docs/design/源码索引.md"
       ],
-      "cross_impacts": ["agent_tool_lifecycle", "planning_recovery"],
+      "cross_impacts": [
+        "agent_tool_lifecycle",
+        "planning_recovery"
+      ],
       "symbols": [
-        {"path": "context/history.py", "name": "ConversationHistory"},
-        {"path": "context/token_budget.py", "name": "TokenBudget"},
-        {"path": "context/repo_map.py", "name": "RepoMap.build"},
-        {"path": "context/repo_index.py", "name": "PersistentRepoIndex"},
-        {"path": "context/compaction.py", "name": "TraceableCompaction"}
+        {
+          "path": "context/history.py",
+          "name": "ConversationHistory"
+        },
+        {
+          "path": "context/token_budget.py",
+          "name": "TokenBudget"
+        },
+        {
+          "path": "context/repo_map.py",
+          "name": "RepoMap.build"
+        },
+        {
+          "path": "context/repo_index.py",
+          "name": "PersistentRepoIndex"
+        },
+        {
+          "path": "context/compaction.py",
+          "name": "TraceableCompaction"
+        }
       ]
     },
     {
@@ -186,11 +244,24 @@
         "docs/design/Forge-Agent-当前代码架构.md",
         "docs/design/源码索引.md"
       ],
-      "cross_impacts": ["agent_tool_lifecycle", "context_engineering", "skills_mcp"],
+      "cross_impacts": [
+        "agent_tool_lifecycle",
+        "context_engineering",
+        "skills_mcp"
+      ],
       "symbols": [
-        {"path": "agent/planning.py", "name": "PlanningRuntime"},
-        {"path": "agent/recovery.py", "name": "RecoveryPolicy"},
-        {"path": "agent/recovery.py", "name": "RecoveryRuntime"}
+        {
+          "path": "agent/planning.py",
+          "name": "PlanningRuntime"
+        },
+        {
+          "path": "agent/recovery.py",
+          "name": "RecoveryPolicy"
+        },
+        {
+          "path": "agent/recovery.py",
+          "name": "RecoveryRuntime"
+        }
       ]
     },
     {
@@ -208,12 +279,27 @@
         "docs/design/Forge-Agent-当前代码架构.md",
         "docs/design/源码索引.md"
       ],
-      "cross_impacts": ["agent_tool_lifecycle", "planning_recovery"],
+      "cross_impacts": [
+        "agent_tool_lifecycle",
+        "planning_recovery"
+      ],
       "symbols": [
-        {"path": "skills/catalog.py", "name": "SkillCatalog.discover"},
-        {"path": "skills/runtime.py", "name": "SkillRuntime"},
-        {"path": "mcp_integration/manager.py", "name": "MCPClientManager"},
-        {"path": "mcp_integration/adapter.py", "name": "MCPToolAdapter"}
+        {
+          "path": "skills/catalog.py",
+          "name": "SkillCatalog.discover"
+        },
+        {
+          "path": "skills/runtime.py",
+          "name": "SkillRuntime"
+        },
+        {
+          "path": "mcp_integration/manager.py",
+          "name": "MCPClientManager"
+        },
+        {
+          "path": "mcp_integration/adapter.py",
+          "name": "MCPToolAdapter"
+        }
       ]
     },
     {
@@ -239,14 +325,35 @@
         "docs/design/Forge-Agent-当前代码架构.md",
         "docs/design/源码索引.md"
       ],
-      "cross_impacts": ["task_execution", "agent_tool_lifecycle"],
+      "cross_impacts": [
+        "task_execution",
+        "agent_tool_lifecycle"
+      ],
       "symbols": [
-        {"path": "runtime/worktree.py", "name": "WorktreeSession"},
-        {"path": "tools/runtime.py", "name": "LocalRuntime"},
-        {"path": "tools/runtime.py", "name": "DockerRuntime"},
-        {"path": "agent/runner.py", "name": "AcceptanceContract"},
-        {"path": "examples/harbor/verifier_provenance.py", "name": "provenance_matches"},
-        {"path": "agent/runner.py", "name": "_apply_independent_acceptance"}
+        {
+          "path": "runtime/worktree.py",
+          "name": "WorktreeSession"
+        },
+        {
+          "path": "tools/runtime.py",
+          "name": "LocalRuntime"
+        },
+        {
+          "path": "tools/runtime.py",
+          "name": "DockerRuntime"
+        },
+        {
+          "path": "agent/runner.py",
+          "name": "AcceptanceContract"
+        },
+        {
+          "path": "examples/harbor/verifier_provenance.py",
+          "name": "provenance_matches"
+        },
+        {
+          "path": "agent/runner.py",
+          "name": "_apply_independent_acceptance"
+        }
       ]
     },
     {
@@ -268,13 +375,31 @@
         "docs/design/09-Supervisor-Worker架构.md",
         "docs/design/源码索引.md"
       ],
-      "cross_impacts": ["task_execution", "context_engineering"],
+      "cross_impacts": [
+        "task_execution",
+        "context_engineering"
+      ],
       "symbols": [
-        {"path": "project_memory/identity.py", "name": "ProjectIdentityResolver"},
-        {"path": "project_memory/store.py", "name": "MemoryStore"},
-        {"path": "project_memory/writer.py", "name": "MemoryWriter"},
-        {"path": "project_memory/retrieval.py", "name": "MemoryRetrieval"},
-        {"path": "project_memory/runtime.py", "name": "MemoryRuntime"}
+        {
+          "path": "project_memory/identity.py",
+          "name": "ProjectIdentityResolver"
+        },
+        {
+          "path": "project_memory/store.py",
+          "name": "MemoryStore"
+        },
+        {
+          "path": "project_memory/writer.py",
+          "name": "MemoryWriter"
+        },
+        {
+          "path": "project_memory/retrieval.py",
+          "name": "MemoryRetrieval"
+        },
+        {
+          "path": "project_memory/runtime.py",
+          "name": "MemoryRuntime"
+        }
       ]
     },
     {
@@ -293,11 +418,23 @@
         "docs/design/源码索引.md",
         "docs/reference.md"
       ],
-      "cross_impacts": ["task_execution", "skills_mcp"],
+      "cross_impacts": [
+        "task_execution",
+        "skills_mcp"
+      ],
       "symbols": [
-        {"path": "evals/coding_agent/runner.py", "name": "EvaluationHarness"},
-        {"path": "experience/promotion.py", "name": "PromotionGate"},
-        {"path": "experience/promotion.py", "name": "PromotionManager"}
+        {
+          "path": "evals/coding_agent/runner.py",
+          "name": "EvaluationHarness"
+        },
+        {
+          "path": "experience/promotion.py",
+          "name": "PromotionGate"
+        },
+        {
+          "path": "experience/promotion.py",
+          "name": "PromotionManager"
+        }
       ]
     }
   ]
