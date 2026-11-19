@@ -43,6 +43,8 @@ sequenceDiagram
 
 `delegate_tasks` 输入为 `tasks: [{role, task}, ...]`；输出包括 task_id、agent_id、role、status、summary、findings、recommendations、token_usage、elapsed_time、trace_reference、parent_task_id、usage_complete。Worker Prompt 请求 JSON；如果模型返回普通文字，summary 保留原文，findings/recommendations 为空，不伪造文件行号。
 
+工具参数的 `role.enum` 和执行校验来自同一 `PROFILES` 列表。未知角色在创建子任务前拒绝并返回合法值；自定义分析方向写进 `task`，不增加隐式角色或放宽 Worker 权限。
+
 ## 配置、上下文和权限
 
 `agent.multi_agent_enabled` 默认为 false，CLI `--multi-agent` 只提供委派工具，由 Lead 决定是否调用；任务文本也可能明确要求调用。三个角色是 explorer、test_analyst、reviewer，各有 Prompt、工具白名单、步数和 Token 上限；默认继承 Lead 模型，`agent.worker_models` 可按角色覆盖。每个 Worker 新建 Backend、Registry、Executor、History、RepoMap cache、EventLog 与取消视图；只共享仓库文件和只读配置值。默认最多 3 个并行 Worker、每次最多 3 项、每项最多 12 步/24K Token，整次运行 Worker 总预算 72K，单次委派超时 120 秒；配置可覆盖总量和并发，角色上限仍固定。

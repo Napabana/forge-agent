@@ -16,12 +16,14 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryRuntime:
-    def __init__(self, repo: str, *, root: str | None = None, budget: int = 2000, max_results: int = 5):
+    def __init__(self, repo: str, *, root: str | None = None, budget: int = 2000,
+                 max_results: int = 5, defer_promotion: bool = False):
         self.repo = str(Path(repo).resolve())
         self.store = MemoryStore(ProjectIdentityResolver.resolve(repo), root)
         self.writer = MemoryWriter(self.store)
         self.retrieval = MemoryRetrieval(self.store, self.repo)
         self.budget, self.max_results = budget, max_results
+        self.defer_promotion = defer_promotion
         self.base_commit = self.commit()
         initial = self._status_files()
         hashes = source_hashes(self.repo, initial)
@@ -63,6 +65,9 @@ class MemoryRuntime:
 
     def conclude(self, result, *, task, acceptance: str, trace_path: str | None,
                  isolate: bool = False, log=None) -> None:
+        if self.defer_promotion:
+            # The external verifier owns publication; activity is also retrievable.
+            return
         started, span = time.perf_counter(), None
         try:
             from agent.task import EventType
@@ -105,6 +110,8 @@ class MemoryRuntime:
 
     def record_exception(self, task, error: BaseException, *, trace_path: str | None,
                          isolate: bool = False) -> None:
+        if self.defer_promotion:
+            return
         try:
             self.writer.append_activity({"at": now(), "run_id": task.task_id,
                 "summary": f"{type(error).__name__}: {str(error)[:300]}", "status": "exception",

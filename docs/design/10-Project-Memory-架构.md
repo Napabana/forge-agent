@@ -31,6 +31,8 @@ Lead 可检索、读取和提出 pending 候选；Worker 只读并可在结构�
 
 评测默认关闭记忆；仅显式启用 `memory.evaluation_enabled` 时参与。真实模型效果与 MockBackend 控制流测试分开报告。
 
+Harbor 的 Core-20 B 配置另用 `memory.defer_promotion`，禁止 Forge 自测触发本地晋升或留下可跨 trial 检索的活动日志。可信宿主仅从发布 store 导出已验证、活跃的记录；适配器可在新 trial 启动前导入与仓库 ID 匹配的 JSON 包。候选、活动日志和工作树不随包传输；导入会验证字段、源文件哈希格式和空 store，再重建索引。独立 verifier 后的快照取证与自动发布仍需端到端接线验证。
+
 ## 配置和操作
 
 `config.schema.MemoryConfig` 解析 `enabled/root/auto_capture/context_budget_tokens/max_results/evaluation_enabled`；`entry.context_common.configured_agent_options` 给 CLI、Chat、API、Issue 和 Eval 使用同一配置。`root` 必须是绝对路径。`forgeAgent memory status/show/search/approve/reject --repo PATH` 管理本地文件；CLI approve 才能给予 `user_confirmed`。配置示例和完整命令见仓库根目录 `USAGE.md`。

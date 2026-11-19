@@ -155,6 +155,7 @@ class MemoryConfig:
     context_budget_tokens: int = 2000
     max_results: int = 5
     evaluation_enabled: bool = False
+    defer_promotion: bool = False
 
 
 @dataclass
@@ -294,10 +295,10 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     if not isinstance(memory_raw, dict):
         raise ValueError("memory must be an object")
     unknown_memory = set(memory_raw) - {"enabled", "root", "auto_capture", "context_budget_tokens",
-                                         "max_results", "evaluation_enabled"}
+                                         "max_results", "evaluation_enabled", "defer_promotion"}
     if unknown_memory:
         raise ValueError(f"unknown memory setting: {sorted(unknown_memory)[0]}")
-    for key in ("enabled", "auto_capture", "evaluation_enabled"):
+    for key in ("enabled", "auto_capture", "evaluation_enabled", "defer_promotion"):
         if type(memory_raw.get(key, getattr(MemoryConfig(), key))) is not bool:
             raise ValueError(f"memory.{key} must be boolean")
     memory_root = memory_raw.get("root")
@@ -313,6 +314,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
         context_budget_tokens=_optional_positive_int(memory_raw, "context_budget_tokens") or 2000,
         max_results=_optional_positive_int(memory_raw, "max_results") or 5,
         evaluation_enabled=memory_raw.get("evaluation_enabled", False),
+        defer_promotion=memory_raw.get("defer_promotion", False),
     )
     finish_policy = agent_raw.get("finish_policy", "balanced")
     if not isinstance(finish_policy, str) or finish_policy not in {"strict", "balanced", "advisory"}:

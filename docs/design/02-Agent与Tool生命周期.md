@@ -1,5 +1,7 @@
 # 02 Agent 主循环与 Tool 生命周期
 
+> 2026-11-19 Responses 原生回传：Forge 把原始调用 ID、名称与参数附在同一条反馈历史上。序列化时展开为相邻的 `function_call` 和 `function_call_output`，裁剪时两项共进退；文本伪调用继续走原有历史格式。
+
 > 原架构核查基线：`dev@fd700bdf48ace5f03bb9feab49d72f7c12e5ddcb`，2026-11-12；运行期修复见 `docs/changes/2026-11-13/Forge-Agent-运行期问题修复规划与实施记录.md`；后续加固增量见 [Harness 加固合同](Harness加固合同.md)。
 
 ## 1. 功能目标

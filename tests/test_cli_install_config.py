@@ -1,10 +1,12 @@
 from pathlib import Path
 import json
+from unittest.mock import Mock
 
 from click.testing import CliRunner
 
 from config.schema import _parse, load_config
 from entry.cli import cli
+from llm.request_budget import RequestBudget
 
 
 def test_default_config_uses_home_not_target_repository(tmp_path, monkeypatch):
@@ -106,6 +108,43 @@ def test_run_capability_flags_override_only_current_config(tmp_path, monkeypatch
     assert (disabled.agent.planning_mode, disabled.agent.skills_enabled, disabled.mcp.enabled) == (
         "off", False, False
     )
+
+
+def test_run_routes_one_evaluation_budget_to_three_request_pools(tmp_path, monkeypatch):
+    config = _parse({"llm": {"provider": "openai", "protocol": "responses"},
+                     "context": {"compaction_mode": "traceable"}})
+    lead, compaction, worker = (Mock(spec=["bind_request_budget"]) for _ in range(3))
+    build = Mock(side_effect=[lead, compaction])
+    monkeypatch.setattr("entry.cli._load_cli_config", lambda ctx: config)
+    monkeypatch.setattr("entry.cli.create_backend_from_config", build)
+    monkeypatch.setattr("entry.context_common.new_worker_backend", lambda config, role: (worker, 100))
+    budget = RequestBudget(total=21, pools={"lead": 11, "worker": 6, "compaction": 4})
+
+    def bound(body):
+        return 1
+
+    class Captured(RuntimeError):
+        pass
+
+    def capture_runner(**options):
+        assert options["backend"] is lead
+        assert options["config"].prepare_next_turn.semantic_summarizer.backend is compaction
+        assert options["worker_backend_factory"]("reviewer") == (worker, 100)
+        raise Captured
+
+    monkeypatch.setattr("agent.runner.ExecutionRunner", capture_runner)
+    runner = CliRunner()
+    args = ["run", "--repo", str(tmp_path), "--task", "inspect", "--no-stream"]
+    obj = {"evaluation_requests": (budget, bound)}
+    result = runner.invoke(cli, args, obj=obj)
+    assert isinstance(result.exception, Captured), result.output
+    lead.bind_request_budget.assert_called_once_with(budget, "lead", bound)
+    compaction.bind_request_budget.assert_called_once_with(budget, "compaction", bound)
+    worker.bind_request_budget.assert_called_once_with(budget, "worker", bound)
+    result = runner.invoke(cli, [*args, "--stream"], obj=obj)
+    assert result.exit_code == 2
+    assert "non-streaming Responses" in result.output
+    assert build.call_count == 2
 
 
 def test_run_mcp_flag_requires_configured_server(tmp_path, monkeypatch):

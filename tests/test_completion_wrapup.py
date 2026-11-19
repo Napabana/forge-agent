@@ -54,6 +54,18 @@ def test_ignored_wrapup_exhausts_without_success(tmp_path):
     assert result.resource_reason == "completion_wrapup"
 
 
+def test_focused_green_is_advisory_until_wider_validation(tmp_path):
+    result, _, events = run(tmp_path, [tool("test", path="tests/test_value.py"),
+                                     *[tool("inspect") for _ in range(3)], tool("test"),
+                                     Action(ActionType.FINISH, "done", message="done")],
+                           AgentConfig(repo_map_mode="none", completion_wrapup_steps=2, loop_detection_window=20))
+    assert result.status is RunStatus.SUCCESS and result.steps_taken == 6
+    checks = [event.payload for event in events if event.event_type is EventType.COMPLETION_CHECK]
+    assert [check["scope"] for check in checks] == ["focused", "suite"]
+    hints = [event.payload for event in events if event.event_type is EventType.COMPLETION_CANDIDATE]
+    assert [hint["hard_wrapup"] for hint in hints] == [False, True]
+
+
 def test_new_files_are_named_for_review_and_never_deleted(tmp_path):
     result, _, events = run(tmp_path, [tool("edit"), tool("test"), Action(ActionType.FINISH, "done", message="done")])
     candidate = next(event for event in events if event.event_type is EventType.COMPLETION_CANDIDATE)

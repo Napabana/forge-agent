@@ -5,9 +5,11 @@ from unittest.mock import patch
 import pytest
 
 from agent.core import Agent, AgentConfig
-from agent.task import Action, ActionType
+from agent.event_log import EventLog
+from agent.task import Action, ActionType, RunStatus, Task
 from llm.base import LLMMessage, MockBackend
 from llm.errors import LLMCallbackError, LLMErrorKind, classify_llm_error
+from llm.request_budget import RequestBudgetExhausted
 from tools.base import NoopTool, ToolRegistry
 
 
@@ -41,6 +43,21 @@ def test_classifier_retries_only_known_transient_errors():
     assert classify_llm_error(HTTPError(429, "limited")).kind == LLMErrorKind.RATE_LIMIT
     assert not classify_llm_error(RuntimeError("something went wrong")).retryable
     assert not classify_llm_error(HTTPError(422, "invalid input")).retryable
+
+
+def test_budget_denial_is_resource_incomplete_not_provider_failure(tmp_path):
+    task = Task(description="Inspect files", repo_path=str(tmp_path))
+    log_dir = tmp_path / "traces"
+    backend = finish_backend()
+    agent = make_agent(backend, repo_map_mode="none")
+    with EventLog.create(task, str(log_dir)) as log:
+        with patch.object(backend, "complete", side_effect=RequestBudgetExhausted("lead budget")) as call:
+            result = agent.run(task, log)
+        assert call.call_count == 1
+    assert result.status is RunStatus.INCOMPLETE
+    assert result.steps_taken == 0
+    assert result.termination_reason == "resource_exhausted"
+    assert result.resource_reason == "request_budget"
 
 
 def test_retry_after_is_honored_but_capped():

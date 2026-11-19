@@ -1,5 +1,53 @@
 # Forge Agent 当前项目状态
 
+> Core-20 评测已冻结，保留原 8 项评分，不派发新的资格跑或 40 项主实验。Worker 角色枚举与执行校验共用定义；窄自测不触发硬收尾。HTTPX / Click relay 评分前交叉核对实际 pytest 导入路径、解释器和源码指纹；来源证据缺失或不一致不计模型分。离线验证不代表真实模型 Worker 或新版 Harbor 评分已经复测。
+
+> 两段 Luna 资格合计 8/8 可评分；HTTPX 4 项通过、Click 4 项未通过，A/B 各 2/4。两项 Click 的 Forge 自报成功但独立 verifier 失败；B 四项委派均因非法角色未启动 Worker，四次 Memory 检索为空。不能据此声称完整 Harness 已资格通过，40 项未启动；本机复盘与 Trace 索引见 `docs/changes/CURRENT.md`。
+
+> 已按用户授权单独补跑 Click 3058.B → 3126.B → 3126.A，保留旧批次已评分的 5 项。补跑冻结 `output_only`，新增明确建连失败的 5 秒一次重试；首次核对已派发 Click 3058.B，验证结果待定。40 次主实验未启动。
+
+> 第四批真实资格有 5/8 可评分（4 通过、1 未通过）；Click 3058.B 第 26 次 `APIConnectionError` 阻断，无 verifier，余 2 项未派发。宿主新增只针对明确建连失败的 5 秒一次重试和脱敏 transport 类型；WSL 80 passed、5 skipped，未重跑。部署与排障问题已归档至 [Harbor 评测环境部署与排障](research/Harbor评测环境部署与排障.md)。
+
+> 经用户授权已用含有界 429 重试的新 wheel 重跑两仓资格（8 trial），两次 Harbor Docker 预检通过；批次冻结 `output_only`。首次已派发 HTTPX 3367.A，成绩尚未核验；未启动 40-trial 主实验。
+
+> 资格批次生成请求 HTTP 429 可在宿主按 `Retry-After`（缺失默认 60 秒）等待后重试一次，重新通过试验请求计数和预算，不返还首次未知预留。规则写入批次计划；WSL 离线 75 passed、5 skipped，干净 wheel 已重建。未启动真实资格复跑。
+
+> 两仓 Luna 资格第三批越过 Docker 预检，HTTPX 3367.A 前 10 次生成成功，第 11 次由宿主诊断确认 HTTP 429；队列阻断、Verifier 未运行、0/8 可评分。根因为当前网关限流，具体计量维度未知；未自动重放。
+
+> 两仓 Luna 资格第二批在 Harbor Docker 预检阶段停止，未创建首个 trial；仅做初始计数探测，没有发生成请求或运行 verifier。事后指定 WSL 的 Docker 探测恢复可用，旧批次第 6 次模型请求故障尚未复现。未自动重试。
+
+> 两仓 Luna 资格批次在 HTTPX 3367.A 的第 6 次模型请求中止；前 5 次成功，Verifier 未运行，0/8 可评分。宿主 relay 已补脱敏诊断（请求序号、类别、异常类型、HTTP 状态），子进程仍只收通用错误；WSL 离线 61 passed、5 skipped。历史第 6 次错误原因不明；未重跑付费资格。
+
+> 本轮经授权启动两仓 Luna 资格批次（8 trial）。干净 wheel 已核验；初始计数没有可用值，整批冻结 `output_only`。首次核对已派发 HTTPX 3367.A，验收结果尚未产生；40-trial 主实验未启动。
+
+> 2026-11-19 两仓资格预算自动选择：首次计数探测取得正计数且端点口径已核对，沿用 60 万总 Token 硬预算；拿不到可信上界则冻结回退为每 trial 128 次请求尝试、单次 8,192、累计 60 万输出 Token，并由宿主记录实际输入与缺失次数。A/B 全批同口径，恢复不重探，中途不切换；鉴权、权限、余额或限流错误中止。指定 WSL 离线回归 66 passed、5 skipped，文档检查 PASS。未请求真实 API 或派发资格试验。
+
+> 2026-11-19 两仓资格门槛复核：Forge 原生 Responses 工具反馈保留原始调用元数据，下一轮成对发给宿主 broker；Agent + broker 用假模型离线往返通过。Luna 单次合成计数探测返回 HTTP 200、响应体 0 字节，未取得可信输入上界；保持每 trial 60 万 Token 硬预算门禁，未启动八次资格或 40 次主实验。
+
+> 2026-11-19 Harbor 用量分账：试验汇总分别记录含缓存的总输入、缓存读、未命中缓存读的输入；Responses/兼容 API 缺少缓存字段不当作零，Lead/Worker/压缩不重复计量。供应商后台核对的实际扣费只能显式录入审计报告。指定 WSL venv 定向离线回归 82 passed、5 skipped；按 Luna 三条后台记录复现 11,030 / 6,784 / 4,246 输入分账，未调用 API，未变更请求预算门禁。
+
+> 2026-11-19 Luna 工具冒烟：指定 WSL venv，现有 Responses 配置，单轮输出上限 128，无重试。直接 SDK 两次 HTTP 200/completed：严格 schema 的合成工具调用通过（4.16 秒，3707/21 输入/输出 Token），携带配对 `function_call` 和 `function_call_output` 的无状态回传通过（2.11 秒，3749/34 Token）。这只验证网关协议，不验证 Forge 序列化、Harbor 或输入计数预算门禁。
+
+> 2026-11-19 Luna 生成冒烟：指定 WSL venv、现有 Luna Responses 档案，单次请求、输出上限 128、无重试；HTTP 200、`completed`、准确返回 `LUNA_SMOKE_OK`。耗时 5.25 秒，网关报告 3,574 输入、9 输出、合计 3,583 Token。只验证文本生成，未验证工具调用或解释异常偏高的输入用量；计数门禁仍未通过，未启动 Harbor A/B。
+
+> 2026-11-19 Luna 单次计数探测：用户授权后在指定 WSL venv 用原 Luna Responses 档案发送合成计数请求，未得到可用计数（退出 ValueError，无 HTTP 状态输出）；离线复核宿主客户端可构造且 SDK 有计数方法。不据此断言网关不支持，不标记计数口径已验证；未重试、未请求生成、未启动两仓 A/B 或主实验。
+
+> 2026-11-19 Core-20 两仓预检：真实 Harbor/Docker 已验证宿主标准输入输出 relay 和独立 Click verifier 的封存快照复验；已接上 B 组受验发布与后续同仓导入。两仓 Oracle/No-op 与假模型均有 8 项通过证据；这不是 Luna 成绩。付费入口只支持显式两仓资格运行；仍须验证供应商计数/计费口径并另行授权。未调用真实 API，未运行 40 项主实验。
+
+> 2026-11-18 Core-20 Memory 导入：通过仓库 ID 检查，在独立空 store 重建已验证记忆和索引；Harbor B 组可在执行前上传并导入，不向下一次传候选或日志。真实 verifier 快照证明及触发发布仍需接线；未运行 Luna。
+
+> 2026-11-18 Core-20 三路预算接线：可信宿主可给 CLI 注入同一 trial 预算，Lead、Worker、语义压缩分别绑定固定池。新增 Responses 输入计数适配，完整透传输入和工具 schema，未知字段时拒绝而不是漏算；仅用本地假传输验证，Luna 网关支持、用量上界与计数费用尚未确认。该注入入口尚未接至 Harbor，API 凭据隔离和跨容器 Memory 仍为付费门槛。
+
+> 2026-11-18 Core-20 请求预算接入：非流式 Responses 支持显式绑定预算池，发送前以完整请求取得可信输入上界并原子预留、限制输出；禁 SDK 自动重试，失败/缺少 usage 不释放预留。四个相关 WSL 测试文件 44 passed（包括真实 SDK + 本地 MockTransport 的 503 单发测试）。两仓无模型控制 8/8 已过；Luna 输入上界、Harbor 三池接线、凭据隔离和跨容器 Memory 尚未端到端验收，未发付费请求。
+
+> 2026-11-18 Core-20 离线门禁：请求预算原子预留和受验 Memory 候选晋升核心逻辑已加定向用例；指定 WSL venv 四个相关测试文件共 44 passed。两个门禁尚未接入真实传输和跨容器快照发布，付费仍关闭。两仓无模型控制可用独立 Docker 配置绕开 WSL 与 Windows 凭据助手冲突。
+
+> 2026-11-18 Core-20 实现首段：功能分支新增两仓 8-trial 与全量 40-trial 计划、Harbor 无模型控制入口、Memory 延迟晋升与 Usage 分账。付费入口未开放：跨容器验证后发布、请求前统一预算与凭据隔离尚未接通；不要从配置开关推断端到端已就绪。
+
+> 2026-11-18 Core-20 设计修订（待审阅）：20 题 × 两组。A 为基础 ReAct，B 正式包含 Multi-Agent 与跨 Trial Project Memory；实际 Worker 调用、统一预算及独立 Verifier 后晋升为正式运行门槛。拟用 Luna，尚未实现、测试或授权运行；详见本机 `docs/changes/2026-11-18/Harbor-Core20-评测实施设计.md`。
+
+> 2026-11-18 外部 Harness 评测选题：已对本地冻结的 Repo2RLEnv 63 个 Python 任务完成静态盘点，筛选覆盖 7 个仓库的 20 个主集任务及 4 个扩展任务，用于固定 45 步的 Harness 配对比较。已记录指令提示、需求歧义和 Typer 既有开发使用等限制；本轮未执行批量模型运行或 Oracle/No-op，不声称 45 步可完成或任何效果提升。清单与文件哈希位置见本机 `docs/changes/CURRENT.md`。
+
 > 下方 2026-11-17 条目中的“当前工作树，未发布”是记录形成时的状态；当前发布状态以分支 Git 历史为准。
 
 > 2026-11-18 Project Memory 增量：已增加本地项目身份、Markdown/JSON/JSONL 存储、候选 Writer、关键词检索、首次请求注入、Lead/Worker 读写边界、Runner 后处理和 CLI 管理命令。新增确定性测试 13 passed；全量离线回归初轮 1316 passed、14 skipped、2 failed（CLI isolate 假结果缺字段），修复后相关测试 31 passed。文档严格构建 PASS。未二次运行完整套件，也未执行真实模型验证；不能声称跨 Session 的实际效果提升。用户 `config/default.yaml` 保持原样。

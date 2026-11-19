@@ -532,16 +532,47 @@ def run(
     click.echo(f"  Max steps: {config.agent.max_steps}\n")
 
     # 3.构建各组件
+    backend_options = {
+        "provider": config.llm.provider,
+        "protocol": config.llm.protocol,
+        "model": config.llm.model,
+        "api_key": config.llm.api_key or None,
+        "base_url": config.llm.base_url or None,
+        "max_tokens": config.llm.max_tokens,
+        "strict_tool_schema": config.llm.strict_tool_schema,
+    }
+    from entry.context_common import (
+        bind_run_backends, build_context_policy, configured_agent_options, new_worker_backend,
+    )
+    evaluation_factory = ctx.obj.get("evaluation_backend_factory")
+    pool_factory = ctx.obj.get("evaluation_pool_factory")
+    create_run_backend = evaluation_factory or create_backend_from_config
+
+    def worker_backend_factory(role):
+        if pool_factory is not None:
+            return new_worker_backend(config, role, factory=lambda opts: pool_factory(opts, "worker"))
+        if evaluation_factory is not None:
+            return new_worker_backend(config, role, factory=evaluation_factory)
+        return new_worker_backend(config, role)
+
+    eval_requests = ctx.obj.get("evaluation_requests")
+    if eval_requests is not None and pool_factory is not None:
+        raise click.UsageError("Choose either local trial budgets or a host pool factory")
+    if (eval_requests is not None or pool_factory is not None) and (
+        config.llm.protocol != "responses" or stream or reasoning_stream or config.agent.worker_models
+    ):
+        raise click.UsageError("Trial request budgets require non-streaming Responses and one model")
     try:
-        backend = create_backend_from_config({
-            "provider": config.llm.provider,
-            "protocol": config.llm.protocol,
-            "model":    config.llm.model,
-            "api_key":  config.llm.api_key or None,
-            "base_url": config.llm.base_url or None,
-            "max_tokens": config.llm.max_tokens,
-            "strict_tool_schema": config.llm.strict_tool_schema,
-        })
+        backend = (pool_factory(backend_options, "lead") if pool_factory is not None
+                   else create_run_backend(backend_options))
+        compaction_backend = backend
+        if pool_factory is not None and config.context.compaction_mode != "off":
+            compaction_backend = pool_factory(backend_options, "compaction")
+        if eval_requests is not None:
+            compaction_backend, worker_backend_factory = bind_run_backends(
+                config, backend, lambda: create_run_backend(backend_options),
+                worker_backend_factory, budget=eval_requests[0], input_upper_bound=eval_requests[1],
+            )
     except ValueError as e:
         click.echo(red(f"Error: {e}"), err=True)
         sys.exit(1)
@@ -586,8 +617,7 @@ def run(
     except ImportError:
         is_tiktoken_available = lambda: False
 
-    from entry.context_common import build_context_policy, configured_agent_options, new_worker_backend
-    context_policy = build_context_policy(config, backend)
+    context_policy = build_context_policy(config, compaction_backend)
 
     resolved_reasoning_stream = stream if reasoning_stream is None else reasoning_stream
     renderer = RunEventRenderer()
@@ -643,7 +673,7 @@ def run(
         registry_builder=_build_run_registry,
         confirm_callback=confirm_cb,
         mcp_config=config.mcp,
-        worker_backend_factory=lambda role: new_worker_backend(config, role),
+        worker_backend_factory=worker_backend_factory,
     )
 
     # M4 第二波：--isolate 走 async 组合根（worktree + TaskEngine + permission workspace）

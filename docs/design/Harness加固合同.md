@@ -14,11 +14,15 @@ PermissionManager 的显式 `unattended` profile 要求可信调用方提供 `co
 
 `agent/completion.py` 承接原 completion candidate 研究算法，原 eval 模块保留兼容导出。Core 只根据宿主冻结的既有测试内容、真实 PytestTool 执行和当前仓库内容指纹生成收尾反馈；新建、改写、删除测试与未知参数组合不能升级为可信正向证据。合同中的直接 pytest 命令可以被识别为 contract check，其他命令保持保守。
 
-Candidate 只提示检查 diff、临时文件和诊断失败；不自动删除文件，不替代 FINISH Guard 或独立验收，不读取 Hidden Verifier。候选快照变化后旧证据失效。忽略收尾提示并超过有限步数会产生 INCOMPLETE/resource_exhausted，而不会自动 SUCCESS。原有最新测试失败等 FINISH 保护仍保留。
+Candidate 只提示检查 diff、临时文件和诊断失败；不替代 FINISH Guard 或独立验收、不读取 Hidden Verifier、不自动删除文件。窄范围自测通过只给提示；只有当前快照的测试合同或原仓整套测试通过且没有待处理证据才启用硬收尾，快照或未解决证据变化则失效。Trace 单列 `completion_check` 的范围、来源、结果和快照；基础设施/超时不当作测试断言失败。超出有效硬收尾步数产生 INCOMPLETE/resource_exhausted，不自动 SUCCESS。
 
 ## Trial 预算
 
 可选 `agent.max_model_calls` 限制逻辑模型请求次数，`agent.max_total_tokens` 在已完成请求后安全边界检查累计 provider usage；默认均关闭。同步请求无法中途硬停，一次请求可能超过限额，HTTP retry 也不等于一个新逻辑请求。用量未知、估算或重试可能导致不完整，启用 token cap 时采取保守终止。单请求 context window、Repo Map budget 和 Trial 累计预算分别控制。
+
+非流式 Responses 的 Harbor 宿主预算在资格批次开始前探测一次并冻结。可信计数可用时预扣输入上界和最大输出；否则固定同一请求次数与输出 Token 硬限额、只事后观测输入。Lead、Worker、语义压缩使用互不借用的固定池；硬限额涉及的未知用量保留全额，SDK 自动重试关闭。不会从任务 YAML 推断上界或在 trial 中降级；回退结果不得声称具备总 Token 硬上限。
+
+生成请求 429 可由宿主按冻结合同等候后重试一次，等待最多 60 秒；只对可辨识的建连失败或建连超时另提供 5 秒等待规则，仍共享同一次重试机会。发送状态不明的读写故障不重发。失败尝试不返还预留；重试重新经过请求计数及预算预留。计数请求不会因此重试或触发中途改合同。
 
 ## 评分与兼容性
 

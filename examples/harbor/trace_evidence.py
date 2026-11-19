@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -15,8 +16,8 @@ from typing import Any
 from evals.trial_outcome_probe import (
     FailureDomain, RolloutStatus, ScoringPolicy, TrialEvidence, VerifierStatus, decide_trial,
 )
+from examples.harbor.forge_usage_extract import KEYS as _USAGE_KEYS, reported_usage_value
 
-_USAGE_KEYS = ("input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens", "total_tokens")
 _LLM_EVENTS = {"llm_call_started", "llm_call_finished", "llm_call_failed", "llm_call_retry"}
 
 
@@ -39,6 +40,7 @@ def analyze_trace(path: str | Path) -> dict[str, Any]:
     terminal: dict[str, Any] | None = None
     totals = {key: 0 for key in _USAGE_KEYS}
     missing_usage_keys: set[str] = set()
+    seen_usage_keys: set[str] = set()
     events_seen = 0
 
     with path.open(encoding="utf-8") as stream:
@@ -86,18 +88,21 @@ def analyze_trace(path: str | Path) -> dict[str, Any]:
                             raise ValueError(f"duplicate LLM end at line {line_no}")
                         ended.add(call_id)
                         pending.discard(call_id)
+                    if event_type == "llm_call_failed" and payload.get("provider_request_sent") is False:
+                        counters["budget_rejections"] += 1
                     if event_type == "llm_call_finished":
                         usage = payload.get("provider_usage")
                         if not isinstance(usage, dict):
                             raise ValueError(f"missing provider_usage at line {line_no}")
                         for key in totals:
-                            value = usage.get(key)
+                            value = reported_usage_value(usage, key)
                             if value is None:
                                 missing_usage_keys.add(key)
                                 continue
                             if type(value) is not int or value < 0:
                                 raise ValueError(f"invalid provider usage {key} at line {line_no}")
                             totals[key] += value
+                            seen_usage_keys.add(key)
             elif event_type == "run_terminated":
                 if terminal is not None:
                     raise ValueError("duplicate run_terminated")
@@ -116,16 +121,20 @@ def analyze_trace(path: str | Path) -> dict[str, Any]:
         "events": events_seen,
         "started_calls": counters["llm_call_started"],
         "finished_calls": counters["llm_call_finished"],
-        "failed_calls": counters["llm_call_failed"],
+        "failed_calls": counters["llm_call_failed"] - counters["budget_rejections"],
+        "budget_rejections": counters["budget_rejections"],
         "retry_events": counters["llm_call_retry"],
         "unresolved_calls": [{"step": started[cid], "model_call_id": cid}
                              for cid in sorted(pending, key=lambda c: started[c])],
         "terminal": terminal,
         "trace_complete": terminal is not None and not pending,
-        "observed_finished_usage": totals,
+        "observed_finished_usage": {
+            key: None if key in missing_usage_keys and key not in seen_usage_keys else value
+            for key, value in totals.items()
+        },
         "usage_fields_missing": sorted(missing_usage_keys),
         "usage_is_lower_bound": bool(
-            pending or counters["llm_call_failed"] or counters["llm_call_retry"]
+            pending or counters["llm_call_failed"] > counters["budget_rejections"] or counters["llm_call_retry"]
             or missing_usage_keys
         ),
     }
@@ -135,6 +144,7 @@ def analyze_harbor(path: str | Path, *, verifier_details: str | Path | None = No
     """Extract only structured Harbor results; never infer missing usage as zero."""
     result = _json_object(Path(path))
     agent = result.get("agent_result") or {}
+    forge_usage = (agent.get("metadata") or {}).get("forge_usage") or {}
     verifier = result.get("verifier_result") or {}
     rewards = verifier.get("rewards") or {}
     reward = rewards.get("reward")
@@ -156,6 +166,7 @@ def analyze_harbor(path: str | Path, *, verifier_details: str | Path | None = No
         "agent_usage_reported": {
             key: agent.get(key) for key in ("n_input_tokens", "n_cache_tokens", "n_output_tokens", "cost_usd")
         },
+        "forge_usage_reported": {key: forge_usage.get(key) for key in _USAGE_KEYS},
         "verifier_reward": reward,
         "verifier_result_recorded": reward is not None,
         "verifier_details_parse_status": detail.get("parse_status") if detail else None,
@@ -166,7 +177,13 @@ def audit_trial(trace_path: str | Path, harbor_path: str | Path,
                 *, verifier_details: str | Path | None = None,
                 scoring_policy: ScoringPolicy | None = None,
                 failure_domain: FailureDomain | None = None,
-                snapshot_within_deadline: bool | None = None) -> dict[str, Any]:
+                snapshot_within_deadline: bool | None = None,
+                reconciled_billed_cost_usd: float | None = None) -> dict[str, Any]:
+    if reconciled_billed_cost_usd is not None and (
+        type(reconciled_billed_cost_usd) not in (int, float)
+        or not math.isfinite(reconciled_billed_cost_usd) or reconciled_billed_cost_usd < 0
+    ):
+        raise ValueError("reconciled billed cost must be finite and non-negative")
     trace = analyze_trace(trace_path)
     harbor = analyze_harbor(harbor_path, verifier_details=verifier_details)
     exception_type = harbor["exception_type"]
@@ -182,7 +199,10 @@ def audit_trial(trace_path: str | Path, harbor_path: str | Path,
         "observed_rollout": observed_rollout,
         "scoreable": None,  # needs a PRE-FROZEN benchmark policy
         "failure_domain": None,  # cannot assign culpability from timeout alone
-        "provider_billed_cost": None,  # trace usage is not the invoice
+        "provider_billed_cost": reconciled_billed_cost_usd,
+        "provider_billed_cost_source": (
+            "operator_reconciled_provider_bill" if reconciled_billed_cost_usd is not None else None
+        ),
     }
     if scoring_policy is not None:
         # 故障归属与截止快照由可信宿主显式提供，不能从超时字符串或reward反推。
@@ -214,9 +234,16 @@ def main() -> None:
     parser.add_argument("--trace", type=Path, required=True)
     parser.add_argument("--harbor-result", type=Path, required=True)
     parser.add_argument("--verifier-details", type=Path)
+    parser.add_argument("--reconciled-billed-cost-usd", type=float,
+                        help="Actual provider charge in USD, already matched to this entire trial")
     args = parser.parse_args()
+    if args.reconciled_billed_cost_usd is not None and (
+        not math.isfinite(args.reconciled_billed_cost_usd) or args.reconciled_billed_cost_usd < 0
+    ):
+        parser.error("--reconciled-billed-cost-usd must be finite and non-negative")
     print(json.dumps(audit_trial(args.trace, args.harbor_result,
-                                 verifier_details=args.verifier_details),
+                                 verifier_details=args.verifier_details,
+                                 reconciled_billed_cost_usd=args.reconciled_billed_cost_usd),
                      ensure_ascii=False, indent=2))
 
 

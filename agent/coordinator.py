@@ -121,8 +121,10 @@ class AgentCoordinator:
             raise RuntimeError("worker coordinator is closed after cancellation or timeout")
         if not 1 <= len(requests) <= self.max_tasks:
             raise ValueError(f"delegate between 1 and {self.max_tasks} tasks")
-        if any(request.role not in PROFILES or not request.task.strip() for request in requests):
-            raise ValueError("each worker needs a supported role and non-empty task")
+        if any(not isinstance(request.role, str) or request.role not in PROFILES
+               or not isinstance(request.task, str) or not request.task.strip() for request in requests):
+            raise ValueError(f"each worker needs a non-empty task and one of these roles: {', '.join(PROFILES)}. "
+                             "Retry with the same task and a listed role; put custom role instructions in task.")
         if self.remaining_tokens < len(requests):
             raise RuntimeError("worker token budget exhausted")
         self.delegation_count += 1
@@ -279,7 +281,10 @@ class DelegateTasksTool(BaseTool):
     @property
     def parameters_schema(self) -> dict:
         return {"type": "object", "properties": {"tasks": {"type": "array", "items": {
-            "type": "object", "properties": {"role": {"type": "string"}, "task": {"type": "string"}},
+            "type": "object", "properties": {
+                "role": {"type": "string", "enum": list(PROFILES)},
+                "task": {"type": "string", "description": "Non-empty analysis task; use this for custom instructions."},
+            },
             "required": ["role", "task"]}}}, "required": ["tasks"]}
 
     def execute(self, params: dict) -> ToolResult:

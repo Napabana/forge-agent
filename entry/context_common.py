@@ -3,13 +3,33 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
+from typing import Any
 
-from context.compaction import TraceableCompaction
-from llm.router import create_backend_from_config
 from config.schema import merge_cli_overrides
+from context.compaction import TraceableCompaction
+from llm.request_budget import RequestBudget
+from llm.router import create_backend_from_config
 
 
-def new_worker_backend(config, role):
+def bind_run_backends(config, lead, backend_factory, worker_factory, *,
+                      budget: RequestBudget, input_upper_bound: Callable[[dict[str, Any]], int]):
+    """Bind a trusted trial's three request pools without sharing backend instances."""
+    lead.bind_request_budget(budget, "lead", input_upper_bound)
+    compaction = lead
+    if config.context.compaction_mode != "off":
+        compaction = backend_factory()
+        compaction.bind_request_budget(budget, "compaction", input_upper_bound)
+
+    def budgeted_worker(role):
+        backend, context_budget = worker_factory(role)
+        backend.bind_request_budget(budget, "worker", input_upper_bound)
+        return backend, context_budget
+
+    return compaction, budgeted_worker
+
+
+def new_worker_backend(config, role, *, factory=None):
     """Build an independent client and model-aware budget for a worker role."""
     worker_config = dataclasses.replace(
         config, llm=dataclasses.replace(config.llm), agent=dataclasses.replace(config.agent)
@@ -18,7 +38,7 @@ def new_worker_backend(config, role):
     if model:
         merge_cli_overrides(worker_config, model=model)
     llm = worker_config.llm
-    backend = create_backend_from_config({
+    backend = (factory or create_backend_from_config)({
         "provider": llm.provider, "protocol": llm.protocol, "model": llm.model,
         "api_key": llm.api_key or None, "base_url": llm.base_url or None,
         "max_tokens": llm.max_tokens, "strict_tool_schema": llm.strict_tool_schema,

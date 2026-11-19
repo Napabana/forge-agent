@@ -39,6 +39,17 @@ def test_complete_trace_and_success(tmp_path):
     assert actual["trace"]["observed_finished_usage"]["total_tokens"] == 20
     assert actual["observed_rollout"] == "success"
     assert actual["scoreable"] is None
+    assert actual["trace"]["observed_finished_usage"]["uncached_input_tokens"] == 15
+
+
+def test_actual_cost_requires_explicit_reconciled_bill(tmp_path):
+    t, h = fixture(tmp_path, reported_usage={"cost_usd": 1.25})
+    assert audit_trial(t, h)["provider_billed_cost"] is None
+    actual = audit_trial(t, h, reconciled_billed_cost_usd=0.001063)
+    assert actual["provider_billed_cost"] == 0.001063
+    assert actual["provider_billed_cost_source"] == "operator_reconciled_provider_bill"
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        audit_trial(t, h, reconciled_billed_cost_usd=float("nan"))
 
 
 def test_partial_trace_timeout_and_null_usage_are_separate(tmp_path):
@@ -148,6 +159,7 @@ def test_real_typer_pilot_r1_archived_trace_and_harbor_result():
     assert trace["observed_finished_usage"] == {
         "input_tokens": 849931,
         "cached_tokens": 0,
+        "uncached_input_tokens": 849931,
         "output_tokens": 18792,
         "reasoning_tokens": 15264,
         "total_tokens": 868723,
@@ -179,6 +191,7 @@ def test_missing_provider_token_field_is_not_silently_complete(tmp_path):
     rows[1] = json.dumps(row)
     t.write_text("\n".join(rows) + "\n")
     summary = analyze_trace(t)
-    assert summary["observed_finished_usage"]["input_tokens"] == 0
+    assert summary["observed_finished_usage"]["input_tokens"] is None
+    assert summary["observed_finished_usage"]["uncached_input_tokens"] is None
     assert summary["usage_is_lower_bound"] is True
     assert "input_tokens" in summary["usage_fields_missing"]

@@ -34,6 +34,7 @@ class LLMMessage:
     content: str
     tool_call_id: str | None = None     # OpenAI function calling 回传结果时需要
     event_ref: str | None = None        # 本地 EventLog 引用，不发送给 provider
+    responses_call: dict[str, str] | None = None  # Native call paired with this observation
 
 
 @dataclass
@@ -56,6 +57,7 @@ class LLMResponse:
     action: Action                      # 解析好的 Action，直接给 core.py 用
     raw_content: str                    # LLM 原始文本输出，调试用
     usage: TokenUsage
+    responses_call: dict[str, str] | None
 
     def __init__(
         self,
@@ -65,10 +67,12 @@ class LLMResponse:
         *,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        responses_call: dict[str, str] | None = None,
     ) -> None:
         """Accept both structured usage and the legacy token arguments."""
         self.action = action
         self.raw_content = raw_content
+        self.responses_call = responses_call
         self.usage = usage or TokenUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,

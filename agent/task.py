@@ -63,6 +63,7 @@ class EventType(str, Enum):
     CONTEXT_COMPACTED = "context_compacted"
     COMPLETION_REJECTED = "completion_rejected"
     COMPLETION_CANDIDATE = "completion_candidate"
+    COMPLETION_CHECK = "completion_check"
     PLAN_CREATED = "plan_created"
     PLAN_STEP_STARTED = "plan_step_started"
     PLAN_STEP_COMPLETED = "plan_step_completed"

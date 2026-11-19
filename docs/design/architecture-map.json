@@ -122,6 +122,7 @@
         "llm/base.py",
         "llm/openai_compat.py",
         "llm/openai_responses.py",
+        "llm/request_budget.py",
         "llm/errors.py",
         "llm/router.py",
         "llm/tool_schema.py",
@@ -220,8 +221,10 @@
       "name": "Isolation & Acceptance",
       "document": "docs/design/06-隔离与独立验收.md",
       "source_patterns": [
+        "agent/completion.py",
         "agent/orchestrate.py",
         "agent/runner.py",
+        "examples/harbor/verifier_provenance.py",
         "entry/github_issue.py",
         "harness/permission.py",
         "ipc/*.py",
@@ -242,6 +245,7 @@
         {"path": "tools/runtime.py", "name": "LocalRuntime"},
         {"path": "tools/runtime.py", "name": "DockerRuntime"},
         {"path": "agent/runner.py", "name": "AcceptanceContract"},
+        {"path": "examples/harbor/verifier_provenance.py", "name": "provenance_matches"},
         {"path": "agent/runner.py", "name": "_apply_independent_acceptance"}
       ]
     },

@@ -20,6 +20,7 @@ class TokenUsage:
     output_tokens: int = 0
     reasoning_tokens: int = 0
     estimated: bool = False
+    cache_read_reported: bool = True
 
     @property
     def total_tokens(self) -> int:
@@ -41,6 +42,7 @@ class SessionUsage:
     reasoning_tokens: int = 0
     estimated_calls: int = 0
     unattributed_tokens: int = 0
+    unknown_cache_read_calls: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -54,6 +56,7 @@ class SessionUsage:
         self.output_tokens += usage.output_tokens
         self.reasoning_tokens += usage.reasoning_tokens
         self.estimated_calls += int(usage.estimated)
+        self.unknown_cache_read_calls += int(not usage.cache_read_reported)
 
     def add(self, usage: "SessionUsage") -> None:
         self.llm_calls += usage.llm_calls
@@ -64,6 +67,7 @@ class SessionUsage:
         self.reasoning_tokens += usage.reasoning_tokens
         self.estimated_calls += usage.estimated_calls
         self.unattributed_tokens += usage.unattributed_tokens
+        self.unknown_cache_read_calls += usage.unknown_cache_read_calls
 
     def snapshot(self) -> "SessionUsage":
         return SessionUsage.from_dict(self.to_dict())

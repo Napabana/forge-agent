@@ -57,7 +57,7 @@ def estimate_message_tokens(message: dict) -> int:
     total = _MESSAGE_PROTOCOL_TOKENS
     total += estimate_tokens(str(message.get("role", "")))
     total += estimate_tokens(str(message.get("content", "")))
-    for key in ("name", "tool_call_id"):
+    for key in ("name", "tool_call_id", "responses_call"):
         value = message.get(key)
         if value:
             total += estimate_tokens(str(value)) + 1
@@ -141,7 +141,7 @@ class ConservativeTokenCounter:
         total = _MESSAGE_PROTOCOL_TOKENS
         total += self.count_text(str(message.get("role", "")))
         total += self.count_text(str(message.get("content", "")))
-        for key in ("name", "tool_call_id"):
+        for key in ("name", "tool_call_id", "responses_call"):
             value = message.get(key)
             if value:
                 total += self.count_text(str(value)) + 1

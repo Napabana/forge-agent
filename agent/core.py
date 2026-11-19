@@ -63,6 +63,7 @@ from agent.task import (
     Observation, ObservationStatus, RunResult, RunStatus, Task, ToolCall,
 )
 from harness.executor import ToolExecutionCanceled, ToolExecutorInfrastructureError
+from llm.request_budget import RequestBudgetExhausted
 from llm.base import LLMBackend, LLMMessage, LLMToolSchema
 from llm.errors import LLMCallbackError, LLMErrorInfo, classify_llm_error
 from llm.tool_schema import normalize_optional_nulls
@@ -386,6 +387,7 @@ class Agent:
         initial_paths = self._completion_paths(task.repo_path)
         completion_checks: list[CheckEvidence] = []
         candidate_snapshot: str | None = None
+        candidate_hint_snapshot: str | None = None
         candidate_step = 0
 
         for step in range(1, task.max_steps + 1):
@@ -472,6 +474,18 @@ class Agent:
 
             try:
                 response = self._call_with_retry(messages, tools, on_retry=log_retry)
+            except RequestBudgetExhausted as exc:
+                reason = str(exc)
+                log.log_trace(EventType.LLM_CALL_FAILED, step, span_id=llm_span,
+                              error_type="request_budget", error=reason,
+                              provider_request_sent=False, retry_count=llm_retries)
+                log.log_task_incomplete(steps=step - 1, reason=reason,
+                                        termination_reason="resource_exhausted",
+                                        resource_reason="request_budget")
+                return RunResult(task.task_id, RunStatus.INCOMPLETE, reason, step - 1,
+                                 total_tokens=total_tokens, usage=usage.snapshot(),
+                                 patch=self._get_git_diff(task.repo_path),
+                                 termination_reason="resource_exhausted", resource_reason="request_budget")
             except Exception as exc:
                 self._usage_complete = False
                 canceled = self._is_cancel_requested()
@@ -550,6 +564,11 @@ class Agent:
                 )
 
             action = response.action
+
+            def tool_feedback(content: str, event_ref: str | None = None) -> LLMMessage:
+                return LLMMessage(role="user", content=content, event_ref=event_ref,
+                                  responses_call=response.responses_call)
+
             if action.tool_call is not None and isinstance(action.tool_call.params, dict):
                 schema = next(
                     (candidate for candidate in tools if candidate.name == action.tool_call.name),
@@ -615,7 +634,7 @@ class Agent:
                     steps_without_semantic_progress = 0
                 else:
                     steps_without_semantic_progress += 1
-                history.add(LLMMessage(role="user", content=control.message))
+                history.add(tool_feedback(control.message))
                 steps_without_semantic_progress, no_progress_result = (
                     self._apply_no_progress_guard(
                         task=task,
@@ -668,7 +687,7 @@ class Agent:
                     and self.current_plan is not None
                 ):
                     self._recovery_runtime.observe_plan_revision(self.current_plan.version)
-                history.add(LLMMessage(role="user", content=control.message))
+                history.add(tool_feedback(control.message))
                 steps_without_semantic_progress, no_progress_result = (
                     self._apply_no_progress_guard(
                         task=task,
@@ -867,7 +886,7 @@ class Agent:
                         content=self._format_action_for_history(action),
                         event_ref=action_event_ref,
                     ))
-                    history.add(LLMMessage(role="user", content="[PLANNING REQUIRED] " + detail))
+                    history.add(tool_feedback("[PLANNING REQUIRED] " + detail))
                     continue
                 if self._recovery_replan_required() and self._registry.is_mutating(
                     tc.name, tc.params
@@ -884,7 +903,7 @@ class Agent:
                         content=self._format_action_for_history(action),
                         event_ref=action_event_ref,
                     ))
-                    history.add(LLMMessage(role="user", content=detail))
+                    history.add(tool_feedback(detail))
                     continue
                 tool_metadata = self._registry.get_metadata(tc.name)
                 tool_started = time.perf_counter()
@@ -1078,12 +1097,17 @@ class Agent:
                         check_id = json.dumps(tc.params, sort_keys=True)
                         if origin is CheckOrigin.REPOSITORY and self._completion_contract_matches(task.test_cmd, tc.params):
                             origin, check_id = CheckOrigin.CONTRACT, "task-test-command"
+                        scope = self._completion_check_scope(task.repo_path, tc.params, origin)
+                        outcome = (CheckOutcome.PASSED if observation.is_success() else
+                                   CheckOutcome.INFRASTRUCTURE if observation.error_type == ToolErrorType.INFRASTRUCTURE else
+                                   CheckOutcome.TIMEOUT if observation.error_type == ToolErrorType.TIMEOUT else CheckOutcome.FAILED)
+                        check_snapshot = current_repo_content_state if not repository_content_changed else "stale-during-test"
                         completion_checks.append(CheckEvidence(
                             check_id, origin,
-                            CheckOutcome.PASSED if observation.is_success() else CheckOutcome.FAILED,
-                            current_repo_content_state if not repository_content_changed else "stale-during-test",
-                            step,
+                            outcome, check_snapshot, step, scope,
                         ))
+                        log.log_trace(EventType.COMPLETION_CHECK, step, origin=origin.value, scope=scope,
+                                      outcome=outcome.value, snapshot=check_snapshot)
 
                 untracked = _git(Path(task.repo_path).resolve(), "ls-files", "-z", "--others", "--exclude-standard")
                 new_paths = tuple(path for path in untracked.split("\0") if path) if untracked is not None else tuple(sorted(self._completion_paths(task.repo_path) - initial_paths))
@@ -1094,22 +1118,34 @@ class Agent:
                     checks=tuple(completion_checks), fatal_infrastructure_error=fatal_error_key is not None,
                     required_check_ids=("task-test-command",) if task.test_cmd else (), untracked_paths=new_paths,
                 ))
+                hard_wrapup = readiness.state is Readiness.CANDIDATE_READY and any(
+                    check.repo_content_fingerprint == current_repo_content_state
+                    and check.outcome is CheckOutcome.PASSED and check.scope in {"contract", "suite"}
+                    for check in completion_checks
+                )
+                start_wrapup = hard_wrapup and candidate_snapshot != current_repo_content_state
+                if start_wrapup:
+                    candidate_snapshot, candidate_step = current_repo_content_state, step
+                elif not hard_wrapup:
+                    candidate_snapshot = None
                 if readiness.state is not Readiness.NOT_READY:
-                    if candidate_snapshot != current_repo_content_state:
-                        candidate_snapshot, candidate_step = current_repo_content_state, step
+                    if candidate_hint_snapshot != current_repo_content_state or start_wrapup:
+                        candidate_hint_snapshot = current_repo_content_state
                         feedback = (
                             "Completion candidate: a repository check passed for the current content snapshot. "
                             "Review the diff and any temporary/untracked files; do not delete files automatically. "
                             "Resolve diagnostic failures and remaining requirements, then FINISH or GIVE_UP. "
                             "This is a wrap-up hint; independent acceptance is still required. "
-                            f"Wrap-up budget: {self._cfg.completion_wrapup_steps} steps. "
+                            + (f"Wrap-up budget: {self._cfg.completion_wrapup_steps} steps. " if hard_wrapup
+                               else "No forced wrap-up; confirm remaining coverage and diagnostics. ")
                             + "; ".join(readiness.reasons)
                         )
                         log.log_trace(EventType.COMPLETION_CANDIDATE, step, state=readiness.state.value,
-                                      snapshot=current_repo_content_state, reasons=list(readiness.reasons))
+                                      snapshot=current_repo_content_state, reasons=list(readiness.reasons),
+                                      hard_wrapup=hard_wrapup)
                         history.add(LLMMessage(role="user", content=feedback))
                 else:
-                    candidate_snapshot = None
+                    candidate_hint_snapshot = None
 
                 mcp_evidence_advanced = False
                 if (
@@ -1185,11 +1221,8 @@ class Agent:
                     content=self._format_action_for_history(action),
                     event_ref=action_event_ref,
                 ))
-                history.add(LLMMessage(
-                    role="user",
-                    content=self._format_observation_for_history(observation),
-                    event_ref=observation_event_ref,
-                ))
+                history.add(tool_feedback(self._format_observation_for_history(observation),
+                                          observation_event_ref))
 
                 test_state = (
                     observation.status.value
@@ -1388,6 +1421,19 @@ class Agent:
             return bool(argv and argv[0] == "pytest" and argv[1:] == shlex.split(params.get("args") or "") + [str(params.get("path") or "tests/")])
         except (TypeError, ValueError):
             return False
+
+    @staticmethod
+    def _completion_check_scope(repo_path: str, params: dict, origin: CheckOrigin) -> str:
+        if origin is CheckOrigin.CONTRACT:
+            return "contract"
+        if origin is CheckOrigin.DIAGNOSTIC:
+            return "diagnostic"
+        root = Path(repo_path).resolve()
+        cwd = Path(params.get("cwd") or root).resolve()
+        selector = str(params.get("path") or ("tests" if (cwd / "tests").is_dir() else "."))
+        if "::" not in selector and (cwd / selector).resolve() in {root, root / "tests"}:
+            return "suite"
+        return "focused"
 
     @staticmethod
     def _completion_test_files(repo_path: str) -> dict[str, str]:
@@ -1830,6 +1876,7 @@ class Agent:
                     "role": message.role,
                     "content": message.content,
                     **({"tool_call_id": message.tool_call_id} if message.tool_call_id else {}),
+                    **({"responses_call": message.responses_call} if message.responses_call else {}),
                 }
                 for message in visible_history
             ]
@@ -1844,6 +1891,7 @@ class Agent:
                 role=item["role"],
                 content=item["content"],
                 tool_call_id=item.get("tool_call_id"),
+                responses_call=item.get("responses_call"),
             ))
         return messages
 
@@ -1863,6 +1911,8 @@ class Agent:
             data = {"role": message.role, "content": message.content}
             if message.tool_call_id:
                 data["tool_call_id"] = message.tool_call_id
+            if message.responses_call:
+                data["responses_call"] = message.responses_call
             return data
 
         message_dicts = [as_dict(message) for message in messages]

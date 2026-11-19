@@ -6,7 +6,7 @@ import threading
 import time
 import pytest
 
-from agent.coordinator import AgentCoordinator, WorkerRequest
+from agent.coordinator import AgentCoordinator, DelegateTasksTool, PROFILES, WorkerRequest
 from agent.core import AgentConfig
 from agent.runner import AcceptanceContract, ExecutionRunner, RunRequest
 from agent.task import Action, ActionType, RunStatus, Task, ToolCall
@@ -79,6 +79,21 @@ def test_parallel_workers_have_independent_trace_task_and_usage(tmp_path):
     with pytest.raises(RuntimeError, match="budget exhausted"):
         coordinator.remaining_tokens = 0
         coordinator.delegate([WorkerRequest("explorer", "Again")])
+
+
+def test_delegate_role_schema_matches_executor_and_failed_role_can_be_corrected(tmp_path):
+    from llm.tool_schema import strictify_tool_parameters
+
+    coordinator = _coordinator(tmp_path, lambda role: SlowBackend(_tracker(), role, delay=0))
+    delegate = DelegateTasksTool(coordinator)
+    schema = strictify_tool_parameters(delegate.parameters_schema)
+    assert schema["properties"]["tasks"]["items"]["properties"]["role"]["enum"] == list(PROFILES)
+    invalid = delegate.execute({"tasks": [{"role": "investigator", "task": "Find code"}]})
+    assert not invalid.success and all(role in invalid.error for role in PROFILES)
+    assert coordinator.delegation_count == 0
+    accepted = delegate.execute({"tasks": [{"role": "explorer", "task": "Find code"}]})
+    result = json.loads(accepted.output)[0]
+    assert accepted.success and result["findings"] and result["trace_reference"]
 
 
 def test_default_worker_budget_allows_two_24k_workers(tmp_path, monkeypatch):

@@ -41,7 +41,9 @@ def _merge_worker_usage(result: RunResult, coordinator, log: EventLog) -> None:
     log.log_trace(EventType.WORKERS_SUMMARY, result.steps_taken,
                   parent_task_id=result.task_id, worker_usage=usage.to_dict(),
                   usage_complete=coordinator.usage_complete,
+                  delegation_count=coordinator.delegation_count,
                   worker_count=coordinator.worker_count,
+                  worker_success_count=coordinator.worker_count - coordinator.worker_failure_count,
                   worker_failure_count=coordinator.worker_failure_count,
                   worker_tool_calls=coordinator.worker_tool_calls)
 
@@ -449,7 +451,8 @@ class ExecutionRunner:
         try:
             from project_memory.runtime import MemoryRuntime
             return MemoryRuntime(repo_path, root=settings.root,
-                                 budget=settings.context_budget_tokens, max_results=settings.max_results)
+                                 budget=settings.context_budget_tokens, max_results=settings.max_results,
+                                 defer_promotion=settings.defer_promotion)
         except Exception as exc:  # noqa: BLE001 - optional memory cannot stop a run
             logger.warning("Memory initialization failed: %s", exc)
             return None

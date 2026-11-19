@@ -41,6 +41,8 @@ class ConversationHistory:
                 "role": message.role,
                 "content": message.content,
                 **({"event_ref": message.event_ref} if message.event_ref else {}),
+                **({"tool_call_id": message.tool_call_id} if message.tool_call_id else {}),
+                **({"responses_call": message.responses_call} if message.responses_call else {}),
             }
             for message in self._messages
         ]
@@ -54,6 +56,8 @@ class ConversationHistory:
                 role=item["role"],
                 content=item["content"],
                 event_ref=item.get("event_ref"),
+                tool_call_id=item.get("tool_call_id"),
+                responses_call=item.get("responses_call"),
             )
             for item in dicts
         ]

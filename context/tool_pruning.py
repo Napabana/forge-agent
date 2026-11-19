@@ -140,6 +140,7 @@ def _copy_message(message: LLMMessage, content: str) -> LLMMessage:
         content=content,
         tool_call_id=message.tool_call_id,
         event_ref=message.event_ref,
+        responses_call=message.responses_call,
     )
 
 

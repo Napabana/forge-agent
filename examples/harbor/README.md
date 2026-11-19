@@ -56,6 +56,58 @@ PYTHONPATH="$PWD" harbor run \
 
 ## real run
 
+### Core-20 两仓资格预检（无模型）
+
+Core-20 的独立入口在 `scripts/run_harbor_core20.py`。`controls` 不会调用 LLM；下例在仓库根目录运行，
+只为 HTTPX 和 Click 各两题生成计划并运行 No-op/Oracle，共 8 个控制 trial。去掉
+`--pilot` 则覆盖完整 20 题。输出路径必须是尚不存在的新 campaign：
+
+```bash
+~/.venvs/forge-agent/bin/python -m scripts.run_harbor_core20 controls --pilot \
+  --selection ../task-selection-20261118/core-20.txt \
+  --data ~/r2e-workspace/pr-runtime \
+  --campaign ~/r2e-workspace/experiments/core20-pilot-controls-01 \
+  --harbor ~/r2e-workspace/.venv/bin/harbor
+```
+
+仅查看候选配置、实验预算和 8 次付费 trial 的拟定顺序，用 `plan --pilot --selection ...`。
+计划含 `paid_execution_ready: false`；不要把候选配置拿到旧单任务示例里直接调用付费模型。
+如果 WSL 在拉公共镜像时无法执行 Docker Desktop 的 Windows 凭据助手，给控制命令加
+`--public-images`，脚本仅为当前 campaign 建立空 Docker 配置，不改用户全局配置。
+
+`python -m scripts.run_harbor_core20 rehearse` 使用真实 Harbor 和任务镜像、但只绑定进程内
+Responses 替身。它不创建远程 SDK 客户端，不接受供应商凭据，输出也不能当作模型成绩。
+使用含 `evals/harbor_offline.py` 的干净 wheelhouse；兼容任务用 `--task-path TASK=PATH`
+指定经 No-op/Oracle 验收的副本。队列保存 plan、进度和每次 verifier 结果；未知中断和基础设施
+失败不会由 `--resume` 自动重放。禁止从含本地私有配置的工作树直接打包供容器使用。
+
+`rehearse --pilot --relay` 走与付费入口相同的 Docker 标准输入输出管道，但宿主仍只用替身。
+管道不依赖 Docker 到 WSL 的网络。Lead、Worker、压缩共用每次 trial 的 600,000 Token 上限，
+B 按 480,000 / 108,000 / 12,000 固定分池，不动态借用。每次 trial 最多受理 128 次请求尝试，
+每次最多一个计数请求和一个生成请求；禁用 SDK 自动重试。未知用量不退还预留。
+
+Memory 候选只在 B 组捕获，原 trial 独立验收通过后还须用新的 verifier 容器对封存字节复验；
+复验后才发布同仓下一轮可读的只读输入包。当前发布只支持已跟踪普通 Python 源文件的修改，
+不支持新增、删除、测试或文件模式修改；不能把发布路径已接通当作真实跨任务命中。
+
+`probe-count --execute-paid` 仅发送合成输入的计数请求，可能产生供应商费用，不调用生成。
+两仓资格运行需明确授权：在 WSL 导出 `FORGE_EVAL_BASE_URL`、`FORGE_EVAL_API_KEY`；沿用
+`rehearse --pilot --relay` 的任务和 wheelhouse 参数，将子命令换成 `qualify --pilot --execute-paid`，
+使用新 campaign 目录。开跑前仅探测一次，合同写入 `plan.json`，整批 A/B 同口径，恢复不重探：
+
+- 返回正整数且 `FORGE_EVAL_VERIFIED_COUNT_URL` 与当前地址一致（已核对该端点计数是可信上界）：用原合同，每 trial 600,000 输入 + 输出 Token 硬上限。
+- 没拿到可信上界：用回退合同，每 trial 最多 128 次请求尝试，单次最多 8,192 输出 Token，累计 600,000 输出 Token，沿用 A/B 固定分池。输入用量只事后观测，缺失单列；不是总 Token 或美元硬上限。认证、额度、权限或限流错误停止资格运行，不触发回退。
+
+运行中计数失败不会切换合同。调度器从 WSL 环境读取密钥，只通过宿主进程的
+一次性内存描述符交接给 Harbor；不进入 Docker 环境、容器、配置、命令行或 campaign 文件。
+终端显示开始、耗时和完成数，文件 `progress.json` 与 `events.jsonl` 保留进度。该命令拒绝全量 40 次，
+不确定中断和基础设施失败也不会自动重放。
+宿主 relay 失败在批次的 `<trial>.log` 中记请求序号、类别、异常类型和 HTTP 状态；不会记录请求体、供应商错误正文或密钥，也不会把这些诊断回传容器。
+HTTPX / Click 的 Core-20 relay 另要求 Agent 结束时的包源码指纹与独立 pytest 前后一致，且实际导入自该工作树；证据见 `verifier/forge-source-provenance.json`。缺失或不一致按基础设施异常，不计模型分。原有任务目录、评分脚本和评分输入不被改写；只在私有任务副本启用 verifier 观察器。
+付费资格批次的一次生成请求最多重试一次：HTTP 429 采用有效的 `Retry-After`（秒数或日期），缺失或无效时等 60 秒，超过 60 秒或显式额度耗尽则停止；明确的 `ConnectError` / `ConnectTimeout` 等 5 秒。读写错误和原因不明确的连接异常不自动重发。重试占同一个 trial 的请求次数、重新预留对应预算；第一次失败的预留不释放。宿主日志报告等待，`host_input_usage` 分项记录重试。计数接口不使用这项重试，SDK 自动重试仍关闭。
+
+### 旧单任务示例
+
 确认 smoke 成功后，显式设置足够的 agent timeout：
 
 ```bash
@@ -107,4 +159,6 @@ python -m examples.harbor.trace_evidence \
   --verifier-details docs/research/harbor-typer-1788-qwen38-27b-pilot-r1/verifier-reward-details.json
 ```
 
-该工具只输出结构化调用计数、已完成调用的 Provider Usage、Harbor 异常与奖励；不会计算 Benchmark `scoreable` 或实际账单费用，避免未经实验合同确认就改动成功率分母。测试见 `tests/test_trace_evidence.py`。
+该命令输出结构化调用计数、Provider Usage、Harbor 异常与奖励，不自动判定 Benchmark `scoreable`。
+Forge trial 用量中 `input_tokens` 含 `cached_tokens`（缓存读），`uncached_input_tokens` 为两者之差；缓存读不再计入总量，缺失不作零。这里的未缓存输入指未命中缓存读，如有缓存写仍属于这个差额，不表示按同一价格计费。
+`provider_billed_cost` 默认是 `null`；只有将整个 trial 与供应商后台账单核对后，才可传 `--reconciled-billed-cost-usd 金额`。不按 Token 或价格表反推实扣。这个事后分账不改变付费资格或请求预算门禁。

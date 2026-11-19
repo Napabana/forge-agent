@@ -247,7 +247,7 @@ def _response_usage(
     if cached_tokens is None:
         cached_tokens = _field(raw_usage, "prompt_cache_hit_tokens", None)
     if cached_tokens is None:
-        cached_tokens = _field(raw_usage, "cached_tokens", 0)
+        cached_tokens = _field(raw_usage, "cached_tokens", None)
     cache_write_tokens = _field(prompt_details, "cache_write_tokens", 0)
     reasoning_tokens = _field(completion_details, "reasoning_tokens", 0)
     estimated = prompt_tokens is None or output_tokens is None
@@ -263,11 +263,13 @@ def _response_usage(
         if output_tokens is None:
             output_tokens = estimate_tokens(output_text)
 
+    cache_read_reported = type(cached_tokens) is int and cached_tokens >= 0
     cached_tokens = _non_negative_int(cached_tokens)
     cache_write_tokens = _non_negative_int(cache_write_tokens)
     return TokenUsage(
         input_tokens=_non_negative_int(prompt_tokens),
         cached_tokens=cached_tokens,
+        cache_read_reported=cache_read_reported,
         cache_write_tokens=cache_write_tokens,
         output_tokens=_non_negative_int(output_tokens),
         reasoning_tokens=_non_negative_int(reasoning_tokens),

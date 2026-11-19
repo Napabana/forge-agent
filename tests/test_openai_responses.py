@@ -9,6 +9,7 @@ import pytest
 
 from agent.task import ActionType
 from llm.base import LLMMessage, LLMToolSchema
+from llm.request_budget import RequestBudget
 
 
 def _backend(model="gpt-5.4"):
@@ -44,6 +45,130 @@ def _tool(name="shell"):
             "required": ["cmd"],
         },
     )
+
+
+def test_budget_limits_wire_output_and_denies_without_sending():
+    backend = _backend()
+    original = backend._client
+    transport = original.with_options.return_value
+    transport.responses.create.return_value = _response(text="ok", usage=_usage(8, 2))
+    seen_bodies = []
+
+    def input_upper(body):
+        seen_bodies.append(body.copy())
+        return 10
+
+    budget = RequestBudget(total=20, pools={"lead": 20, "workers": 0, "compaction": 0})
+    backend.bind_request_budget(budget, "lead", input_upper)
+    backend.complete([LLMMessage(role="user", content="hello")], [_tool()])
+    original.with_options.assert_called_once_with(max_retries=0)
+    assert seen_bodies[0]["tools"][0]["name"] == "shell"
+    assert transport.responses.create.call_args.kwargs["max_output_tokens"] == 10
+    with pytest.raises(RuntimeError, match="budget exhausted"):
+        backend.complete([], [])
+    with pytest.raises(RuntimeError, match="non-streaming"):
+        backend.stream([], [])
+    transport.responses.create.assert_called_once()
+
+
+def test_budget_keeps_failed_request_reservation_across_attempts():
+    backend = _backend()
+    transport = backend._client.with_options.return_value
+    transport.responses.create.side_effect = TimeoutError("transport failed")
+    budget = RequestBudget(total=10, pools={"workers": 10})
+    backend.bind_request_budget(budget, "workers", lambda body: 4)
+    with pytest.raises(TimeoutError):
+        backend.complete([], [])
+    with pytest.raises(RuntimeError, match="budget exhausted"):
+        backend.complete([], [])
+    transport.responses.create.assert_called_once()
+
+
+def test_real_sdk_does_not_retry_a_budgeted_failure():
+    import httpx
+    from openai import InternalServerError, OpenAI
+
+    backend = _backend()
+    requests = []
+
+    def unavailable(request):
+        requests.append(request)
+        return httpx.Response(503, json={"error": {"message": "test transport"}})
+
+    with httpx.Client(transport=httpx.MockTransport(unavailable)) as transport:
+        backend._client = OpenAI(api_key="fake", base_url="https://test.invalid/v1",
+                                 http_client=transport, max_retries=2)
+        backend.bind_request_budget(RequestBudget(total=10, pools={"lead": 10}), "lead", lambda body: 4)
+        with pytest.raises(InternalServerError):
+            backend.complete([], [])
+    assert len(requests) == 1
+    assert requests[0].url.path == "/v1/responses"
+
+
+def test_input_count_keeps_wire_tools_and_rejects_unknown_fields():
+    import json
+
+    import httpx
+    from openai import OpenAI
+    from llm.openai_responses import responses_input_counter
+
+    sent = []
+
+    def counter_endpoint(request):
+        sent.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json={"input_tokens": 13})
+
+    with httpx.Client(transport=httpx.MockTransport(counter_endpoint)) as transport:
+        with OpenAI(api_key="fake", base_url="https://test.invalid/v1", http_client=transport) as client:
+            count = responses_input_counter(client)
+            body = {"model": "test", "input": "hi", "tools": [{"type": "function", "name": "shell"}],
+                    "tool_choice": "auto", "max_output_tokens": 100}
+            assert count(body) == 13
+            with pytest.raises(ValueError, match="Unsupported request"):
+                count({**body, "reasoning": {"effort": "high"}})
+    assert sent == [("/v1/responses/input_tokens",
+                     {key: value for key, value in body.items() if key != "max_output_tokens"})]
+
+
+def test_agent_sends_native_tool_pair_through_harbor_broker(tmp_path):
+    from agent.core import Agent, AgentConfig
+    from agent.event_log import EventLog
+    from agent.task import RunStatus, Task
+    from examples.harbor.host_responses import HostResponses
+    from tools.base import NoopTool, ToolRegistry
+
+    args = '{ "optional": null }'
+    expected = {"type": "function_call", "name": "read_marker", "call_id": "call_example",
+                "arguments": args}
+    requests = []
+
+    def send(body):
+        requests.append(body)
+        if len(requests) == 1:
+            return {"output": [expected], "usage": {"input_tokens": 10, "output_tokens": 2}}
+        inputs = body["input"]
+        idx = inputs.index(expected)
+        output = inputs[idx + 1]
+        assert output["type"] == "function_call_output" and output["call_id"] == expected["call_id"]
+        assert "marker ok" in output["output"]
+        return {"output_text": "done", "usage": {"input_tokens": 10, "output_tokens": 2}}
+
+    backend = _backend()
+    broker = HostResponses(model="gpt-5.4", budget=RequestBudget(total=256, pools={"lead": 256}),
+                           count_input=lambda body: 32, send=send, max_output=64, max_requests=2)
+    backend._client.responses.create.side_effect = lambda **body: broker.respond("lead", body)
+    task = Task("Check a marker", str(tmp_path), max_steps=2)
+    log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
+    try:
+        result = Agent(backend, ToolRegistry().register(NoopTool("read_marker", "marker ok")),
+                       config=AgentConfig(repo_map_mode="none")).run(task, log)
+    finally:
+        log.close()
+    assert result.status is RunStatus.SUCCESS
+    assert len(requests) == 2
+    orphan = {"type": "function_call_output", "call_id": "other", "output": "marker"}
+    with pytest.raises(ValueError, match="paired"):
+        broker.respond("lead", {"model": "gpt-5.4", "input": [expected, orphan]})
 
 
 class TestResponsesComplete:

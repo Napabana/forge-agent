@@ -31,6 +31,7 @@ class CheckEvidence:
     outcome: CheckOutcome
     repo_content_fingerprint: str
     sequence: int
+    scope: str = "focused"
 
 
 @dataclass(frozen=True)
