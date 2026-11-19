@@ -19,6 +19,7 @@
     "docs/design/09-Supervisor-Worker架构.md",
     "docs/design/10-Project-Memory-架构.md",
     "docs/design/11-Long-Horizon-Runtime-架构.md",
+    "docs/design/12-CLI-Terminal-UI-架构.md",
     "docs/design/源码索引.md",
     "docs/design/MAINTENANCE.md"
   ],
@@ -62,7 +63,14 @@
     "Context Archive",
     "ArchiveRead",
     "Prefix Cache Audit",
-    "Onboarding"
+    "Onboarding",
+    "CLI Terminal UI",
+    "Rich",
+    "prompt_toolkit",
+    "RunTerminalUI",
+    "ChatTerminalUI",
+    "Event Presenter",
+    "Tool Card"
   ],
   "source_roots": [
     "agent",
@@ -434,6 +442,49 @@
         {
           "path": "experience/promotion.py",
           "name": "PromotionManager"
+        }
+      ]
+    },
+    {
+      "id": "terminal_ui",
+      "name": "CLI Terminal UI",
+      "document": "docs/design/12-CLI-Terminal-UI-架构.md",
+      "source_patterns": [
+        "entry/ui/*.py",
+        "entry/event_renderer.py",
+        "entry/cli.py",
+        "entry/chat.py",
+        "entry/chat_input.py"
+      ],
+      "related_documents": [
+        "docs/design/01-任务执行主链.md",
+        "docs/design/02-Agent与Tool生命周期.md",
+        "docs/design/03-Context与RepoMap.md",
+        "docs/design/11-Long-Horizon-Runtime-架构.md",
+        "docs/design/源码索引.md",
+        "docs/README.md"
+      ],
+      "cross_impacts": [
+        "task_execution",
+        "agent_tool_lifecycle",
+        "context_engineering"
+      ],
+      "symbols": [
+        {
+          "path": "entry/event_renderer.py",
+          "name": "RunEventRenderer"
+        },
+        {
+          "path": "entry/chat_input.py",
+          "name": "ChatCompleter"
+        },
+        {
+          "path": "entry/chat.py",
+          "name": "ChatSession.run_round"
+        },
+        {
+          "path": "entry/cli.py",
+          "name": "run"
         }
       ]
     }
