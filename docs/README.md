@@ -24,11 +24,12 @@
 | Evaluation & Evolution | 冻结评测与离线 Candidate promotion 如何保持证据边界 | [Evaluation 与 Evolution](design/07-Evaluation与Evolution.md) |
 | Supervisor-Worker | Lead 委派只读 Worker 的并发、预算、Trace 和验收 | [Multi-Agent 架构](design/09-Supervisor-Worker架构.md) |
 | Project Memory | 项目身份、文件存储、检索、候选和跨 Run 复用 | [Project Memory 架构](design/10-Project-Memory-架构.md) |
+| Long-horizon Runtime | 持久化 Run、Tool Journal、Unknown Outcome、Context Archive、Cache Audit 与 Onboarding | [Long-horizon Runtime 架构](design/11-Long-Horizon-Runtime-架构.md) |
 
 ## 推荐阅读路径
 
 - **理解整个项目**：整体架构 → 任务执行主链 → Agent/Tool → Context → Planning/Recovery →
-  Skills/MCP → 隔离验收 → Evaluation/Evolution。
+  Skills/MCP → 隔离验收 → Evaluation/Evolution → Long-horizon Runtime。
 - **面试前快速复习**：从[面试复习入口](interview-review.md)开始，遇到类名或函数名时进入
   [源码导航](source-navigation.md)。
 
@@ -57,7 +58,7 @@ bash scripts/serve_docs.sh
 ## 当前入口与历史基线
 
 - [`PROJECT_STATE.md`](PROJECT_STATE.md)：可同步的当前目标、代码基线、近期试验证据和下一步。细节性的本机实验状态放在不公开的 `docs/changes/CURRENT.md`。
-- `docs/design/`：原架构核查基线为 2026-11-12；两篇专题另有 11 月 13 日运行期修复补记。后续 Harbor/Harness 改动应先检查源码、分支和 PR 合入状态，再更新受影响专题。
+- `docs/design/`：既有架构核查基线为 2026-11-12；Long-horizon Runtime 专题以 2026-11-19 的 dev HEAD 为设计基线，定义 P3-0～P3-9 的待实现合同。
 - [`TODO-P0-P1.md`](https://github.com/Napabana/forge-agent/blob/dev/TODO-P0-P1.md)、[`Forge-Agent-P0-P1-实施计划.md`](https://github.com/Napabana/forge-agent/blob/dev/Forge-Agent-P0-P1-%E5%AE%9E%E6%96%BD%E8%AE%A1%E5%88%92.md)：P0/P1 阶段历史状态与方案，不作为当前开发队列。
 - [`README.md`](https://github.com/Napabana/forge-agent/blob/dev/README.md)：项目能力、安装与使用入口。
 - [`USAGE.md`](https://github.com/Napabana/forge-agent/blob/dev/USAGE.md)：详细运行配置和命令。
@@ -76,6 +77,7 @@ bash scripts/serve_docs.sh
 8. [`design/07-Evaluation与Evolution.md`](design/07-Evaluation与Evolution.md)：Evaluation Harness、Benchmark 与离线 Candidate promotion gate。
 9. [`design/源码索引.md`](design/源码索引.md)：功能→源码→测试和源码→功能→测试双向索引。
 10. [`design/MAINTENANCE.md`](design/MAINTENANCE.md)：开发前后影响分析、文档同步与分级验证协议。
+11. [`design/11-Long-Horizon-Runtime-架构.md`](design/11-Long-Horizon-Runtime-架构.md)：持久化执行、工具结果状态机、未知副作用恢复、原始上下文归档、缓存审计和首次启动引导。
 
 这些 Markdown 与其中的 Mermaid 是本地 HTML 文档站的唯一内容源；不要另行维护一套 HTML 正文。
 
