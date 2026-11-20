@@ -1,12 +1,4 @@
-"""
-tests/test_task_engine.py
-
-M1 Task 1.1：SQLite(WAL) TaskEngine 测试。
-
-用 tmp_path 给每个测试一个独立临时 db；内存库场景用 ":memory:"。
-覆盖 s20 移植过来的语义：创建/查询、DAG 依赖判定、原子认领、级联解锁，
-以及 M4 要求的并发读写一致性（线程并发 claim）。
-"""
+"""验证任务状态、依赖解锁、工作树绑定和并发认领。"""
 
 from __future__ import annotations
 
@@ -164,7 +156,7 @@ class TestClaim:
 
     def test_reclaim_in_progress_raises_wrong_status(self, engine):
         # 认领后任务进入 in_progress，再次认领应失败。
-        # 语义对齐 s20：按「状态不对」报错（任务已不是 pending），
+        # 按「状态不对」报错（任务已不是 pending），
         # 而非 already_owned——后者只用于 pending+owner 非空的异常态。
         a = engine.create_task("a")
         assert engine.claim_task(a, owner="w1") is True
@@ -242,7 +234,7 @@ class TestFailBind:
 
 
 # ===========================================================================
-# 并发原子性（M4 要求的并发读写一致性提前覆盖）
+# 并发任务认领
 # ===========================================================================
 
 class TestConcurrency:
@@ -253,7 +245,7 @@ class TestConcurrency:
 
         这是「多连接共享同一 WAL db 文件」的并发模型——SQLite 在 DB 层用
         写锁保证 UPDATE...WHERE status='pending' AND owner IS NULL 的原子性，
-        消除 s20 版 load→改→save 之间的竞态。注意：单连接不能跨线程并发
+        覆盖并发读写间的竞态。注意：单连接不能跨线程并发
         execute（会 InterfaceError），所以每个 worker 用自己的 TaskEngine 实例。
         """
         db = tmp_path / "race.db"

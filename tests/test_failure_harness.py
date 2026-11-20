@@ -1,4 +1,4 @@
-"""Deterministic, offline failure regression matrix for P1-4.
+"""Deterministic, offline regression coverage for execution failures.
 
 This suite deliberately drives the production ExecutionRunner -> Agent -> ToolExecutor
 lifecycle. Fakes only inject provider/tool/hook/permission/cancel failures; they do
@@ -283,7 +283,7 @@ def test_provider_retry_exhausted_is_failed_provider_error(tmp_path):
         config=AgentConfig(llm_max_retries=2, llm_retry_delay=0),
     )
 
-    result = runner.run(RunRequest(make_task(tmp_path), entrypoint="api"))
+    result = runner.run(RunRequest(make_task(tmp_path), entrypoint="eval"))
 
     assert_terminated(result, RunStatus.FAILED, "provider_error")
     assert backend.call_count == 2
@@ -327,7 +327,7 @@ def test_provider_retry_wait_cancel_stops_without_second_provider_call(tmp_path)
         ),
     )
 
-    result = runner.run(RunRequest(make_task(tmp_path), cancel_event=cancel, entrypoint="api"))
+    result = runner.run(RunRequest(make_task(tmp_path), cancel_event=cancel, entrypoint="eval"))
 
     assert_terminated(result, RunStatus.CANCELED, "canceled")
     assert backend.call_count == 1
@@ -901,7 +901,7 @@ def test_failure_trace_correlation_and_redaction(tmp_path):
         tmp_path,
         backend,
         config=AgentConfig(llm_max_retries=1),
-    ).run(RunRequest(make_task(tmp_path), entrypoint="api"))
+    ).run(RunRequest(make_task(tmp_path), entrypoint="eval"))
 
     raw = Path(result.trace_path).read_text(encoding="utf-8")
     assert secret not in raw
@@ -919,7 +919,7 @@ def test_failure_trace_correlation_and_redaction(tmp_path):
     assert secret not in str(failed)
 
 
-@pytest.mark.parametrize("entrypoint", ["cli", "chat", "api", "github_issue"])
+@pytest.mark.parametrize("entrypoint", ["cli", "chat", "eval", "github_issue"])
 def test_provider_failure_semantics_are_identical_across_entrypoint_labels(tmp_path, entrypoint):
     backend = ScriptedFailureBackend([RuntimeError("provider rejected request")])
     result = make_runner(

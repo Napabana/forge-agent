@@ -8,7 +8,7 @@ from typing import Any
 from llm.usage import SessionUsage
 
 
-SESSION_STATE_VERSION = 2
+SESSION_STATE_VERSION = 4
 
 
 class ChatSessionError(RuntimeError):
@@ -38,6 +38,9 @@ class PendingRoundState:
     user_input: str
     started_at: str
     log_path: str
+    run_id: str | None = None
+    scope_id: str | None = None
+    runtime_revision: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PendingRoundState":
@@ -58,6 +61,9 @@ class ChatRoundState:
     usage: SessionUsage = field(default_factory=SessionUsage)
     finished_at: str | None = None
     error: str | None = None
+    run_id: str | None = None
+    history_digest: str | None = None
+    origin_session_id: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ChatRoundState":
@@ -89,6 +95,8 @@ class ChatSessionState:
     rounds: list[ChatRoundState] = field(default_factory=list)
     compaction_checkpoints: list[dict[str, Any]] = field(default_factory=list)
     revision: int = 0
+    forked_from_session_id: str | None = None
+    forked_from_round: int | None = None
     version: int = SESSION_STATE_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -97,14 +105,14 @@ class ChatSessionState:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ChatSessionState":
         version = data.get("version")
-        if version not in {1, SESSION_STATE_VERSION}:
+        if version not in {1, 2, 3, SESSION_STATE_VERSION}:
             raise ChatSessionFormatError(
                 f"unsupported chat session version: {version!r}"
             )
         try:
             raw = dict(data)
+            raw["version"] = SESSION_STATE_VERSION
             if version == 1:
-                raw["version"] = SESSION_STATE_VERSION
                 raw.setdefault("revision", 0)
                 raw.setdefault("compaction_checkpoints", [])
             pending = raw.get("pending_round")

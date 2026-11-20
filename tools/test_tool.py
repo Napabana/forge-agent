@@ -54,7 +54,7 @@ class PytestTool(BaseTool):
         python_executable: str | None = None,
     ) -> None:
         self._runtime = runtime or LocalRuntime()
-        # LLM 未传 cwd 时的默认目录（orchestrator 注入 worktree 路径，M4 第二波）。
+        # 调用未指定 cwd 时，使用编排器传入的工作目录。
         self._default_cwd = default_cwd
         self._python_executable = python_executable
 

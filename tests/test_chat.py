@@ -48,6 +48,84 @@ def make_session(backend, registry, cfg, tmp_path) -> ChatSession:
     )
 
 
+def test_persisted_chat_reopens_and_resumes_its_interrupted_round(tmp_path, cfg, registry, monkeypatch):
+    import dataclasses
+    from agent.event_log import EventLog
+    from agent.session_store import JsonChatSessionStore
+    from config.schema import DurableRuntimeConfig
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    cfg.durable_runtime = DurableRuntimeConfig(True, str(tmp_path / "runtime"))
+    cfg.memory = dataclasses.replace(cfg.memory, enabled=False)
+    store = JsonChatSessionStore(tmp_path / "sessions")
+    backend = MockBackend([Action(ActionType.FINISH, "", message="saved reply")])
+    first = ChatSession(backend=backend, registry=registry, config=cfg, repo_path=str(repo),
+                        log_dir=cfg.agent.log_dir, session_store=store)
+    session_id = first.session_id
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as cut:
+        cut.setattr(EventLog, "log_action", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            first.run_round("first question")
+    first.close()
+    reopened = ChatSession(backend=backend, registry=registry, config=cfg, repo_path=str(repo),
+                           log_dir=cfg.agent.log_dir, session_store=store, session_id=session_id)
+    try:
+        assert reopened.run_round("", resume=True)
+        assert backend.call_count == 1
+        state = store.load(session_id)
+        assert len(state.rounds) == 1
+        assert state.rounds[0].status == "success"
+        assert state.rounds[0].summary == "saved reply"
+    finally:
+        reopened.close()
+
+
+def test_rewind_uses_saved_round_after_clear_and_forks_the_original(tmp_path, cfg, registry, record_property):
+    from agent.session_store import JsonChatSessionStore
+    from config.schema import DurableRuntimeConfig
+    from context.archive import ContextArchive
+    from durable_runtime import DurableRuntimeStore
+    from project_memory.identity import ProjectIdentityResolver
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    cfg.durable_runtime = DurableRuntimeConfig(True, str(tmp_path / "runtime"))
+    store = JsonChatSessionStore(tmp_path / "sessions")
+    backend = MockBackend([Action(ActionType.FINISH, "", message=reply) for reply in ("first reply", "discarded reply", "fork reply")])
+    session = ChatSession(backend=backend, registry=registry, config=cfg, repo_path=str(repo),
+                          log_dir=cfg.agent.log_dir, session_store=store, stream=False)
+    original_id = session.session_id
+    try:
+        assert session.run_round("earlier prompt")
+        assert session.run_round("discarded prompt")
+        (repo / "existing.txt").write_text("preserve", encoding="utf-8")
+        session.clear_history()
+        original = store.load(original_id).to_dict()
+        with pytest.raises(RuntimeError, match="finished round"):
+            session.rewind(99)
+        child = session.rewind(1)
+        branch = store.load(child)
+        assert child != original_id and branch.forked_from_session_id == original_id and branch.forked_from_round == 1
+        assert branch.round_count == 1 and "earlier prompt" in str(branch.history)
+        assert "discarded prompt" not in str(branch.history)
+        assert store.load(original_id).to_dict() == original
+        with DurableRuntimeStore(ProjectIdentityResolver.resolve(repo), cfg.durable_runtime.root) as database:
+            assert "boundary" in {row["kind"] for row in ContextArchive(database, child).records()}
+        assert session.run_round("continue from first")
+        assert [item.round_number for item in store.load(child).rounds] == [1, 2]
+        rendered = " ".join(message.content for message in backend.received_messages[-1])
+        assert "earlier prompt" in rendered and "discarded reply" not in rendered
+        assert (repo / "existing.txt").read_text(encoding="utf-8") == "preserve"
+        record_property("chat_rewind_correct", 1)
+    finally:
+        session.close()
+
+
 # ---------------------------------------------------------------------------
 # 基本功能
 # ---------------------------------------------------------------------------

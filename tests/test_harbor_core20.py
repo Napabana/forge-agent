@@ -621,6 +621,7 @@ def test_docker_can_reach_host_broker_without_provider_credentials():
                            send=lambda body: {"usage": {"input_tokens": 3, "output_tokens": 1}},
                            max_output=6, max_requests=1)
     address = os.environ["FORGE_BROKER_SMOKE_ADDRESS"]
+    bind_address = os.environ.get("FORGE_BROKER_SMOKE_BIND_ADDRESS", address)
     code = """
 import json, os, sys
 from urllib.request import ProxyHandler, Request, build_opener
@@ -631,7 +632,7 @@ req = Request(ticket["url"], data=body, headers={"Authorization": "Bearer " + ti
 with build_opener(ProxyHandler({})).open(req, timeout=8) as response:
     assert json.load(response)["usage"]["input_tokens"] == 3
 """
-    with serve_trial_broker(broker, address=address) as (port, capability):
+    with serve_trial_broker(broker, address=bind_address) as (port, capability):
         result = subprocess.run([
             "docker", "run", "--rm", "-i", "--entrypoint", "python",
             "forge-httpx-3367-diagnostic:local", "-c", code,

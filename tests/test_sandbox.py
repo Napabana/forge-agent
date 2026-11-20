@@ -357,7 +357,7 @@ class TestDockerRuntimeUnit:
         assert rm_call is not None
         assert "abc123" in rm_call
 
-    # --- M3 加固参数透传到 docker run argv ---
+    # --- 隔离参数传入 docker run ---
 
     def _capture_run_args(self, rt, tmp_path):
         """触发 exec → 捕获 docker run 的 argv（mock subprocess.run）。"""
@@ -384,7 +384,7 @@ class TestDockerRuntimeUnit:
         """回归守卫：裸 DockerRuntime(run) 的 run args 含加固默认值且保持旧行为。"""
         rt = DockerRuntime(repo_path=str(tmp_path))
         args = self._capture_run_args(rt, tmp_path)
-        # 加固默认值（M3 新增）
+        # 隔离参数默认值
         assert args[args.index("--memory") + 1] == "1g"
         assert args[args.index("--cpus") + 1] == "2.0"
         assert "--network" in args and args[args.index("--network") + 1] == "none"
@@ -603,7 +603,7 @@ class TestDockerRuntimeIntegration:
         assert result.success
         assert "Python" in result.output
 
-    # --- M3 加固参数的真实容器行为验证 ---
+    # --- 真实容器隔离验证 ---
 
     def test_read_only_root_blocks_write_to_workspace(self, tmp_path):
         """readonly_root=True：写 /workspace 应失败（read-only file system）。"""

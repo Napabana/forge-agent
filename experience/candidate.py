@@ -35,7 +35,7 @@ _RECOVERY_STRATEGY_TEXT = {
 
 
 class DeterministicCandidateGenerator:
-    """Render typed patterns into standard P2-3 SKILL.md-compatible instructions."""
+    """Render typed patterns into SKILL.md-compatible instructions."""
 
     def generate(self, pattern: ExperiencePattern, *, skill_name: str | None = None) -> SkillCandidate:
         name = skill_name or f"experience-{pattern.pattern_type.value.replace('_', '-')}-{pattern.pattern_id[-8:]}"

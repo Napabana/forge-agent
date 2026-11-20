@@ -63,6 +63,8 @@ class ChatSessionStore(Protocol):
     def latest_for_repo(self, repo_path: str | Path) -> ChatSessionState | None: ...
     def round_log_dir(self, state: ChatSessionState) -> Path: ...
     def state_path(self, state: ChatSessionState) -> Path: ...
+    def save_history(self, state: ChatSessionState, messages: list[dict]) -> str: ...
+    def load_history(self, state: ChatSessionState, checksum: str) -> list[dict]: ...
 
 
 class JsonChatSessionStore:
@@ -88,6 +90,42 @@ class JsonChatSessionStore:
 
     def round_log_dir(self, state: ChatSessionState) -> Path:
         return self.state_path(state).parent / "rounds"
+
+    def _history_path(self, state: ChatSessionState, checksum: str) -> Path:
+        if not re.fullmatch(r"[0-9a-f]{16}", state.repo_key) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+            raise ChatSessionFormatError("invalid round history identity")
+        path = self.root / state.repo_key / ".history" / f"{checksum}.json"
+        if path.is_symlink() or path.parent.is_symlink():
+            raise ChatSessionFormatError("round history cannot use a symbolic link")
+        return path
+
+    def save_history(self, state: ChatSessionState, messages: list[dict]) -> str:
+        from durable_runtime.run_manager import digest, encode, redact_history_payload
+        from entry.onboarding import _atomic_private_text
+
+        payload = encode(redact_history_payload(self._redact(messages)))
+        checksum = digest(payload)
+        path = self._history_path(state, checksum)
+        if path.exists():
+            self.load_history(state, checksum)
+        else:
+            _atomic_private_text(path, payload)
+        return checksum
+
+    def load_history(self, state: ChatSessionState, checksum: str) -> list[dict]:
+        from durable_runtime.run_manager import digest
+
+        path = self._history_path(state, checksum)
+        try:
+            payload = path.read_bytes().decode("utf-8")
+            history = json.loads(payload)
+        except (OSError, ValueError) as exc:
+            raise ChatSessionFormatError("saved round history cannot be read") from exc
+        if digest(payload) != checksum or not isinstance(history, list) or any(
+            not isinstance(item, dict) for item in history
+        ):
+            raise ChatSessionFormatError("saved round history digest or format differs")
+        return history
 
     def save(self, state: ChatSessionState) -> None:
         state.updated_at = utc_now()

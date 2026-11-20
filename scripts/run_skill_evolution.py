@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline real-trace mining entrypoint for P2-5 Skill Evolution.
+"""Mine offline execution traces for Skill candidates.
 
 This script never constructs an LLM backend and never runs EvaluationHarness.
 It only loads immutable Trace v2 artifacts, mines deterministic experience
@@ -175,7 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"refusing to overwrite non-empty output directory: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Deliberately import only the offline P2-5 modules after CLI validation.
+    # Load the offline mining modules after validating CLI arguments.
     from experience.candidate import (
         CANDIDATE_RENDERER_VERSION,
         DeterministicCandidateGenerator,

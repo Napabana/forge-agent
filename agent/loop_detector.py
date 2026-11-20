@@ -92,6 +92,22 @@ class LoopDetector:
     def buffered_steps(self) -> int:
         return len(self._records)
 
+    def snapshot(self) -> dict:
+        return {
+            "schema_version": 1, "records": [record.__dict__ for record in self._records],
+            "occurrence": self._occurrence, "last_repo_state": self._last_repo_state,
+            "last_test_state": self._last_test_state,
+        }
+
+    def restore(self, state: dict) -> None:
+        if state.get("schema_version") != 1:
+            raise ValueError("unsupported loop detector snapshot")
+        self._records.clear()
+        self._records.extend(_StepRecord(**record) for record in state["records"])
+        self._occurrence = state["occurrence"]
+        self._last_repo_state = state["last_repo_state"]
+        self._last_test_state = state["last_test_state"]
+
     def observe(
         self,
         action: Action,# Agent 这一步决定做什么

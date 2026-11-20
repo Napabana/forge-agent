@@ -1,19 +1,6 @@
-"""
-task/engine.py
+"""基于 SQLite WAL 的任务状态与依赖引擎。
 
-SQLite(WAL) 持久化的任务状态机 + DAG 依赖引擎（M1 Task 1.1）。
-
-设计来源：s20_comprehensive/code.py 的 Task System（70-168 行）——
-Task dataclass、create/load/list/can_start/claim/complete 一整套语义。
-本模块完整保留其业务语义，只把存储层从「每任务一个 JSON 文件」换成 SQLite，
-用 UPDATE ... WHERE 的原子性消除 s20 版 load→改→save 之间的并发竞态。
-
-API 风格：结构化 + 异常。
-- claim_task 返回 bool / 失败 raise TaskNotClaimable（带 reason）
-- complete_task 返回被解锁的任务 id 列表
-- 查询返回 Task 对象；不存在 raise TaskNotFound
-
-M1 边界：独立模块，不集成进 agent/core.py 主循环。
+保存任务和工作树关联，原子认领可执行任务，并在任务完成后找出已解除依赖的任务。
 """
 
 from __future__ import annotations
@@ -48,7 +35,7 @@ REASON_BLOCKED = "blocked"
 
 @dataclass
 class Task:
-    """一条任务记录。字段对齐 s20 code.py:79-88，移除 JSON 专属字段，加 created_at。"""
+    """任务状态、依赖及工作树绑定。"""
     id: str
     subject: str
     description: str
@@ -226,7 +213,7 @@ class TaskEngine:
             )
 
     def bind_worktree(self, task_id: str, worktree_name: str) -> None:
-        """把任务关联到一个 worktree（M1 Task 1.2 WorktreeSession 会调用）。"""
+        """将工作树关联到任务。"""
         with self._lock:
             if not self._exists(task_id):
                 raise TaskNotFound(task_id)
@@ -292,7 +279,7 @@ class TaskEngine:
     # ------------------------------------------------------------------
 
     def claim_task(self, task_id: str, owner: str = "agent") -> bool:
-        """原子认领任务（s20 claim_task:135 的并发安全核心）。
+        """原子认领任务。
 
         用 UPDATE...WHERE status='pending' AND owner IS NULL 的原子性消除load→改→save 之间的竞态。
         多线程同时 claim 同一任务时，恰好一个成功。
@@ -330,7 +317,7 @@ class TaskEngine:
 
     def complete_task(self, task_id: str) -> list[str]:
         """
-        完成任务并返回被它解锁的 pending 任务 id 列表（s20 complete_task:156 的级联解锁）。
+        完成任务并返回依赖已满足的待处理任务 ID。
 
         Raises:
             TaskNotFound / TaskNotCompletable（不在 in_progress）。
@@ -371,7 +358,7 @@ class TaskEngine:
             return unblocked
 
     def fail_task(self, task_id: str) -> None:
-        """置任务为 failed（M1 Task 1.3 demo 模拟崩溃回滚用；s20 无此状态）。"""
+        """将任务标记为失败。"""
         with self._lock:
             task = self.get_task(task_id)
             if task.status not in (STATUS_IN_PROGRESS, STATUS_PENDING):

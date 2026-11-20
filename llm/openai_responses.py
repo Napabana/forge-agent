@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from llm.cache_audit import call_provider, sdk_http_options
+
 import json
 import logging
 import re
@@ -48,8 +50,8 @@ class OpenAIResponsesBackend(LLMBackend):
         strict_tool_schema: bool = False,
     ) -> None:
         try:
-            from openai import OpenAI
-            self._client = OpenAI(api_key=api_key, base_url=base_url)
+            import openai
+            self._client = openai.OpenAI(api_key=api_key, base_url=base_url, **sdk_http_options(openai))
         except ImportError:
             raise ImportError("openai package not installed. Run: pip install openai")
         self._model = model
@@ -85,7 +87,7 @@ class OpenAIResponsesBackend(LLMBackend):
             self._model, len(input_items), len(tools),
         )
         if self._budget is None:
-            response = self._client.responses.create(**kwargs)
+            response = call_provider("responses", self._client.responses.create, **kwargs)
         else:
             budget, pool, input_upper_bound = self._budget
             reservation = budget.reserve(
@@ -94,7 +96,7 @@ class OpenAIResponsesBackend(LLMBackend):
             kwargs["max_output_tokens"] = reservation.output_limit
             raw_usage = None
             try:
-                response = self._client.responses.create(**kwargs)
+                response = call_provider("responses", self._client.responses.create, **kwargs)
                 raw_usage = _field(response, "usage")
             finally:
                 budget.settle(reservation, input_tokens=_field(raw_usage, "input_tokens"),
@@ -120,7 +122,7 @@ class OpenAIResponsesBackend(LLMBackend):
         output_items: dict[int, Any] = {}
         argument_deltas: dict[str, str] = {}
 
-        stream = self._client.responses.create(**kwargs)
+        stream = call_provider("responses", self._client.responses.create, **kwargs)
         for event in stream:
             event_type = _field(event, "type", "")
             if event_type == "response.output_text.delta":

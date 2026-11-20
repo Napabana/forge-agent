@@ -15,6 +15,8 @@ function calling 不支持时（如 DeepSeek R1）走文本解析 fallback：
 
 from __future__ import annotations
 
+from llm.cache_audit import call_provider, sdk_http_options
+
 import json
 import logging
 import re
@@ -54,8 +56,8 @@ class OpenAICompatBackend(LLMBackend):
         strict_tool_schema: bool = False,
     ) -> None:
         try:
-            from openai import OpenAI
-            self._client = OpenAI(api_key=api_key, base_url=base_url)
+            import openai
+            self._client = openai.OpenAI(api_key=api_key, base_url=base_url, **sdk_http_options(openai))
         except ImportError:
             raise ImportError("openai package not installed. Run: pip install openai")
 
@@ -104,7 +106,7 @@ class OpenAICompatBackend(LLMBackend):
     ) -> LLMResponse:
         api_tools = [_to_openai_tool(t, strict=self._strict_tool_schema) for t in tools]
 
-        response = self._client.chat.completions.create(
+        response = call_provider("chat_completions", self._client.chat.completions.create,
             model=self._model,
             max_tokens=self._max_tokens,
             messages=api_messages,
@@ -165,7 +167,7 @@ class OpenAICompatBackend(LLMBackend):
                 "content": augmented[0]["content"] + "\n\n" + tool_desc,
             }
 
-        response = self._client.chat.completions.create(
+        response = call_provider("chat_completions", self._client.chat.completions.create,
             model=self._model,
             max_tokens=self._max_tokens,
             messages=augmented,
@@ -612,7 +614,7 @@ def _stream_with_tools(self, api_messages, tools, on_text, on_thought=None):
     tool_calls_raw = []      # 收集 tool call deltas
     usage_response = None
 
-    stream = self._client.chat.completions.create(**kwargs)
+    stream = call_provider("chat_completions", self._client.chat.completions.create, **kwargs)
     for chunk in stream:
         if _field(chunk, "usage", None) is not None:
             usage_response = chunk
@@ -724,7 +726,7 @@ def _stream_text_only(self, api_messages, tools, on_text):
         }
 
     full_text = ""
-    stream = self._client.chat.completions.create(
+    stream = call_provider("chat_completions", self._client.chat.completions.create,
         model=self._model,
         max_tokens=self._max_tokens,
         messages=augmented,

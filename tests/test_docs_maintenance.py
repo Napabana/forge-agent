@@ -31,7 +31,7 @@ def test_single_module_change_maps_to_context_topic() -> None:
 
     assert result["status"] == "REVIEW_REQUIRED"
     assert result["affected_modules"] == ["Context Engineering"]
-    assert "docs/design/03-Context与RepoMap.md" in result["related_documents"]
+    assert "docs/design/context.md" in result["related_documents"]
 
 
 def test_core_change_maps_to_multiple_topics() -> None:
@@ -68,8 +68,8 @@ def test_related_topic_and_index_in_diff_report_docs_updated() -> None:
     result = analyze_changes(
         _changes(
             "context/repo_map.py",
-            "docs/design/03-Context与RepoMap.md",
-            "docs/design/源码索引.md",
+            "docs/design/context.md",
+            "docs/design/source-index.md",
         ),
         _mapping(),
     )
@@ -121,7 +121,7 @@ def test_renamed_symbol_is_invalid(tmp_path: Path) -> None:
 def test_git_collection_includes_rename_as_delete_add_and_untracked(tmp_path: Path) -> None:
     def git(*args: str) -> str:
         return subprocess.run(
-            ["git", *args], cwd=tmp_path, text=True, capture_output=True, check=True
+            ["git", *args], cwd=tmp_path, encoding="utf-8", capture_output=True, check=True
         ).stdout.strip()
 
     git("init")
@@ -136,7 +136,7 @@ def test_git_collection_includes_rename_as_delete_add_and_untracked(tmp_path: Pa
 
     git("mv", "agent/old.py", "agent/renamed.py")
     (agent / "deleted.py").unlink()
-    (agent / "new.py").write_text("VALUE = 3\n", encoding="utf-8")
+    (agent / "新增.py").write_text("VALUE = 3\n", encoding="utf-8")
 
     changes = collect_git_changes(tmp_path)
     by_path = {change.path: change for change in changes}
@@ -144,7 +144,7 @@ def test_git_collection_includes_rename_as_delete_add_and_untracked(tmp_path: Pa
     assert by_path["agent/old.py"].status == "D"
     assert by_path["agent/renamed.py"].status == "A"
     assert by_path["agent/deleted.py"].status == "D"
-    assert by_path["agent/new.py"].status == "A"
+    assert by_path["agent/新增.py"].status == "A"
 
 
 def test_architecture_map_is_valid_json() -> None:

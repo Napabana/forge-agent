@@ -1,19 +1,4 @@
-"""
-tests/test_orchestrate.py
-
-M4 主循环集成测试（第一波）。
-
-orchestrate_run 是 async 组合根，把 TaskEngine + WorktreeSession + Permission
-( workspace 边界) + ToolExecutor(决策回调) + AgentBus 接进同步 ReAct 循环。
-用 tmp_path + git fixture 造隔离 repo，FakeAgent 替换真 Agent 跑出确定性结果。
-
-覆盖：
-- 成功路径：worktree 创建/清理、task=completed、JSONL 事件顺序
-- 失败回滚：FakeAgent 抛异常 → worktree 清理、task=failed、reason=exception
-- 权限拒绝记事件：越界写 → permission_decision(deny)，run 不崩
-- AgentBus 广播生命周期事件
-- bus=None 正常工作
-"""
+"""验证隔离运行的任务状态、权限决策、工作树处置和事件分发。"""
 
 from __future__ import annotations
 
@@ -622,7 +607,7 @@ class TestOrchestrateBus:
         assert result.is_success()
 
     async def test_bus_forwards_step_events(self, repo, tmp_path):
-        """M4 第二波：on_append→forwarder 把每条 event 转发到 events.* 。"""
+        """事件日志通过 forwarder 发布到 events.*。"""
         import asyncio
         engine = TaskEngine(tmp_path / "tasks.db")
         bus = AgentBus()

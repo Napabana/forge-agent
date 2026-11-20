@@ -252,7 +252,7 @@ def build_docker_run_args(
 ) -> list[str]:
     """构造 `docker run` 的完整 argv（纯函数，零副作用，便于单测）。
 
-    安全加固（任务规划.md Task 3.1/3.2）：
+    容器隔离参数：
     - `--memory` / `--cpus`：硬性约束 CPU/内存，防止异常代码耗尽宿主。
       （CPU 限额以 nano_cpus 入参，1e9=1核，CLI 换算成 `--cpus` 核数。）
     - `--network none`：默认断网（network=False 时），阻断未授权外联。
@@ -300,9 +300,7 @@ def build_docker_run_args(
     ]
     args += ["--tmpfs", "/tmp"]
 
-    # Docker 不允许两个 bind mount 使用同一个容器目标。M4 过去先把主 repo
-    # 挂到 /workspace，再试图用 rw worktree "盖住"它，真实 docker run 会报
-    # Duplicate mount point。先收集挂载并按 target 去重：
+    # Docker 要求容器挂载目标唯一，先按目标合并挂载：
     # - 普通额外挂载保留先到者，不能覆盖 workspace 安全边界；
     # - 显式 worktree_mount 优先级最高，替换相同 target 的已有挂载。
     mounts: list[tuple[str, str, str | None]] = []
@@ -356,13 +354,12 @@ class DockerRuntime(Runtime):
 
     这样比每条命令都 docker run 快得多（避免反复启动容器的开销）。
 
-    安全加固（任务规划.md Task 3.1/3.2，M3）：
+    容器隔离参数：
     - 资源配额：mem_limit / nano_cpus 默认 1g / 2 核，硬性约束容器。
     - 网络：network=False（默认）→ --network none，断网。
     - 只读根 + tmpfs：readonly_root=True → 根 FS 只读，/tmp 走 tmpfs 仍可写。
-    - 挂载白名单（Task 3.2）：readonly_root=True 时主 repo :ro，worktree_mount
-      始终 :rw。M4 用 worktree_mount=(wt.path, /workspace) 替换同目标的主 repo
-      挂载，实现"仅当前任务工作区可写"。
+    - 挂载：readonly_root=True 时主仓库只读。任务工作树以读写方式替换
+      同一容器路径上的主仓库挂载。
 
     Args:
         repo_path:    宿主机上 repo 的绝对路径，会被 mount 进容器
@@ -372,7 +369,7 @@ class DockerRuntime(Runtime):
         readonly_root: True → 根 FS 只读 + 主 repo :ro。注意：此模式下 setup_cmds 若
                        写 /workspace 或 /root/.cache 会失败；需配合 worktree_mount
                        让工作区可写，或把依赖预装进镜像。
-        worktree_mount: (host_path, container_path)，始终以 :rw 挂载。M4 联动
+        worktree_mount: (host_path, container_path)，始终以 :rw 挂载。绑定
                        WorktreeSession 时传入 (wt.path, /workspace)。
         mem_limit:    --memory 值，默认 "1g"。
         nano_cpus:    --nano-cpus 值，默认 2_000_000_000（2 核）。

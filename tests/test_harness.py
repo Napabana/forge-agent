@@ -1,7 +1,7 @@
 """
 tests/test_harness.py
 
-M2 Task 2.2：Hooks + Permission + ToolExecutor 测试。
+验证钩子、权限决策和工具执行。
 覆盖：Hooks 注册/触发/短路；Permission 的 DENY/CONFIRM/ALLOW；
 ToolExecutor 包装——黑名单拦截、CONFIRM 经 callback 放行/拒绝、透明直通、PostToolUse 触发。
 """
@@ -152,7 +152,7 @@ class TestPermission:
         ).is_confirm
 
     def test_sudo_denied(self):
-        # s20 DENY_LIST 补充项 sudo
+        # 拒绝规则覆盖 sudo
         perm = PermissionManager()
         dec = perm.check(block("shell", cmd="sudo apt install x"))
         assert dec.is_deny
@@ -171,7 +171,7 @@ class TestPermission:
         assert dec.is_allow
 
     def test_file_read_path_escape_denied(self, tmp_path):
-        """M4：读工具也受 workspace 边界约束（防读系统文件泄露）。"""
+        """读工具也受工作区范围约束。"""
         perm = PermissionManager(workspace=str(tmp_path))
         dec = perm.check(block("file_read", path="/etc/passwd"))
         assert dec.is_deny
@@ -248,7 +248,7 @@ class TestToolExecutor:
         assert not result.success
 
     def test_decision_callback_reports_allow_and_deny(self, registry, tmp_path):
-        """M4：decision_callback 在 check 之后触发，allow/deny 都上报。"""
+        """权限检查后上报允许或拒绝决策。"""
         perm = PermissionManager(workspace=str(tmp_path))
         seen = []
         ex = ToolExecutor(

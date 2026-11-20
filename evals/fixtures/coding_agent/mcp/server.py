@@ -1,4 +1,4 @@
-"""Fixed offline MCP server for P2-4 evaluation and local protocol E2E."""
+"""Deterministic MCP server for offline evaluation and protocol tests."""
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +17,7 @@ def guidance_resource() -> str:
 
 @mcp.prompt()
 def guidance_prompt(topic: str = "navigation") -> str:
-    """Expose one deterministic prompt; Forge P2-4 records capability only."""
+    """Expose a deterministic prompt for capability discovery."""
     return f"Inspect repository guidance for {topic}."
 
 

@@ -202,6 +202,135 @@ def _load_cli_config(ctx: click.Context):
     return cfg
 
 
+@cli.command("init")
+@click.option("--provider")
+@click.option("--model")
+@click.option("--protocol", type=click.Choice(["chat_completions", "responses", "messages"]))
+@click.option("--base-url")
+@click.option("--api-key-env")
+@click.option("--keyring", "use_keyring", is_flag=True, help="Store a prompted key in the system keyring.")
+@click.option("--context-window", type=click.IntRange(min=1))
+@click.option("--max-output-tokens", type=click.IntRange(min=1))
+@click.option("--repo", default=".", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--non-interactive", is_flag=True)
+@click.option("--force", is_flag=True)
+@click.pass_context
+def init_config(ctx, provider, model, protocol, base_url, api_key_env, context_window, max_output_tokens, repo,
+                non_interactive, force, use_keyring):
+    """Create or update the user model configuration after a small validation request."""
+    from entry.onboarding import initialize
+
+    path = _user_config_path(ctx)
+    grant_project_skills = False
+    if path.exists() and not force:
+        raise click.ClickException("Configuration already exists. Use --force to update it.")
+    if use_keyring and (api_key_env or non_interactive):
+        raise click.UsageError("--keyring requires interactive credential entry")
+    if non_interactive:
+        if not provider or not model:
+            raise click.UsageError("--non-interactive requires --provider and --model")
+        key = None
+    else:
+        provider = provider or click.prompt("Provider", default="openai")
+        model = model or click.prompt("Model")
+        key = click.prompt("API key", hide_input=True) if not api_key_env and provider != "ollama" else None
+        if (repo / ".agents" / "skills").is_dir():
+            from project_memory.identity import ProjectIdentityResolver
+
+            identity = ProjectIdentityResolver.resolve(repo)
+            grant_project_skills = click.confirm(f"Trust project Skills from {repo.resolve()} for {identity.key}?")
+        if not click.confirm("Send a small request to validate the model and save this configuration?"):
+            raise click.Abort()
+    try:
+        initialize(path, provider=provider, model=model, protocol=protocol,
+                   base_url=base_url, key_env=api_key_env, key=key, force=force,
+                   context_window=context_window, max_output_tokens=max_output_tokens, use_keyring=use_keyring)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise click.ClickException(f"Configuration could not be saved ({type(exc).__name__}).") from None
+    click.echo(f"Configured {provider}/{model} in {path}")
+    if grant_project_skills:
+        _workspace_command(ctx, repo, scope="project_skills", grant=True)
+    if not non_interactive:
+        from entry.onboarding import environment_summary
+
+        click.echo(json.dumps(environment_summary(_load_cli_config(ctx), path, repo), ensure_ascii=False))
+
+
+def _user_config_path(ctx: click.Context) -> Path:
+    selected = ctx.obj.get("config_path")
+    return Path(selected).expanduser() if selected else Path.home() / ".config" / "forge-agent" / "config.yaml"
+
+
+def _maybe_onboard(ctx: click.Context, repo: str) -> None:
+    if ctx.obj.get("config_path") is None and sys.stdin.isatty() and not _user_config_path(ctx).exists():
+        defaults = _load_cli_config(ctx)
+        if defaults.onboarding_enabled and defaults.onboarding_auto_start and click.confirm("Create a user model configuration now?", default=True):
+            ctx.invoke(init_config, repo=Path(repo))
+
+
+@cli.group("workspace")
+def workspace_commands():
+    """Manage trust for project-level resources."""
+
+
+def _workspace_command(ctx, repo, *, scope=None, grant=False):
+    from durable_runtime.store import DurableRuntimeStore
+    from durable_runtime.workspace_trust import change_trust, read_trust
+    from project_memory.identity import ProjectIdentityResolver
+
+    settings = _load_cli_config(ctx).durable_runtime
+    identity = ProjectIdentityResolver.resolve(repo)
+    with DurableRuntimeStore(identity, settings.root, timeout_ms=settings.busy_timeout_ms) as store:
+        scopes = change_trust(store, scope, grant=grant) if scope else read_trust(store)
+    click.echo(json.dumps({"project_id": identity.project_id, "granted_scopes": sorted(scopes)}, ensure_ascii=False))
+
+
+@workspace_commands.command("trust")
+@click.option("--repo", default=".", type=click.Path(exists=True, file_okay=False))
+@click.option("--scope", default="project_skills",
+              type=click.Choice(["project_skills", "project_guidance", "project_mcp", "project_hooks"]))
+@click.pass_context
+def workspace_trust(ctx, repo, scope):
+    _workspace_command(ctx, repo, scope=scope, grant=True)
+
+
+@workspace_commands.command("status")
+@click.option("--repo", default=".", type=click.Path(exists=True, file_okay=False))
+@click.pass_context
+def workspace_status(ctx, repo):
+    _workspace_command(ctx, repo)
+
+
+@workspace_commands.command("revoke")
+@click.option("--repo", default=".", type=click.Path(exists=True, file_okay=False))
+@click.option("--scope", required=True,
+              type=click.Choice(["project_skills", "project_guidance", "project_mcp", "project_hooks"]))
+@click.pass_context
+def workspace_revoke(ctx, repo, scope):
+    _workspace_command(ctx, repo, scope=scope)
+
+
+@cli.command("doctor")
+@click.option("--json", "as_json", is_flag=True)
+@click.option("--repo", default=".", type=click.Path(exists=True, file_okay=False))
+@click.option("--check-model", is_flag=True, help="Send a small validation request to the selected model.")
+@click.pass_context
+def doctor(ctx, as_json, repo, check_model):
+    """Check local configuration and environment without exposing credentials."""
+    from entry.onboarding import environment_summary
+
+    try:
+        checks = environment_summary(_load_cli_config(ctx), _user_config_path(ctx), Path(repo).resolve(),
+                                     check_model=check_model)
+    except Exception as exc:
+        raise click.ClickException(f"Configuration could not be loaded ({type(exc).__name__}).") from exc
+    if as_json:
+        click.echo(json.dumps(checks, ensure_ascii=False))
+    else:
+        for key, value in checks.items():
+            click.echo(f"{key}: {value}")
+
+
 def _resolve_run_approval_mode(approval_mode: str | None, confirm: bool | None) -> str:
     if approval_mode is not None and confirm is not None:
         raise click.UsageError("--approval-mode cannot be combined with --confirm/--no-confirm")
@@ -216,6 +345,350 @@ def config_commands() -> None:
 @cli.group("memory")
 def memory_commands() -> None:
     """Inspect and approve local project memory."""
+
+
+@cli.group("runtime")
+@click.option("--repo", default=".", type=click.Path(exists=True, file_okay=False))
+@click.pass_context
+def runtime_commands(ctx, repo):
+    """Inspect local durable execution state."""
+    from durable_runtime.store import DurableRuntimeStore
+    from project_memory.identity import ProjectIdentityResolver
+
+    settings = _load_cli_config(ctx).durable_runtime
+    ctx.obj = ctx.with_resource(DurableRuntimeStore(
+        ProjectIdentityResolver.resolve(repo), settings.root, timeout_ms=settings.busy_timeout_ms,
+    ))
+
+
+@runtime_commands.command("verify")
+@click.pass_obj
+def runtime_verify(store):
+    store.integrity_check()
+    click.echo("ok")
+
+
+@runtime_commands.command("status")
+@click.pass_obj
+def runtime_status(store):
+    rows = store._conn.execute("SELECT status, count(*) AS count FROM runs GROUP BY status")
+    click.echo(json.dumps({"project_id": store.identity.project_id, "database": str(store.path),
+                          "runs": {row["status"]: row["count"] for row in rows}}, ensure_ascii=False))
+
+
+@runtime_commands.command("backup")
+@click.argument("destination", type=click.Path(dir_okay=False))
+@click.pass_obj
+def runtime_backup(store, destination):
+    click.echo(str(store.backup(destination)))
+
+
+@runtime_commands.command("runs")
+@click.option("--status")
+@click.pass_obj
+def runtime_runs(store, status):
+    rows = store._conn.execute(
+        """SELECT run_id, scope_id, task_id, entrypoint, status, step, revision, owner_epoch
+           FROM runs WHERE ? IS NULL OR status=? ORDER BY created_at DESC""", (status, status),
+    )
+    click.echo(json.dumps([dict(row) for row in rows], ensure_ascii=False))
+
+
+@runtime_commands.command("cache")
+@click.option("--run-id")
+@click.option("--prune-expired", is_flag=True, help="Remove expired cache audit rows across this project.")
+@click.pass_context
+def runtime_cache(ctx, run_id, prune_expired):
+    store = ctx.obj
+    if prune_expired:
+        if run_id:
+            raise click.UsageError("--prune-expired applies to the project and cannot be combined with --run-id")
+        count = store.prune_cache_audit(_load_cli_config(ctx.find_root()).cache_audit_retention_days)
+        click.echo(json.dumps({"pruned": count}))
+        return
+    rows = store._conn.execute(
+        """SELECT a.*, m.request_fingerprint AS request_digest FROM cache_audit_events a
+           LEFT JOIN model_calls m ON m.model_call_id=a.request_id
+           WHERE ? IS NULL OR a.run_id=? ORDER BY a.created_at""", (run_id, run_id),
+    )
+    report = []
+    for row in rows:
+        event = dict(row)
+        event["cache_hit_ratio"] = (
+            event["cached_tokens"] / event["prompt_tokens"] if event["cache_read_reported"]
+            and event["prompt_tokens"] and event["cached_tokens"] is not None else None
+        )
+        report.append(event)
+    click.echo(json.dumps(report, ensure_ascii=False))
+
+
+@runtime_commands.command("archive")
+@click.argument("scope_id")
+@click.argument("archive_id", required=False)
+@click.option("--offset", type=int, default=0)
+@click.option("--limit", type=int, default=4096)
+@click.pass_obj
+def runtime_archive(store, scope_id, archive_id, offset, limit):
+    from context.archive import ContextArchive
+    from durable_runtime.store import StoreFormatError
+
+    archive = ContextArchive(store, scope_id)
+    try:
+        result = archive.read(archive_id, offset, limit) if archive_id else archive.records()
+    except (StoreFormatError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, ensure_ascii=False))
+
+
+@runtime_commands.command("archive-export")
+@click.argument("scope_id")
+@click.argument("destination", type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--id", "archive_ids", multiple=True, help="Export only these roots and their sources.")
+@click.pass_obj
+def runtime_archive_export(store, scope_id, destination, archive_ids):
+    """Export redacted records and their verified source graph."""
+    import os
+    from context.archive import ContextArchive, MAX_ARCHIVE_BUNDLE_BYTES
+    from durable_runtime.run_manager import encode
+
+    try:
+        payload = encode(ContextArchive(store, scope_id).export_bundle(archive_ids)).encode("utf-8")
+        if len(payload) > MAX_ARCHIVE_BUNDLE_BYTES:
+            raise ValueError("archive bundle exceeds 32 MiB; select fewer roots")
+        store._create_private_file(destination, exclusive=True)
+        try:
+            with destination.open("wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except BaseException:
+            destination.unlink(missing_ok=True)
+            raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(str(destination.resolve()))
+
+
+@runtime_commands.command("archive-import")
+@click.argument("scope_id")
+@click.argument("bundle_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.pass_context
+def runtime_archive_import(ctx, scope_id, bundle_path):
+    """Attach a verified bundle to another Scope of this project."""
+    from context.archive import ContextArchive, MAX_ARCHIVE_BUNDLE_BYTES
+
+    settings = _load_cli_config(ctx.find_root()).durable_runtime
+    if not settings.archive_enabled:
+        raise click.ClickException("durable archive is disabled")
+    store = ctx.obj
+    try:
+        with bundle_path.open("rb") as stream:
+            contents = stream.read(MAX_ARCHIVE_BUNDLE_BYTES + 1)
+        if len(contents) > MAX_ARCHIVE_BUNDLE_BYTES:
+            raise ValueError("archive bundle exceeds 32 MiB")
+        bundle = json.loads(contents.decode("utf-8"))
+        owner = store.claim(scope_id)
+        archive = ContextArchive(store, scope_id, settings.archive_inline_limit_bytes)
+        with store.transaction(owner, owner.revision) as db:
+            receipt = archive.import_bundle(db, bundle)
+    except (OSError, ValueError, RuntimeError, RecursionError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(receipt))
+
+
+@runtime_commands.command("import-chat")
+@click.argument("session_id")
+@click.pass_context
+def runtime_import_chat(ctx, session_id):
+    """Import a saved Chat history into its own Runtime scope."""
+    import re
+    from agent.session_store import JsonChatSessionStore
+    from context.archive import ContextArchive
+    from project_memory.identity import ProjectIdentityResolver
+
+    if not re.fullmatch(r"[a-fA-F0-9]{12}", session_id):
+        raise click.ClickException("invalid Chat session ID")
+    config = _load_cli_config(ctx.find_root())
+    if not config.durable_runtime.archive_enabled:
+        raise click.ClickException("durable archive is disabled")
+    store = ctx.obj
+    try:
+        session = JsonChatSessionStore(Path(config.agent.log_dir) / "chat").load(session_id)
+        if session.session_id != session_id or ProjectIdentityResolver.resolve(session.repo_path) != store.identity:
+            raise click.ClickException("Chat session belongs to a different project")
+        owner = store.claim(session_id)
+        archive = ContextArchive(store, session_id, config.durable_runtime.archive_inline_limit_bytes,
+                                 session_id=session_id)
+        with store.transaction(owner, owner.revision) as db:
+            record = archive.import_history(db, session.history, session_id)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(record)
+
+
+@runtime_commands.command("inspect")
+@click.argument("run_id")
+@click.pass_obj
+def runtime_inspect(store, run_id):
+    from durable_runtime.run_manager import checked_payload
+
+    row = store._conn.execute(
+        """SELECT r.run_id, r.scope_id, r.task_id, r.entrypoint, r.status, r.revision,
+                  r.step, c.kind, c.payload_json, c.payload_digest
+           FROM runs r JOIN run_checkpoints c ON c.checkpoint_id=r.checkpoint_id AND c.run_id=r.run_id
+           WHERE r.run_id=?""", (run_id,),
+    ).fetchone()
+    if row is None:
+        raise click.ClickException("run checkpoint does not exist in this project")
+    data = dict(row)
+    try:
+        data["checkpoint"] = checked_payload(data.pop("payload_json"), data.pop("payload_digest"))
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(data, ensure_ascii=False))
+
+
+@runtime_commands.command("resume")
+@click.argument("run_id")
+@click.pass_context
+def runtime_resume(ctx, run_id):
+    """Resume an interrupted direct run using its original configuration."""
+    repo = ctx.parent.params["repo"]
+    ctx.obj = ctx.find_root().obj
+    return ctx.invoke(run, repo=repo, resume_id=run_id)
+
+
+@runtime_commands.command("pause")
+@click.argument("run_id")
+@click.pass_obj
+def runtime_pause(store, run_id):
+    try:
+        store.request_pause(run_id)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo("Pause requested at the next safe boundary.")
+
+
+@runtime_commands.command("owners")
+@click.pass_obj
+def runtime_owners(store):
+    rows = store._conn.execute(
+        "SELECT scope_id, host_id, boot_id, pid, owner_epoch, revision FROM runtime_scopes ORDER BY scope_id"
+    )
+    click.echo(json.dumps([dict(row) for row in rows]))
+
+
+@runtime_commands.command("takeover")
+@click.argument("scope_id")
+@click.option("--previous-host", required=True)
+@click.option("--previous-boot", required=True)
+@click.option("--confirm-previous-owner-stopped", is_flag=True, required=True)
+@click.pass_obj
+def runtime_takeover(store, scope_id, previous_host, previous_boot, confirm_previous_owner_stopped):
+    """Claim a scope after confirming the host or boot recorded in the store has stopped."""
+    if not confirm_previous_owner_stopped:
+        raise click.UsageError("Confirm the previous owner cannot continue executing.")
+    try:
+        owner = store.claim(scope_id, previous_identity=(previous_host, previous_boot))
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps({"scope_id": scope_id, "owner_epoch": owner.owner_epoch}))
+
+
+@runtime_commands.group("recover")
+def runtime_recover():
+    """Inspect and resolve unknown operation outcomes."""
+
+
+@runtime_recover.command("list")
+@click.option("--run-id")
+@click.pass_obj
+def runtime_recover_list(store, run_id):
+    rows = store._conn.execute(
+        """SELECT operation_id, run_id, name, state, effect FROM operations
+           WHERE state IN ('started', 'outcome_unknown') AND (? IS NULL OR run_id=?) ORDER BY created_at""",
+        (run_id, run_id),
+    )
+    click.echo(json.dumps([dict(row) for row in rows], ensure_ascii=False))
+
+
+@runtime_recover.command("inspect")
+@click.argument("operation_id")
+@click.option("--online", is_flag=True, help="Query matching Git or GitHub delivery state.")
+@click.option("--mcp-query", is_flag=True, help="Call the configured MCP read-only receipt query.")
+@click.pass_context
+def runtime_recover_inspect(ctx, operation_id, online, mcp_query):
+    from durable_runtime.reconcilers import inspect_file_operation, inspect_git_commit, inspect_remote_delivery, inspect_mcp
+
+    store = ctx.obj
+
+    row = store._conn.execute("SELECT * FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
+    if row is None:
+        raise click.ClickException("operation does not exist in this project")
+    decisions = store._conn.execute(
+        """SELECT decision_id, action, actor, explanation, evidence_json, created_at
+           FROM recovery_decisions WHERE operation_id=? ORDER BY created_at""", (operation_id,),
+    )
+    evidence = (inspect_file_operation(row, store.identity) or inspect_git_commit(row, store.identity)
+                or (inspect_remote_delivery(row, store.identity) if online else None))
+    if evidence is None and mcp_query:
+        evidence = inspect_mcp(row, _load_cli_config(ctx.find_root()).mcp)
+    click.echo(json.dumps({"operation": dict(row), "decisions": [dict(item) for item in decisions],
+                          "evidence": evidence},
+                          ensure_ascii=False))
+
+
+@runtime_recover.command("resolve")
+@click.argument("operation_id")
+@click.option("--decision", type=click.Choice(["resolve_applied", "resolve_not_applied", "accept_unknown"]), required=True)
+@click.option("--reason", required=True)
+@click.option("--evidence", required=True, help="Describe the observed effect and where it was verified.")
+@click.option("--decision-id")
+@click.pass_obj
+def runtime_recover_resolve(store, operation_id, decision, reason, evidence, decision_id):
+    import getpass
+    import uuid
+    from durable_runtime.recovery import resolve_operation
+
+    decision_id = decision_id or uuid.uuid4().hex
+    try:
+        resolve_operation(store, operation_id, decision_id, action=decision, actor=getpass.getuser(),
+                          reason=reason, evidence={"operator_observation": evidence})
+    except (RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(decision_id)
+
+
+@runtime_recover.command("retry")
+@click.argument("operation_id")
+@click.option("--reason", required=True)
+@click.pass_obj
+def runtime_recover_retry(store, operation_id, reason):
+    """Authorize one new attempt of a verified file write or Git push."""
+    import getpass
+    import uuid
+    from durable_runtime.recovery import authorize_file_retry
+
+    decision_id = uuid.uuid4().hex
+    try:
+        authorize_file_retry(store, operation_id, decision_id, actor=getpass.getuser(), reason=reason)
+    except (RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(decision_id)
+
+
+@runtime_recover.command("delivery")
+@click.argument("run_id")
+@click.pass_obj
+def runtime_recover_delivery(store, run_id):
+    """Read GitHub to recover a missing PR receipt without creating another PR."""
+    from durable_runtime.recovery import reconcile_delivery
+    from durable_runtime.run_manager import DurableRun
+
+    try:
+        click.echo(reconcile_delivery(DurableRun(store, run_id, run_id)))
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _memory_for_cli(ctx: click.Context, repo: str):
@@ -367,6 +840,36 @@ def skill_list(ctx: click.Context, repo: str) -> None:
         click.echo(f"Invalid Skill {issue.directory}: {issue.error}", err=True)
 
 
+def _managed_skill_root(ctx, repo, project):
+    root = (Path(repo).resolve() / ".agents" / "skills") if project else _load_cli_config(ctx).agent.skills_global_dir
+    if root is None:
+        raise click.ClickException("Global Skill directory is disabled; use --local")
+    return Path(root)
+
+
+def _skill_management(command):
+    def action(ctx, name, repo, project):
+        from entry.resource_commands import managed_skill, update_managed_skill
+
+        root = _managed_skill_root(ctx, repo, project)
+        try:
+            data = (managed_skill(root, name)[1] if command == "inspect"
+                    else update_managed_skill(root, name, remove=command == "remove"))
+        except (OSError, ValueError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(json.dumps(data, ensure_ascii=False))
+
+    command_function = click.pass_context(action)
+    command_function = click.option("--local", "project", is_flag=True)(command_function)
+    command_function = click.option("--repo", default=".")(command_function)
+    command_function = click.argument("name")(command_function)
+    skill_commands.command(command)(command_function)
+
+
+for _skill_command in ("inspect", "update", "remove"):
+    _skill_management(_skill_command)
+
+
 @cli.group("mcp")
 def mcp_commands() -> None:
     """Configure or list MCP servers."""
@@ -421,6 +924,62 @@ def mcp_list(ctx: click.Context) -> None:
         click.echo("No MCP servers configured. Use forgeAgent mcp add NAME --url URL.")
 
 
+def _single_mcp_server(ctx, name):
+    config = _load_cli_config(ctx).mcp
+    server = next((entry for entry in config.servers if entry.id == name), None)
+    if server is None:
+        raise click.ClickException(f"No MCP server named {name}")
+    return config, server
+
+
+@mcp_commands.command("inspect")
+@click.argument("name")
+@click.pass_context
+def mcp_inspect(ctx, name):
+    _, server = _single_mcp_server(ctx, name)
+    click.echo(json.dumps({"id": server.id, "transport": server.transport, "enabled": server.enabled,
+                          "command": server.command, "argument_count": len(server.args),
+                          "env_names": sorted(server.env)}, ensure_ascii=False))
+
+
+@mcp_commands.command("test")
+@click.argument("name")
+@click.pass_context
+def mcp_test(ctx, name):
+    from dataclasses import asdict
+    from mcp_integration.manager import MCPClientManager
+
+    config, server = _single_mcp_server(ctx, name)
+    manager = MCPClientManager(replace(config, enabled=True, servers=(replace(server, enabled=True),)))
+    started = time.perf_counter()
+    try:
+        manager.start()
+        click.echo(json.dumps({"id": server.id, "tools": len(manager.tools),
+                              "elapsed_seconds": time.perf_counter() - started,
+                              "servers": [asdict(snapshot) for snapshot in manager.snapshots]}))
+    except Exception as exc:
+        raise click.ClickException(f"MCP connection or discovery failed ({type(exc).__name__})") from exc
+    finally:
+        manager.close()
+
+
+def _mcp_management(command):
+    def action(ctx, name):
+        from entry.resource_commands import change_mcp_server
+
+        try:
+            change_mcp_server(_user_config_path(ctx), name, command)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(name)
+
+    mcp_commands.command(command)(click.argument("name")(click.pass_context(action)))
+
+
+for _mcp_command in ("enable", "disable", "remove"):
+    _mcp_management(_mcp_command)
+
+
 # ---------------------------------------------------------------------------
 # run 子命令
 # ---------------------------------------------------------------------------
@@ -429,6 +988,7 @@ def mcp_list(ctx: click.Context) -> None:
 @click.option("--repo", "-r", default=".", show_default=True, help="Path to the target repository (default: current directory)")
 @click.option("--task", "-t", default=None, help="Task description (natural language)")
 @click.option("--task-file", "-f", default=None, help="Read task description from file")
+@click.option("--resume-id", default=None, help="Resume a compatible interrupted direct run")
 @click.option("--model", "-m", default=None, help="Select a configured model name or override the model ID")
 @click.option("--provider", "-p", default=None, help="Override LLM provider")
 @click.option("--protocol", default=None, help="Override LLM protocol: chat_completions or responses")
@@ -448,7 +1008,7 @@ def mcp_list(ctx: click.Context) -> None:
     help="Run permission mode: ask, auto-approve prompts (default), or full tool access.",
 )
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
-@click.option("--isolate", is_flag=True, default=False,help="Run in an isolated git worktree + TaskEngine tracking (M4). Combines with --sandbox for Docker hardening.")
+@click.option("--isolate", is_flag=True, default=False, help="Run in an isolated Git worktree with task tracking. Combine with --sandbox for Docker.")
 @click.option(
     "--result-policy",
     type=click.Choice(["discard", "keep-if-changed"]),
@@ -463,6 +1023,7 @@ def run(
     repo: str,
     task: str | None,
     task_file: str | None,
+    resume_id: str | None,
     model: str | None,
     provider: str | None,
     protocol: str | None,
@@ -487,6 +1048,7 @@ def run(
         datefmt="%H:%M:%S",
     )
 
+    _maybe_onboard(ctx, repo)
     # 1.加载配置
     config = _load_cli_config(ctx)
     # 2.加载优先级更高的配置
@@ -504,8 +1066,32 @@ def run(
     if config.agent.run_profile == "sandboxed":
         sandbox = True
 
-    # 解析任务描述 
-    if task_file:
+    repo_path = Path(repo).resolve()
+    saved_task = None
+    if resume_id:
+        from agent.task import Task
+        from durable_runtime.store import DurableRuntimeStore
+        from project_memory.identity import ProjectIdentityResolver
+
+        settings = config.durable_runtime
+        if not settings.enabled or task or task_file:
+            raise click.UsageError("--resume-id requires an enabled durable runtime without a new task")
+        with DurableRuntimeStore(ProjectIdentityResolver.resolve(repo_path), settings.root,
+                                 timeout_ms=settings.busy_timeout_ms) as store:
+            row = store._conn.execute(
+                "SELECT task_snapshot_json, request_snapshot_json FROM runs WHERE run_id=? AND scope_id=? AND entrypoint='cli'",
+                (resume_id, resume_id),
+            ).fetchone()
+        if row is None:
+            raise click.ClickException("Run does not exist in this repository")
+        saved_task = Task(**json.loads(row[0]))
+        saved_request = json.loads(row[1])
+        isolate, sandbox = saved_request["isolate"], saved_request["sandbox"]
+        result_policy = saved_request.get("result_policy", result_policy)
+        if Path(saved_task.repo_path).resolve() != repo_path:
+            raise click.ClickException("Run belongs to a different checkout of this repository")
+        description = saved_task.description
+    elif task_file:
         description = Path(task_file).read_text(encoding="utf-8").strip()
     elif task:
         description = task
@@ -517,7 +1103,6 @@ def run(
         click.echo(red("Error: provide --task or --task-file"), err=True)
         sys.exit(1)
 
-    repo_path = Path(repo).resolve()
     if not repo_path.exists():
         click.echo(red(f"Error: repo path does not exist: {repo_path}"), err=True)
         sys.exit(1)
@@ -656,7 +1241,7 @@ def run(
         execution_workspace=CONTAINER_WORKDIR if sandbox else None,
     )
     require_changes, require_tests = infer_completion_requirements(description)
-    task_obj = Task(
+    task_obj = saved_task or Task(
         description=description,
         repo_path=str(repo_path),
         max_steps=config.agent.max_steps,
@@ -676,7 +1261,7 @@ def run(
         worker_backend_factory=worker_backend_factory,
     )
 
-    # M4 第二波：--isolate 走 async 组合根（worktree + TaskEngine + permission workspace）
+    # 隔离运行绑定工作树、任务状态与权限范围。
     #事务隔离，在worktree中跑：异步async 不用之前的agent实例，只有 backend、task_obj、agent_config、confirm_cb 被复用
     if isolate:
         from ipc.bus import AgentBus
@@ -692,6 +1277,7 @@ def run(
             result = runner.run(
                 RunRequest(
                     task=task_obj,
+                    run_id=resume_id, resume=bool(resume_id),
                     isolate=True,
                     sandbox=sandbox,
                     result_policy=result_policy,
@@ -714,7 +1300,7 @@ def run(
             click.echo(dim(f"  Log: {log.path}\n"))
             #真正的执行核心。它的职责包括维护对话历史、组装 messages 调用 LLM、拿到 Action 后执行工具、写入 Action 和 Observation 到 EventLog、检测终止条件和 reflection 条件，最后返回 RunResult。
             result = runner.run(
-                RunRequest(task=task_obj), log=log, on_event=renderer,
+                RunRequest(task=task_obj, run_id=resume_id, resume=bool(resume_id)), log=log, on_event=renderer,
             )
     finally:
         runner.close()
@@ -831,6 +1417,7 @@ def chat(
         datefmt="%H:%M:%S",
     )
 
+    _maybe_onboard(ctx, repo)
     config = _load_cli_config(ctx)
     config = merge_cli_overrides(
         config,
@@ -921,7 +1508,7 @@ def chat(
         click.echo(yellow(f"  Warning  : {recovery_warning}"))
     click.echo(dim(
         "  Type your task. Commands: "
-        "/exit /stats /session /new /resume /rename /clear /help /model\n"
+        "/exit /stats /session /new /resume /rewind /rename /clear /archive /cache /recovery /help /model\n"
     ))
 
     prompt_session = chat_prompt(repo_path, config.model_profiles)
@@ -993,7 +1580,10 @@ def chat(
                         click.echo(dim("  Started new ephemeral session."))
                 elif cmd == "/resume":
                     if not arg:
-                        click.echo(dim("  Usage: /resume SESSION_ID"))
+                        try:
+                            session.run_round("", resume=True)
+                        except (RuntimeError, ValueError) as exc:
+                            click.echo(red(f"  Cannot resume round: {exc}"))
                     else:
                         try:
                             session.resume_session(arg)
@@ -1002,6 +1592,12 @@ def chat(
                                 click.echo(yellow(f"  Warning: {session.recovery_warning}"))
                         except ChatSessionError as exc:
                             click.echo(red(f"  Cannot resume session: {exc}"))
+                elif cmd == "/rewind":
+                    try:
+                        child = session.rewind(int(arg))
+                        click.echo(dim(f"  Rewound to round {arg} in session {child}."))
+                    except (ChatSessionError, ValueError, OSError, RuntimeError) as exc:
+                        click.echo(red(f"  Cannot rewind: {exc}"))
                 elif cmd == "/rename":
                     if not arg:
                         click.echo(dim("  Usage: /rename NAME"))
@@ -1011,6 +1607,8 @@ def chat(
                             click.echo(dim(f"  Session renamed: {arg}"))
                         except (ChatSessionError, ValueError) as exc:
                             click.echo(red(f"  Cannot rename session: {exc}"))
+                elif cmd in {"/archive", "/cache", "/recovery"}:
+                    session.show_runtime(cmd, arg or None)
                 elif cmd == "/clear":
                     session.clear_history()
                     click.echo(dim("  Conversation history cleared."))
@@ -1046,7 +1644,8 @@ def chat(
                         "    /stats  — show session statistics\n"
                         "    /session — show current session id and state path\n"
                         "    /new    — start a new session\n"
-                        "    /resume SESSION_ID — switch to a saved session\n"
+                        "    /resume [SESSION_ID] — resume a compatible interrupted round or switch sessions\n"
+                        "    /rewind ROUND — continue from a finished round in a new session\n"
                         "    /rename NAME — name the current session\n"
                         "    /clear  — clear effective conversation history\n"
                         "    /model [NAME_OR_MODEL_ID] — list or switch models\n"

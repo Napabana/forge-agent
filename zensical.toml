@@ -7,24 +7,12 @@ use_directory_urls = false
 extra_css = ["stylesheets/extra.css"]
 nav = [
   { "首页" = "README.md" },
-  { "系统架构" = [
-    { "整体架构" = "design/Forge-Agent-当前代码架构.md" },
-    { "任务执行主链" = "design/01-任务执行主链.md" },
-    { "模块与源码索引" = "design/源码索引.md" },
-  ] },
-  { "核心机制" = [
-    { "Agent 与 Tool Lifecycle" = "design/02-Agent与Tool生命周期.md" },
-    { "Context Engineering" = "design/03-Context与RepoMap.md" },
-    { "Project Memory" = "design/10-Project-Memory-架构.md" },
-    { "Planning 与 Recovery" = "design/04-Planning与Recovery.md" },
-    { "Skills 与 MCP" = "design/05-Skills与MCP.md" },
-    { "隔离与独立验收" = "design/06-隔离与独立验收.md" },
-    { "Evaluation 与 Evolution" = "design/07-Evaluation与Evolution.md" },
-  ] },
-  { "源码导航" = "source-navigation.md" },
-  { "面试复习" = "interview-review.md" },
-  { "维护协议" = "design/MAINTENANCE.md" },
-  { "参考资料" = "reference.md" },
+  { "当前功能" = [{ "整体架构" = "design/architecture.md" }, { "任务执行" = "design/execution.md" }, { "Agent 与工具执行" = "design/agent-tools.md" }, { "上下文与仓库导航" = "design/context.md" }, { "计划与执行恢复" = "design/planning-recovery.md" }, { "Skills 与 MCP" = "design/extensions.md" }, { "隔离、验收与 GitHub 交付" = "design/isolation-acceptance.md" }, { "评测与经验迭代" = "design/evaluation.md" }, { "Supervisor 与 Worker" = "design/workers.md" }, { "项目记忆" = "design/project-memory.md" }, { "长时运行与恢复" = "design/durable-runtime.md" }, { "配置、模型与用量" = "design/configuration.md" }] },
+  { "源码索引" = "design/source-index.md" },
+  { "源码阅读路线" = "source-navigation.md" },
+  { "命令查阅" = "reference.md" },
+  { "项目状态" = "PROJECT_STATE.md" },
+  { "文档维护" = "design/MAINTENANCE.md" },
 ]
 
 [project.theme]
@@ -68,7 +56,7 @@ pymdownx.superfences.custom_fences = [
 [project.plugins.offline]
 
 [project.plugins.exclude]
-glob = ["changes/**", "evidence/**", "plans/**", "todo/**"]
+glob = ["changes/**", "evidence/**", "plans/**", "research/**", "todo/**"]
 
 [project.extra]
 polyfills = ["javascripts/iframe-worker-shim.js"]

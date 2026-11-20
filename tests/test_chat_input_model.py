@@ -125,6 +125,25 @@ def test_chat_model_command_switches_next_backend_and_saves_choice(tmp_path, mon
     assert config.llm.model == "second-model"
 
 
+def test_chat_rewind_command_switches_to_a_saved_branch(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from agent.session_store import JsonChatSessionStore
+    from agent.task import Action, ActionType
+    from entry.cli import cli
+
+    config = _parse({"llm": {"provider": "ollama", "model": "fixture"}, "context": {"compaction_mode": "off"}})
+    config.agent.log_dir = str(tmp_path / "logs")
+    backend = MockBackend([Action(ActionType.FINISH, "", message="fixture reply")])
+    monkeypatch.setattr("entry.cli._load_cli_config", lambda ctx: config)
+    monkeypatch.setattr("entry.cli._chat_backend", lambda cfg: backend)
+    monkeypatch.setattr("entry.chat_input.chat_prompt", lambda *args: None)
+    result = CliRunner().invoke(cli, ["chat", "--repo", str(tmp_path)], input="first question\n/rewind 1\n/exit\n")
+    assert result.exit_code == 0, result.output
+    assert "Rewound to round 1 in session " in result.output
+    state = JsonChatSessionStore(tmp_path / "logs" / "chat").latest_for_repo(tmp_path)
+    assert state.forked_from_session_id and state.forked_from_round == 1
+
+
 def test_config_show_redacts_profile_keys(tmp_path):
     from click.testing import CliRunner
     from entry.cli import cli

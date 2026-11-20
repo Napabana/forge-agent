@@ -88,9 +88,9 @@ def analyze_trace(trace_path: str | Path, *, repo_path: str | Path, target_files
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--raw", default="evals/results/repo_map_agent_ablation_real_v1/raw.jsonl")
+    parser.add_argument("--raw", required=True, help="Raw JSONL output from the repository-map agent benchmark")
     parser.add_argument("--manifest", default="evals/fixtures/repo_map_agent_cases.json")
-    parser.add_argument("--output", default="../forge-agent-evals/repo-map-agent-trace-analysis.jsonl")
+    parser.add_argument("--output", default="evals/results/repo-map-agent-trace-analysis.jsonl")
     args = parser.parse_args()
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     cases = {item["id"]: item for item in manifest["cases"]}

@@ -94,6 +94,19 @@ class SkillRuntime:
     def loaded_names(self) -> tuple[str, ...]:
         return tuple(self._loaded)
 
+    def snapshot(self) -> dict:
+        return {
+            "schema_version": 1,
+            "loaded": dict(self._loaded),
+            "references": [[skill, path, value] for (skill, path), value in self._references.items()],
+        }
+
+    def restore(self, state: dict) -> None:
+        if state.get("schema_version") != 1:
+            raise ValueError("unsupported Skill snapshot")
+        self._loaded = dict(state["loaded"])
+        self._references = {(skill, path): value for skill, path, value in state["references"]}
+
     def schemas(self) -> tuple[LLMToolSchema, ...]:
         if not self.enabled:
             return ()

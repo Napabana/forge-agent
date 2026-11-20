@@ -38,7 +38,7 @@ class EventType(str, Enum):
     LOOP_DETECTED    = "loop_detected"
     TASK_COMPLETE   = "task_complete"
     TASK_FAILED     = "task_failed"
-    # M4 主循环集成：worktree 生命周期 + 权限决策 + 任务认领
+    # 隔离工作树、权限决策和任务认领事件
     TASK_CLAIMED      = "task_claimed"
     WORKTREE_CREATED  = "worktree_created"
     WORKTREE_RETAINED = "worktree_retained"
@@ -87,6 +87,12 @@ class EventType(str, Enum):
     ACCEPTANCE = "acceptance"
     DELIVERY = "delivery"
     WORKERS_SUMMARY = "workers_summary"
+    RUN_CHECKPOINT_COMMITTED = "run_checkpoint_committed"
+    TOOL_INTENT_COMMITTED = "tool_intent_committed"
+    TOOL_OPERATION_STARTED = "tool_operation_started"
+    TOOL_RESULT_COMMITTED = "tool_result_committed"
+    TOOL_OUTCOME_UNKNOWN = "tool_outcome_unknown"
+    CACHE_AUDIT_RECORDED = "cache_audit_recorded"
     MEMORY_RETRIEVAL_STARTED = "memory_retrieval_started"
     MEMORY_RETRIEVAL_FINISHED = "memory_retrieval_finished"
     MEMORY_RETRIEVAL_FAILED = "memory_retrieval_failed"
@@ -123,7 +129,7 @@ class RunStatus(str, Enum):
 
 
 def infer_completion_requirements(description: str) -> tuple[bool, bool]:
-    """Infer whether a CLI/API coding task must change files and run tests."""
+    """Infer whether a coding task must change files and run tests."""
     text = description.strip().lower()
     read_only = any(marker in text for marker in (
         "只读取", "只读", "不修改", "不要修改",
@@ -345,6 +351,7 @@ class RunResult:
     completion_warnings: tuple[str, ...] = ()
     completion_reports: tuple[str, ...] = ()
     worker_usage: SessionUsage = field(default_factory=SessionUsage)
+    run_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.usage.total_tokens:
@@ -355,6 +362,24 @@ class RunResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RunResult":
+        from runtime.worktree import WorktreeArtifact, WorktreeDisposition
+
+        fields = dict(data)
+        fields["status"] = RunStatus(fields["status"])
+        for key in ("usage", "worker_usage"):
+            fields[key] = SessionUsage.from_dict(fields.get(key))
+        for key in ("completion_warnings", "completion_reports"):
+            fields[key] = tuple(fields.get(key, ()))
+        if fields.get("worktree"):
+            worktree = fields["worktree"]
+            fields["worktree"] = WorktreeArtifact(
+                **{**worktree, "disposition": WorktreeDisposition(worktree["disposition"]),
+                   "changed_files": tuple(worktree["changed_files"])},
+            )
+        return cls(**fields)
 
     def __repr__(self) -> str:
         return (

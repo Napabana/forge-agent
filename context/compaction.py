@@ -109,6 +109,7 @@ class TraceableCompaction:
         self.max_summary_chars = max_summary_chars
         self.pruner = pruner or DeterministicToolPruner()
         self.semantic_summarizer = semantic_summarizer
+        self.last_request_usage: TokenUsage | None = None
         self.entries: list[CompactionEntry] = []
         self.checkpoints: list[CompactionCheckpoint] = []
         self._lineage_checkpoint_id: str | None = None
@@ -137,6 +138,24 @@ class TraceableCompaction:
         self._active_view = None
         self._pending_usage = SessionUsage()
 
+    def snapshot(self) -> dict:
+        return {
+            "schema_version": 1, "lineage": self._lineage_checkpoint_id,
+            "active_view": asdict(self._active_view) if self._active_view else None,
+            "pending_usage": self._pending_usage.to_dict(),
+        }
+
+    def restore(self, state: dict, history) -> None:
+        if state.get("schema_version") != 1:
+            raise ValueError("unsupported compaction snapshot")
+        self.restore_checkpoint_lineage(state["lineage"])
+        if state["active_view"] is not None:
+            view = ActiveCompactedView(**state["active_view"])
+            messages = history.to_list()
+            if 0 <= view.source_end_index <= len(messages) and _prefix_hash(messages, view.source_end_index) == view.source_prefix_hash:
+                self._active_view = view
+        self._pending_usage = SessionUsage.from_dict(state["pending_usage"])
+
     def reset_checkpoint_lineage(self) -> None:
         """新上下文从新的 checkpoint 链开始，并清掉进程内 active summary。"""
         self.entries.clear()
@@ -146,6 +165,7 @@ class TraceableCompaction:
         self._pending_usage = SessionUsage()
 
     def __call__(self, context: PrepareNextTurnContext):
+        self.last_request_usage = None
         messages = context.history.to_list()
         if len(messages) <= 1:
             return None
@@ -260,6 +280,8 @@ class TraceableCompaction:
             semantic_duration_ms = (time.perf_counter() - started_at) * 1000
             semantic_fields = result.fields
             semantic_usage = result.usage
+            if semantic_usage.total_tokens:
+                self.last_request_usage = semantic_usage
             semantic_error = result.error
             packet_truncated = result.packet_truncated
             self._pending_usage.record(semantic_usage)

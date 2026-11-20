@@ -1,20 +1,6 @@
-"""
-ipc/bus.py
+"""基于 asyncio.Queue 的进程内事件总线。
 
-单进程内异步消息总线（M2 Task 2.1）。
-
-把 s20_comprehensive/code.py 的 MessageBus（文件邮箱轮询，code.py:480-502）
-迁移成基于 asyncio.Queue 的纯 pub/sub 推送。
-
-与 s20 的差异（写进设计）：
-- 存储：内存 asyncio.Queue，不再落盘 JSONL 邮箱。
-- 消费：订阅者用 async 迭代器 push 消费，不再轮询/读后删除。
-- 持久化：无。重启丢失。M4 若需跨进程/持久化再上 Redis Pub/Sub
-  （见 改进目标.md M4）。
-- topic 路由：支持 "agent.*" 前缀通配订阅。
-
-消息字段对齐 s20（from/to/content/type/metadata/ts），重命名为
-sender/topic/content/msg_type/metadata/ts。
+支持普通主题及前缀通配订阅，通过异步迭代交付事件。
 """
 
 from __future__ import annotations
@@ -36,10 +22,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Message:
-    """总线上一条消息。字段对齐 s20 MessageBus.send。"""
+    """总线传递的一条结构化消息。"""
     sender: str                       # 发送者 agent 名
     topic: str                        # 目标 topic，如 "agent_b" / "tasks.completed"
-    content: Any                      # 消息体（s20 里是 str，这里放宽为 Any）
+    content: Any                      # 消息负载
     msg_type: str = "message"         # message | shutdown_request | plan_approval_request ...
     metadata: dict = field(default_factory=dict)
     ts: float = field(default_factory=time.time)

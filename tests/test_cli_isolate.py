@@ -1,7 +1,7 @@
 """
 tests/test_cli_isolate.py
 
-M4 第二波：CLI `agent run --isolate` 标志测试。
+验证 CLI `forgeAgent run --isolate`。
 
 验证：
 - --isolate 出现在 run --help

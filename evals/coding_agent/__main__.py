@@ -1,4 +1,4 @@
-"""CLI entrypoint for the P2-0 Coding Agent Evaluation Harness."""
+"""Run the coding agent evaluation suite."""
 from __future__ import annotations
 
 import argparse

@@ -1,6 +1,6 @@
-"""Structured failure classification and bounded recovery policy for P2-2.
+"""Structured failure classification and bounded recovery policy.
 
-Recovery v2 keeps category-local retry semantics separate from a global hard ceiling.
+Structured recovery keeps category-local retry semantics separate from a global hard ceiling.
 It also exposes a small bounded semantic-evidence tracker used by the existing Agent loop.
 """
 from __future__ import annotations
@@ -77,6 +77,18 @@ class SemanticProgressTracker:
         order.append(key)
         seen.add(key)
         return True
+
+    def snapshot(self) -> dict[str, Any]:
+        return {"schema_version": 1, "evidence": {kind: list(order) for kind, order in self._order.items()}}
+
+    def restore(self, state: dict[str, Any]) -> None:
+        if state.get("schema_version") != 1:
+            raise ValueError("unsupported semantic progress snapshot")
+        self._order.clear()
+        self._seen.clear()
+        for kind, keys in state["evidence"].items():
+            for key in keys:
+                self.mark_once(kind, key)
 
 
 @dataclass(frozen=True)
@@ -421,6 +433,24 @@ class RecoveryRuntime:
             current_plan_version is None
             or current_plan_version <= self.pending_replan_from_version
         )
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "attempts": self.policy.attempts_used,
+            "category_counts": {category.value: count for category, count in self.policy._category_counts.items()},
+            "pending_replan_from_version": self.pending_replan_from_version,
+            "last_decision": self.last_decision.__dict__ if self.last_decision else None,
+        }
+
+    def restore(self, state: dict[str, Any]) -> None:
+        if state.get("schema_version") != 1:
+            raise ValueError("unsupported Recovery snapshot")
+        self.policy._attempts = state["attempts"]
+        self.policy._category_counts = {FailureCategory(key): count for key, count in state["category_counts"].items()}
+        self.pending_replan_from_version = state["pending_replan_from_version"]
+        decision = state["last_decision"]
+        self.last_decision = RecoveryDecision(**{**decision, "strategy": RecoveryStrategy(decision["strategy"])}) if decision else None
 
     def observe_plan_revision(self, new_version: int) -> bool:
         pending = self.pending_replan_from_version

@@ -7,6 +7,12 @@ logs/
 __pycache__/
 *.pyc
 config/
+!/config/
+/config/*
+!/config/credentials.py
+!/config/README.md
+/.vscode/
+/evals/results/
 .claude
 .coverage
 htmlcov/
@@ -32,7 +38,6 @@ site/
 !/docs/README.md
 !/docs/PROJECT_STATE.md
 !/docs/source-navigation.md
-!/docs/interview-review.md
 !/docs/reference.md
 !/docs/design/
 !/docs/design/**
@@ -42,7 +47,3 @@ site/
 !/docs/stylesheets/**
 !/docs/javascripts/
 !/docs/javascripts/**
-
-# Versioned architecture audit reports
-!/docs/research/
-!/docs/research/**

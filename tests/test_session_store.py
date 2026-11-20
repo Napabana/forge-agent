@@ -132,7 +132,7 @@ def test_v1_session_is_migrated_on_read(tmp_path):
 
     migrated = ChatSessionState.from_dict(raw)
 
-    assert migrated.version == 2
+    assert migrated.version == 4
     assert migrated.revision == 0
     assert migrated.compaction_checkpoints == []
 

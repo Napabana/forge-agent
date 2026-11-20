@@ -172,10 +172,13 @@ def create_branch(local_path: str, branch: str) -> None:
             raise RuntimeError(f"git branch checkout failed: {out}; {switch_out}")
 
 
-def push_branch(local_path: str, branch: str) -> None:
+def push_branch(local_path: str, branch: str, *, expect_absent: bool = False) -> None:
     """推送分支到远端。"""
+    args = ["push", "--set-upstream"]
+    if expect_absent:
+        args.append(f"--force-with-lease=refs/heads/{branch}:")
     ok, out = _run_git(
-        ["push", "--set-upstream", "origin", branch],
+        [*args, "origin", branch],
         cwd=local_path,
         env=_github_git_env(),
     )
@@ -227,6 +230,8 @@ def deliver_pull_request(
     pr_body: str,
     base_branch: str = "main",
     pr_creator=create_pull_request,
+    *,
+    durable=None,
 ) -> str | None:
     """通过验收后确定性执行 commit、push 和 PR；失败时保留本地成果。"""
     if not result.is_success():
@@ -235,6 +240,30 @@ def deliver_pull_request(
     if result.acceptance_status != "passed":
         result.delivery_status = "blocked_acceptance"
         return None
+
+    def recorded(name, args, execute, expected=None):
+        if durable is None:
+            return execute()
+        from durable_runtime.operation_journal import ToolOperation
+        from tools.base import ToolResult
+
+        operation = ToolOperation(durable, name, result.steps_taken, None, kind="delivery")
+        previous = operation.prepare(name, args, read_only=False, decision=None, expected=expected)
+        if previous is not None:
+            return previous.success, previous.output
+        operation.start()
+        if name == "git_push" and operation.parent_operation_id is not None:
+            head_ok, head = _run_git(["rev-parse", "HEAD"], cwd=local_path)
+            if not head_ok or head != expected["target_commit"]:
+                raise RuntimeError("saved push commit no longer matches HEAD")
+            push_branch(local_path, branch, expect_absent=True)
+            succeeded, output = True, ""
+        else:
+            succeeded, output = execute()
+        if succeeded:
+            operation.finish(name, ToolResult(True, output))
+        # A failed response may follow a completed side effect. The next claim classifies it as unknown.
+        return succeeded, output
 
     branch_ok, current_branch = _run_git(["branch", "--show-current"], cwd=local_path)
     if not branch_ok or current_branch.strip() != branch:
@@ -249,9 +278,18 @@ def deliver_pull_request(
         return None
 
     if status:
-        added, _ = _run_git(["add", "--all"], cwd=local_path)
+        added, _ = recorded("git_stage", {"branch": branch},
+                            lambda: _run_git(["add", "--all"], cwd=local_path))
+        expected_commit = None
+        if added and durable:
+            parent_ok, parent = _run_git(["rev-parse", "HEAD"], cwd=local_path)
+            tree_ok, tree = _run_git(["write-tree"], cwd=local_path)
+            if parent_ok and tree_ok:
+                expected_commit = {"workspace": str(Path(local_path).resolve()), "branch": branch,
+                                   "parent": parent, "tree": tree, "message": commit_message}
         committed, _ = (
-            _run_git(["commit", "-m", commit_message], cwd=local_path)
+            recorded("git_commit", {"branch": branch, "message": commit_message},
+                     lambda: _run_git(["commit", "-m", commit_message], cwd=local_path), expected_commit)
             if added
             else (False, "")
         )
@@ -268,20 +306,26 @@ def deliver_pull_request(
 
     if not _branch_is_pushed(local_path, branch):
         try:
-            push_branch(local_path, branch)
+            def push():
+                push_branch(local_path, branch)
+                return True, ""
+            head_ok, head = _run_git(["rev-parse", "HEAD"], cwd=local_path) if durable else (False, "")
+            recorded("git_push", {"branch": branch, "remote": "origin"}, push,
+                     {"workspace": str(Path(local_path).resolve()), "branch": branch,
+                      "target_commit": head.strip()} if head_ok else None)
         except RuntimeError as exc:
             logger.warning("Push failed; local commit retained: %s", exc)
             result.delivery_status = "push_failed"
             return None
 
     try:
-        pr_url = pr_creator(
-            repo_name=repo_name,
-            branch=branch,
-            title=pr_title,
-            body=pr_body,
-            base=base_branch,
-        )
+        def open_pr():
+            return True, pr_creator(repo_name=repo_name, branch=branch, title=pr_title, body=pr_body, base=base_branch)
+        head_ok, head = _run_git(["rev-parse", "HEAD"], cwd=local_path) if durable else (False, "")
+        _, pr_url = recorded("github_create_pr",
+                             {"repo": repo_name, "head": branch, "base": base_branch, "title": pr_title},
+                             open_pr, {"repo": repo_name, "head": branch, "base": base_branch,
+                                       "target_commit": head.strip()} if head_ok else None)
     except Exception as exc:
         logger.warning("PR creation failed; pushed branch retained: %s", exc)
         result.delivery_status = "pr_failed"
@@ -524,16 +568,29 @@ def run_on_issue(
             f"## Summary\n{result.summary}\n\n"
             f"## Task\n{description[:500]}"
         )
-        pr_url = deliver_pull_request(
-            result,
-            local_path,
-            branch,
-            f"fix: resolve issue #{issue_number}",
-            repo_name,
-            pr_title,
-            pr_body,
-            base_branch,
-        )
+        delivery_args = (result, local_path, branch, f"fix: resolve issue #{issue_number}", repo_name,
+                         pr_title, pr_body, base_branch)
+        settings = config.durable_runtime
+        if result.run_id and settings.enabled and result.acceptance_status == "passed":
+            from durable_runtime.run_manager import DurableRun
+            from durable_runtime.store import DurableRuntimeStore, StoreFormatError
+            from project_memory.identity import ProjectIdentityResolver
+
+            with DurableRuntimeStore(ProjectIdentityResolver.resolve(local_path), settings.root,
+                                     timeout_ms=settings.busy_timeout_ms) as store:
+                durable = DurableRun(store, result.run_id, result.run_id)
+                checkpoint = durable.load_checkpoint()
+                saved = checkpoint.get("result") or {}
+                if saved.get("status") != "success" or saved.get("acceptance_status") != "passed":
+                    raise StoreFormatError("durable Run has no accepted result for delivery")
+                durable.checkpoint(result.steps_taken + 1, "delivery_pending", checkpoint, status="delivery_pending")
+                pr_url = deliver_pull_request(*delivery_args, durable=durable)
+                if pr_url:
+                    durable.checkpoint(result.steps_taken + 1, "delivered", {
+                        **checkpoint, "result": result.to_dict(), "pr_url": pr_url,
+                    }, status="delivered")
+        else:
+            pr_url = deliver_pull_request(*delivery_args)
         _record_delivery_trace(
             result,
             requested=True,

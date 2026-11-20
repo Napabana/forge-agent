@@ -225,7 +225,7 @@ class ChatSession:
                 self._state = self._session_store.create(self.repo_path)
                 self._checkpoint()
 
-    def run_round(self, user_input: str) -> bool:
+    def run_round(self, user_input: str, *, resume: bool = False) -> bool:
         """
         执行一轮对话。
 
@@ -237,6 +237,7 @@ class ChatSession:
         """
         from agent.event_log import EventLog
         from agent.session import ChatRoundState, PendingRoundState
+        from uuid import uuid4
         from agent.session_store import utc_now
         from agent.task import Task
         from llm.base import LLMMessage
@@ -247,10 +248,14 @@ class ChatSession:
             self.agent.invalidate_repo_map_cache(self.repo_path)
             self._repo_revision = current_revision
 
-        round_number = self.round_count + 1
+        prior_round = self._state.rounds[-1] if resume and self._state and self._state.rounds else None
+        if resume and (prior_round is None or prior_round.status != "interrupted" or not prior_round.run_id):
+            raise ValueError("This session has no interrupted Durable Run to resume.")
+        round_number = prior_round.round_number if prior_round else self.round_count + 1
 
         # 把用户输入追加到共享 history
-        self._shared_history.add(LLMMessage(role="user", content=user_input))
+        if not resume:
+            self._shared_history.add(LLMMessage(role="user", content=user_input))
 
         # 构建这轮的 Task（repo_path 固定，description 用用户输入）
         task = Task(
@@ -261,6 +266,27 @@ class ChatSession:
         )
 
         t0 = time.time()
+        settings = self.runner.config.durable_runtime_config
+        run_id = uuid4().hex if settings and settings.enabled else None
+        if prior_round:
+            import json
+            from durable_runtime.store import DurableRuntimeStore
+            from project_memory.identity import ProjectIdentityResolver
+
+            if not settings or not settings.enabled:
+                raise ValueError("Set durable_runtime.enabled to resume this round.")
+            run_id = prior_round.run_id
+            user_input = prior_round.user_input
+            with DurableRuntimeStore(ProjectIdentityResolver.resolve(self.repo_path), settings.root,
+                                     timeout_ms=settings.busy_timeout_ms) as store:
+                row = store._conn.execute("SELECT task_snapshot_json FROM runs WHERE run_id=? AND scope_id=?",
+                                          (run_id, self.session_id)).fetchone()
+            if row is None:
+                raise ValueError("The interrupted Run is not present in this session.")
+            task = Task(**json.loads(row[0]))
+            if Path(task.repo_path).resolve() != Path(self.repo_path).resolve():
+                raise ValueError("The interrupted Run belongs to a different checkout.")
+        previous_history = self._shared_history.to_list() if resume else None
         started_at = utc_now()
         log_dir = (
             str(self._session_store.round_log_dir(self._state))
@@ -277,14 +303,21 @@ class ChatSession:
                         user_input=user_input,
                         started_at=started_at,
                         log_path=str(log.path),
+                        run_id=run_id,
+                        scope_id=(self.session_id or run_id) if run_id else None,
                     )
                     # 在任何 LLM 或工具调用前写恢复点；保存失败则不开始执行。
                     self._checkpoint()
                 # 实时打印只观察 EventLog；共享记忆由 Agent.run(history=...) 传入。
                 try:
-                    result = self._run_with_live_print(task, log)
+                    result = self._run_with_live_print(task, log, run_id=run_id, resume=resume) if run_id else self._run_with_live_print(task, log)
                 except BaseException as exc:
                     self._merge_interrupted_context_usage()
+                    if resume:
+                        self._shared_history.replace(previous_history)
+                        self._state.pending_round = None
+                        self._checkpoint()
+                        raise
                     if self._state is not None:
                         self._shared_history.add(LLMMessage(
                             role="assistant",
@@ -303,6 +336,7 @@ class ChatSession:
                             started_at=started_at,
                             finished_at=utc_now(),
                             error=f"{type(exc).__name__}: {exc}",
+                            run_id=run_id,
                         ))
                         self._state.pending_round = None
                         self._checkpoint()
@@ -328,6 +362,8 @@ class ChatSession:
             ))
 
         if self._state is not None:
+            if prior_round:
+                self._state.rounds.pop()
             self._state.rounds.append(ChatRoundState(
                 round_number=round_number,
                 task_id=task.task_id,
@@ -341,6 +377,8 @@ class ChatSession:
                 started_at=started_at,
                 finished_at=utc_now(),
                 error=result.error,
+                run_id=run_id,
+                history_digest=self._session_store.save_history(self._state, self._shared_history.to_dicts()),
             ))
             self._state.pending_round = None
             self._checkpoint()
@@ -376,6 +414,16 @@ class ChatSession:
 
     def clear_history(self) -> None:
         """清空当前会话的有效 LLM 上下文并立即保存。"""
+        store = self._durable_archive_store()
+        if store is not None:
+            from context.archive import ContextArchive
+
+            with store:
+                owner = store.claim(self.session_id)
+                archive = ContextArchive(store, self.session_id)
+                with store.transaction(owner, owner.revision) as db:
+                    archive.capture_history(db, self._shared_history.to_dicts())
+                    archive.clear(db)
         self._shared_history.clear()
         reset_lineage = getattr(
             self._prepare_next_turn,
@@ -385,6 +433,46 @@ class ChatSession:
         if callable(reset_lineage):
             reset_lineage()
         self._checkpoint()
+
+    def _durable_archive_store(self):
+        settings = self.runner.config.durable_runtime_config
+        if not self.session_id or not settings or not settings.enabled or not settings.archive_enabled:
+            return None
+        from durable_runtime.store import DurableRuntimeStore
+        from project_memory.identity import ProjectIdentityResolver
+
+        return DurableRuntimeStore(ProjectIdentityResolver.resolve(self.repo_path), settings.root,
+                                   timeout_ms=settings.busy_timeout_ms)
+
+    def show_runtime(self, command: str, archive_id: str | None = None) -> None:
+        import json
+        from context.archive import ContextArchive
+        from durable_runtime.store import StoreFormatError
+
+        store = self._durable_archive_store()
+        if store is None:
+            click.echo("This session has no durable archive.")
+            return
+        try:
+            with store:
+                if command == "/archive":
+                    archive = ContextArchive(store, self.session_id)
+                    rows = archive.read(archive_id, 0, 4096) if archive_id else archive.records()[-20:]
+                elif command == "/cache":
+                    rows = [dict(row) for row in store._conn.execute(
+                        """SELECT a.request_id, a.model, a.prompt_tokens, a.cached_tokens, a.changed_components_json
+                           FROM cache_audit_events a JOIN runs r ON r.run_id=a.run_id
+                           WHERE r.scope_id=? ORDER BY a.created_at DESC LIMIT 20""", (self.session_id,),
+                    )]
+                else:
+                    rows = [dict(row) for row in store._conn.execute(
+                        """SELECT run_id, operation_id, name, state FROM operations WHERE scope_id=?
+                           AND state IN ('started', 'outcome_unknown') ORDER BY created_at DESC LIMIT 20""",
+                        (self.session_id,),
+                    )]
+                click.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+        except (ValueError, StoreFormatError) as exc:
+            click.echo(f"Runtime state could not be read: {exc}", err=True)
 
     def switch_backend(self, backend) -> None:
         """Use the new backend from the next round while retaining this session's history."""
@@ -434,6 +522,77 @@ class ChatSession:
         self._restore_session(session_id)
         self.agent.invalidate_repo_map_cache(self.repo_path)
 
+    def rewind(self, round_number: int) -> str:
+        """Fork this Chat at a completed round and switch to the new session."""
+        from dataclasses import replace
+        from uuid import uuid4
+        from agent.session import ChatSessionError
+        from agent.session_store import utc_now
+        from context.archive import ContextArchive
+        from context.history import ConversationHistory
+        from llm.usage import SessionUsage
+
+        if not self.is_persisted:
+            raise ChatSessionError("session persistence is disabled")
+        source = self._session_store.load(self.session_id)
+        target = next((item for item in source.rounds if item.round_number == round_number), None)
+        if source.pending_round or target is None or target.status == "interrupted" or not target.finished_at:
+            raise ChatSessionError("select a finished round in an inactive session")
+        history = (self._session_store.load_history(source, target.history_digest) if target.history_digest
+                   else self._legacy_rewind_history(source, target))
+        history = ConversationHistory.from_dicts(history).to_dicts()
+        checksum = self._session_store.save_history(source, history)
+        rounds = [
+            replace(item, origin_session_id=item.origin_session_id or source.session_id,
+                    history_digest=checksum if item.round_number == round_number else item.history_digest)
+            for item in source.rounds if item.round_number <= round_number
+        ]
+        usage = SessionUsage()
+        for item in rounds:
+            usage.add(item.usage)
+        state = replace(
+            source, session_id=uuid4().hex[:12], created_at=utc_now(), revision=0, history=history,
+            forked_from_session_id=source.session_id, forked_from_round=round_number,
+            pending_round=None, rounds=rounds, round_count=round_number, compaction_checkpoints=[],
+            total_steps=sum(item.steps for item in rounds), total_tokens=usage.total_tokens, usage=usage,
+            repo_revision=_repository_revision(self.repo_path),
+        )
+        store = self._durable_archive_store()
+        if store is not None:
+            with store:
+                owner = store.claim(state.session_id)
+                archive = ContextArchive(store, state.session_id, session_id=state.session_id)
+                with store.transaction(owner, owner.revision) as db:
+                    imported = archive.import_history(db, history, source.session_id)
+                    archive._append(db, "boundary", {"reason": "chat rewind", "source_session_id": source.session_id,
+                                                     "source_round": round_number}, [imported])
+        self._session_store.save(state)
+        self.resume_session(state.session_id)
+        return state.session_id
+
+    def _legacy_rewind_history(self, session, round_state) -> list[dict]:
+        from agent.session import ChatSessionError
+        from durable_runtime.run_manager import checked_payload
+
+        if round_state.run_id:
+            store = self._durable_archive_store()
+            if store is not None:
+                with store:
+                    row = store._conn.execute(
+                        """SELECT c.payload_json, c.payload_digest FROM runs r JOIN run_checkpoints c
+                           ON c.run_id=r.run_id AND r.checkpoint_id=c.checkpoint_id
+                           WHERE r.run_id=? AND r.task_id=? AND r.scope_id=? AND c.kind='terminal'""",
+                        (round_state.run_id, round_state.task_id, round_state.origin_session_id or session.session_id),
+                    ).fetchone()
+                    if row:
+                        history = checked_payload(*row).get("history")
+                        if isinstance(history, list):
+                            if round_state.summary:
+                                history.append({"role": "assistant",
+                                                "content": f"[Round {round_state.round_number} complete]\n{round_state.summary}"})
+                            return history
+        raise ChatSessionError("this older round has no verified history checkpoint")
+
     def rename(self, title: str) -> None:
         if self._state is None:
             from agent.session import ChatSessionError
@@ -453,6 +612,8 @@ class ChatSession:
         click.echo(f"  Title    : {self._state.title or '-'}")
         click.echo(f"  State    : {self.session_path}")
         click.echo(f"  Rounds   : {self.round_count}")
+        if self._state.forked_from_session_id:
+            click.echo(f"  Rewound  : {self._state.forked_from_session_id} round {self._state.forked_from_round}")
 
     def _restore_session(self, session_id: str) -> None:
         from agent.session import (
@@ -495,6 +656,9 @@ class ChatSession:
                 )
             restore_lineage(previous_checkpoint_id)
 
+        if not state.pending_round and state.rounds and state.rounds[-1].run_id:
+            self._restore_compacted_view(state.rounds[-1].run_id)
+
         pending = state.pending_round
         if pending is not None:
             self.round_count = max(self.round_count, pending.round_number)
@@ -503,6 +667,8 @@ class ChatSession:
                 f"(task {pending.task_id}); inspect {pending.log_path} and the "
                 "repository before retrying."
             )
+            if pending.run_id:
+                self.recovery_warning += f" Durable Run ID: {pending.run_id}."
             self._shared_history.add(LLMMessage(
                 role="assistant",
                 content=(
@@ -520,11 +686,44 @@ class ChatSession:
                 started_at=pending.started_at,
                 finished_at=utc_now(),
                 error="process ended before the post-round checkpoint",
+                run_id=pending.run_id,
             ))
             state.pending_round = None
 
         state.repo_path = str(Path(self.repo_path).resolve())
         self._checkpoint()
+
+    def _restore_compacted_view(self, run_id: str) -> None:
+        from context.archive import ContextArchive
+        from context.compaction import TraceableCompaction
+        from durable_runtime.run_manager import checked_payload
+        from durable_runtime.store import StoreFormatError
+
+        policy = self._prepare_next_turn
+        if not isinstance(policy, TraceableCompaction):
+            return
+        store = self._durable_archive_store()
+        if store is None:
+            return
+        try:
+            with store:
+                row = store._conn.execute(
+                    """SELECT c.payload_json, c.payload_digest FROM runs r JOIN run_checkpoints c
+                       ON c.run_id=r.run_id AND c.checkpoint_id=r.checkpoint_id
+                       WHERE r.run_id=? AND r.scope_id=? AND r.status='completed'""",
+                    (run_id, self.session_id),
+                ).fetchone()
+                if row is None:
+                    return
+                saved = checked_payload(*row)
+                compacted = saved.get("compaction_state")
+                archive = ContextArchive(store, self.session_id)
+                revision, _ = archive.verified_projection("model_view")
+                if compacted and revision and revision == saved.get("model_archive_revision"):
+                    # The completed round has already merged the compaction call usage.
+                    policy.restore({**compacted, "pending_usage": {}}, self._shared_history)
+        except (StoreFormatError, ValueError) as exc:
+            self.recovery_warning = f"Saved compaction view could not be verified: {exc}"
 
     def _checkpoint(self) -> None:
         if self._session_store is None or self._state is None:
@@ -556,7 +755,7 @@ class ChatSession:
         self.usage.add(side_usage)
         self.total_tokens = self.usage.total_tokens
 
-    def _run_with_live_print(self, task, log):
+    def _run_with_live_print(self, task, log, *, run_id=None, resume=False):
         """
         运行 agent，同时实时打印 event。
 
@@ -573,6 +772,8 @@ class ChatSession:
                 history=self._shared_history,
                 prepare_next_turn=self._prepare_next_turn,
                 session_id=self.session_id,
+                run_id=run_id,
+                resume=resume,
             ),
             log=log,
             on_event=self._event_renderer,

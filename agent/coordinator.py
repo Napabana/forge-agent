@@ -92,6 +92,8 @@ class AgentCoordinator:
         cancel_event=None, max_workers: int = 3, max_tasks: int = 3,
         total_tokens: int = 72_000, timeout_seconds: float = 120.0,
         sandbox_workers: bool = False,
+        parent_run_id: str | None = None,
+        parent_owner=None,
     ) -> None:
         if min(max_workers, max_tasks, total_tokens) < 1 or timeout_seconds <= 0:
             raise ValueError("worker limits must be positive")
@@ -101,6 +103,8 @@ class AgentCoordinator:
         self.backend_factory = backend_factory
         self.registry_factory = registry_factory
         self.agent_config = agent_config
+        self.parent_run_id = parent_run_id
+        self.parent_owner = parent_owner
         self.engine = engine
         self.cancel_event = cancel_event
         self.max_workers = max_workers
@@ -116,7 +120,7 @@ class AgentCoordinator:
         self.worker_tool_calls = 0
         self.closed = False
 
-    def delegate(self, requests: list[WorkerRequest]) -> list[WorkerResult]:
+    def delegate(self, requests: list[WorkerRequest], *, operation_id: str | None = None) -> list[WorkerResult]:
         if self.closed:
             raise RuntimeError("worker coordinator is closed after cancellation or timeout")
         if not 1 <= len(requests) <= self.max_tasks:
@@ -132,12 +136,22 @@ class AgentCoordinator:
         cancel = _CombinedCancel(self.cancel_event, local_cancel)
         allocation = min(self.remaining_tokens // len(requests), max(p.max_tokens for p in PROFILES.values()))
         records = []
-        for request in requests:
-            agent_id = f"worker_{uuid.uuid4().hex[:12]}"
-            task_id = self.engine.create_task(
-                request.task[:80], request.task, parent_id=self.parent_task_id,
-                agent_id=agent_id, role=request.role,
-            )
+        for index, request in enumerate(requests):
+            identity = uuid.uuid5(uuid.NAMESPACE_OID, f"{operation_id}:{index}") if operation_id else uuid.uuid4()
+            agent_id = f"worker_{identity.hex[:12]}"
+            task_id = f"task_{identity.hex}"
+            from task.engine import TaskNotFound
+
+            try:
+                existing = self.engine.get_task(task_id)
+            except TaskNotFound:
+                self.engine.create_task(request.task[:80], request.task, parent_id=self.parent_task_id,
+                                        agent_id=agent_id, role=request.role, task_id=task_id)
+            else:
+                if (existing.parent_id, existing.agent_id, existing.role, existing.description) != (
+                    self.parent_task_id, agent_id, request.role, request.task,
+                ):
+                    raise ValueError("saved worker task identity differs")
             records.append((task_id, agent_id, request))
         pool = ThreadPoolExecutor(max_workers=min(self.max_workers, len(records)), thread_name_prefix="forge-worker")
         started = time.monotonic()
@@ -181,7 +195,10 @@ class AgentCoordinator:
                         )
                 except (OSError, ValueError):
                     self.usage_complete = False
-            self.engine.complete_task(task_id) if result.status == "success" else self.engine.fail_task(task_id)
+            from task.engine import STATUS_COMPLETED, STATUS_FAILED
+
+            if self.engine.get_task(task_id).status not in {STATUS_COMPLETED, STATUS_FAILED}:
+                self.engine.complete_task(task_id) if result.status == "success" else self.engine.fail_task(task_id)
             self.usage.add(SessionUsage.from_dict(result.token_usage))
             if result.usage_complete is False:
                 self.usage_complete = False
@@ -191,7 +208,10 @@ class AgentCoordinator:
 
     def _run_worker(self, task_id: str, agent_id: str, request: WorkerRequest, token_limit: int, cancel) -> WorkerResult:
         started = time.monotonic()
-        self.engine.claim_task(task_id, owner=request.role)
+        from task.engine import STATUS_PENDING
+
+        if self.engine.get_task(task_id).status == STATUS_PENDING:
+            self.engine.claim_task(task_id, owner=request.role)
         profile = PROFILES[request.role]
         created = self.backend_factory(request.role)
         backend, budget_tokens = created if isinstance(created, tuple) else (created, self.agent_config.budget_tokens)
@@ -237,8 +257,20 @@ class AgentCoordinator:
                 agent_id=agent_id, role=request.role, max_steps=profile.max_steps,
             )
             try:
-                result = runner.run(RunRequest(task, execution_constraints=ExecutionConstraints(read_only=True),
-                                               entrypoint="worker"))
+                saved = self._worker_checkpoint(task_id)
+                if saved and saved.get("result") is not None:
+                    raw = saved["result"]
+                    from agent.task import RunResult, RunStatus
+
+                    result = RunResult(task_id, RunStatus(raw["status"]), raw["summary"], raw["steps_taken"],
+                                       usage=SessionUsage.from_dict(raw["usage"]), trace_path=raw["trace_path"],
+                                       usage_complete=raw["usage_complete"])
+                else:
+                    result = runner.run(RunRequest(
+                        task, execution_constraints=ExecutionConstraints(read_only=True), entrypoint="worker",
+                        run_id=task_id, parent_run_id=self.parent_run_id, resume=saved is not None,
+                        parent_owner=self.parent_owner if not saved or saved["scope_id"] != task_id else None,
+                    ))
             finally:
                 runner.close()
         finally:
@@ -260,6 +292,51 @@ class AgentCoordinator:
                             findings, recommendations, result.usage.to_dict(),
                             time.monotonic() - started, result.trace_path, self.parent_task_id,
                             result.usage_complete, memory_candidates)
+
+    def _worker_checkpoint(self, task_id: str) -> dict | None:
+        settings = self.agent_config.durable_runtime_config
+        if not settings or not settings.enabled:
+            return None
+        from durable_runtime.run_manager import checked_payload
+        from durable_runtime.store import DurableRuntimeStore, StoreFormatError
+        from project_memory.identity import ProjectIdentityResolver
+
+        with DurableRuntimeStore(ProjectIdentityResolver.resolve(self.repo_path), settings.root,
+                                 timeout_ms=settings.busy_timeout_ms) as store:
+            row = store._conn.execute(
+                """SELECT r.parent_run_id, c.payload_json, c.payload_digest
+                   FROM runs r JOIN run_checkpoints c ON c.checkpoint_id=r.checkpoint_id AND c.run_id=r.run_id
+                   WHERE r.run_id=? AND r.scope_id IN (?, ?) AND r.entrypoint='worker'""",
+                (task_id, task_id, self.parent_owner.scope_id if self.parent_owner else task_id),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["parent_run_id"] != self.parent_run_id:
+                raise StoreFormatError("saved worker belongs to a different parent Run")
+            return checked_payload(row["payload_json"], row["payload_digest"])
+
+    def restore_delegation_usage(self, run) -> None:
+        from durable_runtime.run_manager import digest, encode
+        from durable_runtime.store import StoreFormatError
+
+        rows = run.store._conn.execute(
+            """SELECT result_json, observation_json, result_digest FROM operations
+               WHERE run_id=? AND replay_policy='worker_resume' AND state='result_committed'""", (run.run_id,),
+        )
+        for payload, observation, checksum in rows:
+            if digest(encode([payload, observation])) != checksum:
+                raise StoreFormatError("saved delegation result digest differs")
+            tool_result = json.loads(payload)
+            if not tool_result["success"]:
+                continue
+            self.delegation_count += 1
+            for worker in json.loads(tool_result["output"]):
+                self.worker_count += 1
+                self.worker_failure_count += int(worker["status"] != "success")
+                self.usage.add(SessionUsage.from_dict(worker["token_usage"]))
+                if worker.get("usage_complete") is False:
+                    self.usage_complete = False
+        self.remaining_tokens = max(0, self.remaining_tokens - self.usage.total_tokens)
 
 
 class DelegateTasksTool(BaseTool):
@@ -287,13 +364,14 @@ class DelegateTasksTool(BaseTool):
             },
             "required": ["role", "task"]}}}, "required": ["tasks"]}
 
-    def execute(self, params: dict) -> ToolResult:
+    def execute(self, params: dict, *, operation_id: str | None = None) -> ToolResult:
         try:
             raw = params["tasks"]
             if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
                 raise ValueError("tasks must be an array of objects")
             requests = [WorkerRequest(item["role"], item["task"]) for item in raw]
-            results = self.coordinator.delegate(requests)
+            results = (self.coordinator.delegate(requests, operation_id=operation_id)
+                       if operation_id else self.coordinator.delegate(requests))
         except (KeyError, TypeError, ValueError, RuntimeError) as exc:
             return ToolResult(False, "", error=str(exc))
         return ToolResult(True, json.dumps([r.to_dict() for r in results], ensure_ascii=False))

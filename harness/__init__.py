@@ -1,4 +1,4 @@
-"""harness/ — 工具执行的安全与可观测管线（M2 Task 2.2 / P0-2）。
+"""工具执行的权限和审计入口。
 
 包级 ``ToolExecutor`` 是产品 Runner 使用的安全默认：未显式传 PermissionManager 时
 自动启用默认策略。需要测试底层透明直通时，可直接从 ``harness.executor`` 导入原始

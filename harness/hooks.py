@@ -1,15 +1,6 @@
-"""
-harness/hooks.py
+"""按事件实例化注册工具执行钩子。
 
-工具执行钩子（M2 Task 2.2）。
-
-把 s20_comprehensive/code.py 的全局 Hooks 机制（HOOKS dict + register_hook +
-trigger_hooks，code.py:860-873）迁移成实例化的 Hooks 类。语义不变：
-trigger 遇到首个非 None 返回即短路（拦截）。
-
-事件类型对齐 s20：UserPromptSubmit / PreToolUse / PostToolUse / Stop。
-
-Hook 的意义是把可扩展规则与 ToolExecutor 主流程分离。新增检查规则时，不需要不断修改 execute()。
+触发时按注册顺序运行，并返回第一个非空结果。钩子把扩展检查与工具执行流程分开。
 """
 
 from __future__ import annotations
@@ -18,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 # ---------------------------------------------------------------------------
-# 事件类型（对齐 s20 HOOKS 的 key）
+# 支持的钩子事件
 # ---------------------------------------------------------------------------
 
 class HookEvent:
@@ -44,7 +35,7 @@ class HookBlockResult:
 
 class Hooks:
     """
-    钩子注册表。实例化（替代 s20 的全局 HOOKS dict）。
+    实例级钩子注册表。
 
     用法：
         hooks = Hooks()
@@ -90,7 +81,7 @@ class Hooks:
     def trigger(self, event: str, *args: Any) -> Any:
         """
         触发某事件的所有钩子，按注册顺序执行。
-        遇到首个返回非 None 的钩子即短路，返回该值（对齐 s20 trigger_hooks:868-873）。
+        返回首个非空钩子结果。
         全部返回 None 则返回 None（放行）。
 
         主要负责：

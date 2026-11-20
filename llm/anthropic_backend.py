@@ -12,6 +12,8 @@ Anthropic Claude 原生 backend。
 
 from __future__ import annotations
 
+from llm.cache_audit import call_provider, sdk_http_options
+
 import json
 import logging
 from typing import Any
@@ -42,7 +44,7 @@ class AnthropicBackend(LLMBackend):
     ) -> None:
         try:
             import anthropic as _anthropic
-            client_kwargs: dict[str, Any] = {"api_key": api_key}
+            client_kwargs: dict[str, Any] = {"api_key": api_key, **sdk_http_options(_anthropic)}
             if base_url:
                 client_kwargs["base_url"] = base_url
             self._client = _anthropic.Anthropic(**client_kwargs)
@@ -91,7 +93,7 @@ class AnthropicBackend(LLMBackend):
             self._model, len(api_messages), len(api_tools),
         )
 
-        response = self._client.messages.create(**kwargs)
+        response = call_provider("anthropic_messages", self._client.messages.create, **kwargs)
         usage = _response_usage(response, messages, _extract_text(response))
 
         logger.debug(

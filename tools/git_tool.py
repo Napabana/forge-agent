@@ -56,7 +56,7 @@ class GitStatusTool(BaseTool):
     def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
         from tools.runtime import LocalRuntime
         self._runtime = runtime or LocalRuntime()
-        # LLM 未传 cwd 时的默认 repo 根（orchestrator 注入 worktree，M4 第二波）。
+        # 调用未指定 cwd 时，使用编排器传入的工作目录。
         self._default_cwd = default_cwd
 
     """
@@ -107,7 +107,7 @@ class GitDiffTool(BaseTool):
     def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
         from tools.runtime import LocalRuntime
         self._runtime = runtime or LocalRuntime()
-        # LLM 未传 cwd 时的默认 repo 根（orchestrator 注入 worktree，M4 第二波）。
+        # 调用未指定 cwd 时，使用编排器传入的工作目录。
         self._default_cwd = default_cwd
 
     """
@@ -187,7 +187,7 @@ class GitAddTool(BaseTool):
     def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
         from tools.runtime import LocalRuntime
         self._runtime = runtime or LocalRuntime()
-        # LLM 未传 cwd 时的默认 repo 根（orchestrator 注入 worktree，M4 第二波）。
+        # 调用未指定 cwd 时，使用编排器传入的工作目录。
         self._default_cwd = default_cwd
 
     """
@@ -244,7 +244,7 @@ class GitCommitTool(BaseTool):
     def __init__(self, runtime: Runtime | None = None, default_cwd: str | None = None) -> None:
         from tools.runtime import LocalRuntime
         self._runtime = runtime or LocalRuntime()
-        # LLM 未传 cwd 时的默认 repo 根（orchestrator 注入 worktree，M4 第二波）。
+        # 调用未指定 cwd 时，使用编排器传入的工作目录。
         self._default_cwd = default_cwd
 
     """

@@ -1,30 +1,6 @@
-"""
-agent/orchestrate.py
+"""编排隔离工作树、任务认领和权限检查，执行同步 Agent 循环。
 
-M4 主循环集成：把 M1（TaskEngine + WorktreeSession）、M2（AgentBus +
-ToolExecutor/Permission）、M3（DockerRuntime 加固）接进 ReAct 主循环。
-
-核心设计——同步/异步阻抗失配的解法：
-- Agent.run() 是同步 ReAct 循环（清晰可测，CLAUDE.md 约束保持同步）。
-- WorktreeSession / AgentBus 是 async。
-- 解法：本模块提供一个 async 组合根 orchestrate_run()，显式管理
-  WorktreeSession 的创建、成果检查与最终处置。Agent.run() 同步执行，
-  EventLog 事件先进入队列，运行结束后由 forwarder 转发到 bus。
-
-safe_path 注入：PermissionManager(workspace=str(wt.path)) 在 executor 层
-强制文件路径不逃逸 worktree（读写工具都覆盖）。不依赖 LLM 填的 params。
-
-事件审计：orchestrator 在 worktree 生命周期 + 权限决策点上写新事件类型
-（WORKTREE_CREATED/RETAINED/REMOVED、PERMISSION_DECISION、TASK_CLAIMED）
-到 EventLog，
-既有 ACTION/OBSERVATION/REFLECTION 由同步循环照常写。
-
-用法（见 scripts/m4_demo.py）：
-    engine = TaskEngine("tasks.db")
-    result = asyncio.run(orchestrate_run(
-        backend=..., task=task, engine=engine,
-        registry_builder=build_registry, log_dir="./logs",
-    ))
+通过 AgentBus 分发 EventLog 中的执行事件，并按结果决定是否保留工作树。
 """
 
 from __future__ import annotations
@@ -205,7 +181,7 @@ async def orchestrate_run(
         bus:              可选 AgentBus；None=不广播
         log_dir:          JSONL 日志目录
         worktree_name:    worktree 名；默认 f"task-{task_id}"
-        sandbox:          True=用 DockerRuntime（M3 加固）；False=LocalRuntime
+        sandbox:          True 使用 DockerRuntime，False 使用 LocalRuntime
         sandbox_image:    Docker 镜像；None=默认 SANDBOX_IMAGE
         readonly_root:    sandbox 模式下传给 DockerRuntime 的只读根
         config:           AgentConfig；None=默认
@@ -222,12 +198,20 @@ async def orchestrate_run(
     policy = WorktreeResultPolicy(result_policy)
 
     # 1. TaskEngine 记账：创建任务 → 认领。TaskEngine 为 task_id 权威源。
-    task_id = engine.create_task(
-        subject=task.description[:80],
-        description=task.description,
-    )
+    durable = agent_cfg.durable_run
+    resume_binding = durable.worktree if durable and durable.restoring else None
+    if resume_binding:
+        from task.engine import STATUS_IN_PROGRESS
+
+        task_id = resume_binding["task_id"]
+        existing = engine.get_task(task_id)
+        if (existing.status != STATUS_IN_PROGRESS or existing.owner != "agent"
+                or existing.worktree != resume_binding["name"] or existing.description != task.description):
+            raise ValueError("saved TaskEngine claim differs")
+    else:
+        task_id = engine.create_task(subject=task.description[:80], description=task.description)
+        engine.claim_task(task_id, owner="agent")
     task.task_id = task_id   # 让 EventLog / RunResult 的 task_id 与 DB 一致
-    engine.claim_task(task_id, owner="agent")
 
     # 2. EventLog + bus 生命周期事件
     log = EventLog.create(task, log_dir=log_dir)
@@ -244,7 +228,7 @@ async def orchestrate_run(
             metadata={"subject": task.description[:80]},
         )
 
-    wt_name = worktree_name or f"task-{task_id}"
+    wt_name = resume_binding["name"] if resume_binding else worktree_name or f"task-{task_id}"
 
     # bus 逐步事件转发：on_append → queue → forwarder 协程。
     # 同步循环每写一条 event 就 put_nowait，forwarder 异步 publish 到 events.* 。
@@ -274,7 +258,28 @@ async def orchestrate_run(
     try:
         # 显式创建而不使用 async context manager：上下文管理器固定回滚，
         # 无法表达“检测到成果后保留 worktree”的结果策略。
-        await wt.create()
+        if resume_binding:
+            await wt.attach(resume_binding)
+        else:
+            await wt.create()
+            if durable:
+                durable.worktree = {"task_id": task_id, "name": wt_name,
+                                    "path": str(wt.path.resolve()), "branch": wt.branch,
+                                    "base": wt.base_commit}
+                from context.repository_state import repository_content_fingerprint
+
+                durable.checkpoint(1, "worktree_bound",
+                                   {"pre_agent_content": repository_content_fingerprint(wt.path)},
+                                   status="running")
+        if resume_binding:
+            saved = durable.load_checkpoint()
+            if "pre_agent_content" in saved:
+                from context.repository_state import repository_content_fingerprint
+                from durable_runtime.store import StoreFormatError
+
+                if repository_content_fingerprint(wt.path) != saved["pre_agent_content"]:
+                    raise StoreFormatError("saved pre-agent checkout changed")
+                durable.restoring = False
         worktree_created = True
         log.log_worktree_created(
             task_id,
@@ -413,7 +418,9 @@ async def orchestrate_run(
     # bind_worktree 或 created 事件失败时，Git 创建可能已成功但 create() 尚未返回。
     worktree_created = worktree_created or wt.created
     artifact: WorktreeArtifact | None = None
-    if worktree_created:
+    paused = bool(result and result.termination_reason == "paused")
+    interrupted = bool(durable and durable.worktree and (run_error is not None or paused))
+    if worktree_created and not interrupted:
         try:
             partial = run_error is not None or result is None or not result.is_success()
             artifact = await _finalize_worktree(wt, policy, partial=partial)
@@ -437,7 +444,8 @@ async def orchestrate_run(
 
     if run_error is not None:
         try:
-            engine.fail_task(task_id)
+            if not interrupted:
+                engine.fail_task(task_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[orchestrate] fail_task on exception path: %s", exc)
         log.log_task_failed(steps=0, reason=f"exception: {run_error!r}")
@@ -466,7 +474,7 @@ async def orchestrate_run(
                       worker_failure_count=coordinator.worker_failure_count,
                       worker_tool_calls=coordinator.worker_tool_calls)
 
-    # CLI/API 通过这个结构化对象拿到保留路径、分支和变更统计。
+    # 运行结果记录保留路径、分支和变更统计。
     result.worktree = artifact
 
     # Agent 任务状态和 worktree 最终状态分别记账。
@@ -477,7 +485,7 @@ async def orchestrate_run(
                 "tasks.completed", sender="orchestrator",
                 content={"task_id": task_id, "result": result.to_dict()},
             )
-    else:
+    elif not paused:
         engine.fail_task(task_id)
         if bus is not None:
             await bus.publish(

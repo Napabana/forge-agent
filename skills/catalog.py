@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -92,6 +93,7 @@ class SkillCatalog:
         repo_path: str | Path,
         *,
         global_root: str | Path | None = None,
+        include_project: bool = True,
     ) -> "SkillCatalog":
         merged: dict[str, SkillDefinition] = {}
         issues: list[SkillDiscoveryIssue] = []
@@ -102,13 +104,12 @@ class SkillCatalog:
             issues.extend(global_issues)
             for skill in global_skills:
                 merged[skill.name] = skill
-        project_root = Path(repo_path).resolve() / ".agents" / "skills"
-        project_skills, project_issues = _discover_root(
-            project_root, source="project"
-        )
-        issues.extend(project_issues)
-        for skill in project_skills:
-            merged[skill.name] = skill
+        if include_project:
+            project_root = Path(repo_path).resolve() / ".agents" / "skills"
+            project_skills, project_issues = _discover_root(project_root, source="project")
+            issues.extend(project_issues)
+            for skill in project_skills:
+                merged[skill.name] = skill
         return cls(merged.values(), issues)
 
     @property
@@ -159,6 +160,17 @@ class SkillCatalog:
         if len(content) > max_chars:
             return content[:max_chars].rstrip() + "\n[Skill reference truncated]"
         return content
+
+    @staticmethod
+    def resource_digest(skill: SkillDefinition, category: str, relative: str) -> str:
+        root = skill.root / category
+        candidate = root / relative
+        target = candidate.resolve(strict=True)
+        if (root.is_symlink() or candidate.is_symlink() or not target.is_relative_to(root.resolve())
+                or not target.is_file()):
+            raise ValueError("skill resource could not be verified")
+        with target.open("rb") as content:
+            return hashlib.file_digest(content, "sha256").hexdigest()
 
 
 def _discover_root(

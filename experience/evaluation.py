@@ -1,4 +1,4 @@
-"""Candidate evaluation wiring that reuses the P2-0 EvaluationHarness."""
+"""Evaluate experience candidates with the coding agent evaluation harness."""
 from __future__ import annotations
 
 import shutil
@@ -215,7 +215,7 @@ def evaluate_candidate(
     candidate_process_graders: tuple[GraderSpec, ...] = (),
     run_metadata: dict[str, Any] | None = None,
 ) -> EvaluationRecord:
-    """Run baseline and candidate variants through the existing P2-0 harness."""
+    """Run baseline and candidate variants through the coding agent evaluation harness."""
     root = Path(output_dir).resolve()
     if root.exists():
         raise FileExistsError(f"candidate evaluation output already exists: {root}")

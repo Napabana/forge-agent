@@ -1,4 +1,4 @@
-"""Shared execution composition root for CLI, Chat, API, and fix-pr."""
+"""Shared execution composition root for the CLI and evaluation harness."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import dataclasses
 import hashlib
 import logging
+import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -104,6 +105,10 @@ class RunRequest:
     # compatible and resolves from the existing request shape.
     entrypoint: str | None = None
     execution_constraints: ExecutionConstraints = ExecutionConstraints()
+    run_id: str | None = None
+    resume: bool = False
+    parent_owner: object | None = None
+    parent_run_id: str | None = None
 
 
 class ExecutionRunner:
@@ -149,7 +154,127 @@ class ExecutionRunner:
         *,
         log: EventLog | None = None,
         on_event=None,
-        on_log_created=None,
+    ) -> RunResult:
+        settings = self.config.durable_runtime_config
+        if settings is None or not settings.enabled:
+            if request.resume:
+                raise ValueError("resuming requires durable_runtime.enabled")
+            return self._run(request, log=log, on_event=on_event)
+
+        from durable_runtime.operation_journal import OutcomeUnknown
+        from durable_runtime.run_manager import DurableRun, digest, encode
+        from durable_runtime.store import DurableRuntimeStore
+        from project_memory.identity import ProjectIdentityResolver
+        from context.compaction import TraceableCompaction
+
+        run_id = request.run_id or uuid.uuid4().hex
+        identity = ProjectIdentityResolver.resolve(request.task.repo_path)
+        acceptance = request.acceptance or AcceptanceContract.from_task(request.task)
+        entrypoint = _resolve_entrypoint(request)
+        task = acceptance.apply(request.task)
+        contract = {"require_changes": acceptance.require_changes, "require_tests": acceptance.require_tests,
+                    "required_paths": acceptance.required_paths, "forbidden_paths": acceptance.forbidden_paths,
+                    "custom_verifier": acceptance.verifier is not None}
+        cfg_fields = {
+            key: value for key, value in vars(self.config).items()
+            if key != "prepare_next_turn" and (isinstance(value, (str, int, float, tuple, bool)) or value is None)
+        }
+        policy = request.prepare_next_turn if request.prepare_next_turn is not None else self.config.prepare_next_turn
+        compaction = ({
+            "threshold": policy.threshold, "target_ratio": policy.target_ratio,
+            "keep_recent_tokens": policy.keep_recent_tokens, "max_summary_chars": policy.max_summary_chars,
+            "pruner": type(policy.pruner).__qualname__, "summarizer": type(policy.semantic_summarizer).__qualname__,
+        } if type(policy) is TraceableCompaction else None)
+        config_digest = digest(encode({
+            "provider": type(self.backend).__name__, "model": self.backend.model_name,
+            "endpoint": str(getattr(getattr(self.backend, "_client", None), "base_url", "")),
+            "max_output_tokens": getattr(self.backend, "_max_tokens", None),
+            "agent": cfg_fields, "read_only": request.execution_constraints.read_only,
+            "archive_enabled": settings.archive_enabled, "archive_read_max_chars": settings.archive_read_max_chars,
+            "compaction": compaction,
+            "memory": dataclasses.asdict(self.config.memory_config) if self.config.memory_config else None,
+            "mcp": dataclasses.asdict(self.mcp_config) if self.mcp_config else None,
+        }))
+        dynamic_tools = {"memory_read", "memory_propose", "memory_search", "delegate_tasks", "archive_read"}
+        registry_digest = digest(encode([dataclasses.asdict(schema) for schema in self.registry.get_schemas()
+                                         if schema.name not in dynamic_tools]))
+        resumable = (
+            (entrypoint in {"cli", "worker"} and request.history is None
+             or entrypoint == "chat" and request.history is not None and request.session_id)
+            and (not request.sandbox or request.isolate)
+            and request.permission is None
+            and request.hooks is None and self.config.hooks is None
+            and (policy is None or compaction is not None and settings.archive_enabled)
+            and acceptance.verifier is None
+            and not getattr(self.backend, "_budget", None)
+        )
+        request_snapshot = {"isolate": request.isolate, "sandbox": request.sandbox, "resumable": bool(resumable)}
+        if request.isolate:
+            request_snapshot["result_policy"] = WorktreeResultPolicy(request.result_policy).value
+        with DurableRuntimeStore(identity, settings.root, timeout_ms=settings.busy_timeout_ms) as store:
+            parent_owner = request.parent_owner
+            if parent_owner is not None and (entrypoint != "worker" or not request.parent_run_id):
+                raise ValueError("a borrowed Owner requires a supervised Worker Run")
+            scope_id = parent_owner.scope_id if parent_owner is not None else request.session_id or run_id
+            if parent_owner is not None and not store._conn.execute(
+                "SELECT 1 FROM runs WHERE run_id=? AND scope_id=? AND entrypoint!='worker'",
+                (request.parent_run_id, scope_id),
+            ).fetchone():
+                raise ValueError("Worker parent Run is missing from the shared scope")
+            durable = DurableRun(store, run_id, scope_id, parent_owner=parent_owner)
+            if settings.archive_enabled and parent_owner is None:
+                from context.archive import ContextArchive
+
+                durable.archive = ContextArchive(store, durable.owner.scope_id, settings.archive_inline_limit_bytes,
+                                                 run_id=run_id, session_id=request.session_id)
+            if request.resume:
+                if not request.run_id or not resumable:
+                    raise ValueError("run configuration does not support safe resumption")
+                durable.resume(task, entrypoint, contract, config_digest, registry_digest, request_snapshot)
+            else:
+                durable.create(task, entrypoint, session_id=request.session_id, parent_run_id=request.parent_run_id,
+                               request=request_snapshot,
+                               acceptance=contract, config_digest=config_digest,
+                               tool_registry_digest=registry_digest)
+            try:
+                saved = durable.load_checkpoint() if request.resume else {}
+                if saved.get("agent_result") and ("acceptance_inputs" in saved or "acceptance_status" in saved):
+                    result = _resume_independent_acceptance(
+                        durable, acceptance, task, saved, entrypoint, request.session_id, on_event,
+                    )
+                else:
+                    result = self._run(request, log=log, on_event=on_event, durable=durable)
+                result.run_id = run_id
+                if result.termination_reason == "paused":
+                    store.pause_marker(run_id).unlink(missing_ok=True)
+                    return result
+                state = durable.load_checkpoint()
+                state.pop("pending_model_call", None)
+                if request.history is not None:
+                    state["history"] = request.history.to_dicts()
+                durable.checkpoint(result.steps_taken + 1, "terminal",
+                                   {**state, "result": result.to_dict()},
+                                   status=(result.status.value if result.status in {
+                                       RunStatus.FAILED, RunStatus.CANCELED, RunStatus.INCOMPLETE,
+                                   } else "completed"))
+                return result
+            except OutcomeUnknown:
+                state = durable.load_checkpoint()
+                durable.checkpoint(state["next_step"], "reconciliation_required", state,
+                                   status="reconciliation_required")
+                raise
+            finally:
+                # The direct Runner can reuse its Agent across Chat rounds.
+                if self.agent._cfg.durable_run is durable:
+                    self.agent._cfg = dataclasses.replace(self.agent._cfg, durable_run=None)
+
+    def _run(
+        self,
+        request: RunRequest,
+        *,
+        log: EventLog | None = None,
+        on_event=None,
+        durable=None,
     ) -> RunResult:
         acceptance = request.acceptance or AcceptanceContract.from_task(request.task)
         task = acceptance.apply(request.task)
@@ -157,14 +282,20 @@ class ExecutionRunner:
         contract_paths, path_error = _normalize_contract_paths(
             acceptance.required_paths + acceptance.forbidden_paths
         )
-        path_baseline, snapshot_error = (
-            (None, None)
-            if request.isolate or path_error
-            else _snapshot_paths(Path(task.repo_path), contract_paths)
-        )
+        if durable and durable.restoring and not request.isolate and contract_paths:
+            if durable.path_acceptance is None:
+                raise ValueError("saved acceptance file baseline is missing")
+            path_baseline, snapshot_error = durable.path_acceptance
+        else:
+            path_baseline, snapshot_error = (
+                (None, None) if request.isolate or path_error else _snapshot_paths(Path(task.repo_path), contract_paths)
+            )
+        if durable and not request.isolate and contract_paths:
+            durable.path_acceptance = (path_baseline, snapshot_error)
         acceptance_setup_error = path_error or snapshot_error
         config = dataclasses.replace(
             self.config,
+            durable_run=durable,
             hooks=request.hooks if request.hooks is not None else self.config.hooks,
             cancel_event=(
                 request.cancel_event
@@ -200,11 +331,9 @@ class ExecutionRunner:
             engine = self.engine or TaskEngine(Path(self.log_dir) / "tasks.db")
             trace_path = None
 
-            def log_created(task_id: str, path: str) -> None:
+            def log_created(_task_id: str, path: str) -> None:
                 nonlocal trace_path
                 trace_path = path
-                if on_log_created is not None:
-                    on_log_created(task_id, path)
 
             try:
                 # ContextVar propagation lets orchestrate_run/EventLog.create inherit
@@ -254,6 +383,7 @@ class ExecutionRunner:
                 contract_paths,
                 path_baseline,
                 acceptance_setup_error,
+                durable=durable,
             )
             if memory is not None and config.memory_config.auto_capture and isinstance(result, RunResult):
                 try:
@@ -295,7 +425,9 @@ class ExecutionRunner:
         if config.multi_agent_enabled:
             worker_engine = self.engine or self._worker_engine()
             try:
-                worker_engine.get_task(task.task_id)
+                parent = worker_engine.get_task(task.task_id)
+                if request.resume and parent.owner == "lead":
+                    owned_parent_engine = worker_engine
             except TaskNotFound:
                 worker_engine.create_task(task.description[:80], task.description,
                                           agent_id="lead", role="lead", task_id=task.task_id)
@@ -361,8 +493,6 @@ class ExecutionRunner:
             entrypoint=entrypoint,
         )
         log.configure_trace(entrypoint=entrypoint, session_id=request.session_id)
-        if on_log_created is not None:
-            on_log_created(task.task_id, str(log.path))
         proposal = self.registry.get_tool("memory_propose")
         if proposal is not None and hasattr(proposal, "log"):
             proposal.log = log
@@ -374,7 +504,7 @@ class ExecutionRunner:
             self.agent._memory_context = memory.context(task.description,
                 TokenBudget(total=config.budget_tokens).counter, log=log)
         try:
-            preparation_result = self._prepare_shared_history_boundary(
+            preparation_result = None if request.resume else self._prepare_shared_history_boundary(
                 task=task,
                 history=request.history,
                 callback=config.prepare_next_turn,
@@ -397,6 +527,7 @@ class ExecutionRunner:
                 contract_paths,
                 path_baseline,
                 acceptance_setup_error,
+                durable=durable,
             )
             if memory is not None and config.memory_config.auto_capture:
                 memory.conclude(result, task=task, acceptance=result.acceptance_status,
@@ -416,7 +547,7 @@ class ExecutionRunner:
                 log.log_run_exception(task_id=task.task_id, error=exc)
             except Exception as trace_exc:  # noqa: BLE001 — trace is best-effort
                 logger.warning("Failed to record runner exception trace: %s", trace_exc)
-            if owned_parent_engine is not None:
+            if owned_parent_engine is not None and durable is None:
                 owned_parent_engine.fail_task(task.task_id)
             raise
         finally:
@@ -434,14 +565,20 @@ class ExecutionRunner:
             registry_builder = _build_run_registry
         else:
             registry_builder = self.registry_builder
-        return AgentCoordinator(
+        coordinator = AgentCoordinator(
             repo_path=repo_path, log_dir=self.log_dir, parent_task_id=parent_task_id,
             backend_factory=self.worker_backend_factory, registry_factory=registry_builder,
-            agent_config=config, engine=engine, cancel_event=config.cancel_event,
+            agent_config=dataclasses.replace(config, durable_run=None),
+            parent_run_id=config.durable_run.run_id if config.durable_run else None,
+            parent_owner=config.durable_run.owner if config.durable_run else None,
+            engine=engine, cancel_event=config.cancel_event,
             max_workers=config.max_workers, max_tasks=config.max_delegate_tasks,
             total_tokens=config.total_worker_tokens, timeout_seconds=config.worker_timeout_seconds,
             sandbox_workers=config.run_profile == "sandboxed",
         )
+        if config.durable_run and config.durable_run.restoring:
+            coordinator.restore_delegation_usage(config.durable_run)
+        return coordinator
 
     @staticmethod
     def _memory_runtime(repo_path, config, entrypoint):
@@ -555,13 +692,11 @@ def _normalize_isolated_failure(result: RunResult) -> None:
 
 
 def _resolve_entrypoint(request: RunRequest) -> str:
-    """Resolve the four product entrypoints without breaking existing callers."""
+    """Label a run for tracing, using the request's explicit label when supplied."""
     if request.entrypoint:
         return request.entrypoint
     if request.task.issue_url:
         return "github_issue"
-    if request.cancel_event is not None:
-        return "api"
     if request.history is not None or request.session_id is not None:
         return "chat"
     return "cli"
@@ -629,6 +764,69 @@ def _record_exception_trace(
 
 
 def _apply_independent_acceptance(
+    contract: AcceptanceContract,
+    task: Task,
+    result: RunResult,
+    contract_paths: set[str],
+    path_baseline: dict[str, str] | None,
+    setup_error: str | None,
+    *,
+    durable=None,
+) -> None:
+    if durable is not None and result.termination_reason == "paused":
+        return
+    if durable is None:
+        _check_independent_acceptance(contract, task, result, contract_paths, path_baseline, setup_error)
+        return
+    step = result.steps_taken + 1
+    state = durable.load_checkpoint()
+    state.pop("pending_model_call", None)
+    state["agent_result"] = result.to_dict()
+    if contract.has_independent_checks():
+        from context.repository_state import repository_content_fingerprint
+
+        workspace = result.worktree.path if result.worktree else task.repo_path
+        excluded = (result.trace_path,) if result.trace_path else ()
+        state["acceptance_inputs"] = {
+            "paths": sorted(contract_paths), "baseline": path_baseline, "setup_error": setup_error,
+            "workspace_digest": repository_content_fingerprint(workspace, excluded_paths=excluded) if workspace else None,
+        }
+        durable.checkpoint(step, "acceptance_pending", state, status="acceptance_pending")
+    _check_independent_acceptance(contract, task, result, contract_paths, path_baseline, setup_error)
+    status = "acceptance_" + {"not_requested": "skipped"}.get(result.acceptance_status, result.acceptance_status)
+    durable.checkpoint(step, status, {**state, "acceptance_status": result.acceptance_status,
+                                     "acceptance_error": result.acceptance_error}, status=status)
+
+
+def _resume_independent_acceptance(durable, contract: AcceptanceContract, task: Task, state: dict,
+                                   entrypoint: str, session_id: str | None, on_event) -> RunResult:
+    from context.repository_state import repository_content_fingerprint
+    from durable_runtime.store import StoreFormatError
+
+    result = RunResult.from_dict(state["agent_result"])
+    inputs = state.get("acceptance_inputs")
+    workspace = result.worktree.path if result.worktree else task.repo_path
+    excluded = (result.trace_path,) if result.trace_path else ()
+    if inputs and workspace and (not Path(workspace).is_dir() or
+                                 repository_content_fingerprint(workspace, excluded_paths=excluded) != inputs["workspace_digest"]):
+        raise StoreFormatError("workspace changed since the independent acceptance checkpoint")
+    if "acceptance_status" in state:
+        result.acceptance_status = state["acceptance_status"]
+        result.acceptance_error = state.get("acceptance_error")
+        return result
+    if not inputs or contract.verifier is not None:
+        raise StoreFormatError("saved independent acceptance inputs are unavailable")
+    _check_independent_acceptance(contract, task, result, set(inputs["paths"]), inputs["baseline"], inputs["setup_error"])
+    status = f"acceptance_{result.acceptance_status}"
+    durable.checkpoint(state["next_step"], status, {**state, "acceptance_status": result.acceptance_status,
+                                                    "acceptance_error": result.acceptance_error}, status=status)
+    if result.trace_path:
+        _record_post_run_trace(result.trace_path, result=result, acceptance_requested=True,
+                               entrypoint=entrypoint, session_id=session_id, on_event=on_event)
+    return result
+
+
+def _check_independent_acceptance(
     contract: AcceptanceContract,
     task: Task,
     result: RunResult,

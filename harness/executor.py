@@ -1,7 +1,7 @@
 """
 harness/executor.py
 
-ToolExecutor —— 工具执行的统一包装层（M2 Task 2.2 / P0-2）。
+ToolExecutor 统一处理工具校验、权限、钩子和执行。
 
 把 Validation + Hooks + Permission + Tool 管线接到现有工具执行链路上，而不改动
 各个 Tool 的实现。permission/hooks 为 None 时仍保持透明直通；生产入口由 Runner /
@@ -25,16 +25,19 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from harness.hooks import HookEvent, Hooks
 from harness.permission import ExecutionConstraints, PermissionDecision, PermissionManager, ToolUseBlock
-from tools.base import ToolErrorType, ToolRegistry, ToolResult
+from tools.base import ToolEffect, ToolErrorType, ToolRegistry, ToolResult
 from tools.shell_tool import ConfirmCallback
 
 logger = logging.getLogger(__name__)
 
 DecisionCallback = Callable[[str, dict[str, Any], PermissionDecision], None]
+
+if TYPE_CHECKING:
+    from durable_runtime.operation_journal import ToolOperation
 
 
 class ToolExecutionCanceled(RuntimeError):
@@ -86,6 +89,7 @@ class ToolExecutor:
         decision_callback: DecisionCallback | None = None,
         cancel_event: object | None = None,
         invocation_callback: Callable[[], None] | None = None,
+        operation: ToolOperation | None = None,
     ) -> ToolResult:
         """按冻结生命周期执行一次工具调用。"""
         self._raise_if_canceled("before_validation", cancel_event)
@@ -94,6 +98,7 @@ class ToolExecutor:
         if invalid is not None:
             return invalid
         block = ToolUseBlock(name, params)
+        decision = None
 
         # 1. PreToolUse：明确 block 与 hook 自身异常都 fail-closed，但属于可恢复 Observation。
         if self._hooks is not None:
@@ -178,9 +183,33 @@ class ToolExecutor:
 
         # 3. Tool：这是最后一个能保证“Tool 尚未发生”的 cancel 边界。
         self._raise_if_canceled("before_tool", cancel_event)
+        worker_resume = False
+        if operation is not None:
+            from agent.coordinator import DelegateTasksTool
+            from durable_runtime.reconcilers import file_postcondition, mcp_postcondition
+            from durable_runtime.run_manager import digest, encode
+
+            tool = self._registry.get_tool(name)
+            worker_resume = type(tool) is DelegateTasksTool and tool.coordinator.parent_run_id == operation.run.run_id
+            read_only = tool.effect is ToolEffect.READ_ONLY and not name.startswith("mcp__")
+            policy_digest = digest(encode({
+                "policy": type(self._permission).__name__, "constraints": self.constraints.read_only,
+                "decision": decision.decision.value if decision is not None else None,
+                "effect": tool.effect.value,
+            }))
+            replayed = operation.prepare(name, params, read_only=read_only, decision=decision,
+                                         expected=file_postcondition(tool, params) or mcp_postcondition(tool, params),
+                                         policy_digest=policy_digest,
+                                         approval_ref=f"{operation.operation_id}:confirmed" if decision and decision.is_confirm else None,
+                                         worker_resume=worker_resume)
+            if replayed is not None:
+                return replayed
+            self._raise_if_canceled("after_tool_intent", cancel_event)
+            operation.start()
         if invocation_callback is not None:
             invocation_callback()
-        result = self._registry.execute_tool(name, params)
+        result = (tool.execute(params, operation_id=operation.operation_id) if worker_resume
+                  else self._registry.execute_tool(name, params))
         if not result.success and result.error_type is None:
             result.error_type = _classify_tool_error(name, result)
 
@@ -195,6 +224,8 @@ class ToolExecutor:
 
         if cancel_after_tool or self._is_cancel_requested(cancel_event):
             result.diagnostics += ("cancel_requested_after_tool",)
+        if operation is not None:
+            operation.finish(name, result)
         return result
 
     def _confirm_prompt_ok(self, decision: PermissionDecision, block: ToolUseBlock) -> bool:

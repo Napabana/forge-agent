@@ -1,18 +1,6 @@
-"""
-harness/permission.py
+"""检查工具执行权限、工作区范围和工具副作用。
 
-工具权限校验（M2 Task 2.2）。
-
-把 s20_comprehensive/code.py 的 permission_hook（code.py:880-905）迁移成
-实例化的 PermissionManager。语义保留：DENY 黑名单硬拦截 / DESTRUCTIVE 需确认 /
-文件路径越界拒绝 / MCP capability 按 ToolEffect 做保守确认。
-
-与 s20 的差异：
-- 决策结构化（PermissionDecision：ALLOW / DENY / CONFIRM），替代 s20 的
-  None/字符串二态——更清晰区分「需确认」与「允许」。
-- 不在内部做交互式 input()（s20 在 hook 里 input，测试不友好）。CONFIRM 决策
-  交由 harness/executor.py 的 ToolExecutor 用注入的 ConfirmCallback 处理。
-- 黑名单/确认词复用 tools/shell_tool.py 已有常量，不重复定义。
+返回结构化的允许、拒绝或确认决策。需要用户确认时由执行器调用入口提供的回调。
 """
 
 from __future__ import annotations
@@ -32,7 +20,7 @@ from tools.base import ToolEffect, ToolRegistry
 
 
 # ---------------------------------------------------------------------------
-# 工具调用载体（对齐 s20 permission_hook 的 block.name / block.input）
+# 待检查的工具调用
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -109,13 +97,13 @@ def read_only_allows(block: ToolUseBlock) -> bool:
 
 
 # 受 workspace 路径边界约束的文件工具（读+写）。
-# M4 决策：读工具也管，防 LLM 读 workspace 外的系统文件（/etc/passwd 等）。
+# 读取工具同样遵循工作区边界。
 # 含别名兼容（file_read/file_view/file_edit/file_write 是 forge-agent 的工具名；
-# read_file/write_file/edit 等是 s20 风格别名）。
+# read_file/write_file/edit 等也按文件工具处理）。
 _PATH_BOUND_TOOLS = frozenset({
     # forge-agent 工具
     "file_read", "file_view", "file_edit", "file_write",
-    # s20 / 通用别名
+    # 文件工具别名
     "read_file", "view_file", "write_file", "edit_file", "edit",
 })
 
@@ -134,16 +122,16 @@ def _confirm(prompt: str) -> PermissionDecision:
 
 class PermissionManager:
     """
-    工具调用权限校验器。移植自 s20 permission_hook:880-905。
+    工具调用权限校验器。
 
     构造参数：
         deny_patterns:    硬拦截黑名单（命令子串匹配）。默认合并 shell_tool
-                          _BLOCKED_PATTERNS + s20 DENY_LIST 的补充项。
+                          Shell 禁止模式及补充规则。
         confirm_keywords: 需确认的危险关键词。默认复用 shell_tool _CONFIRM_KEYWORDS。
         workspace:        允许写操作的根目录，文件路径越界即拒绝。None=不校验路径。
     """
 
-    # s20 DENY_LIST 里 shell_tool 未覆盖的补充项（code.py:876）
+    # Shell 工具基础规则以外的拒绝项
     _EXTRA_DENY = ("sudo", "shutdown", "reboot")
 
     def __init__(
@@ -196,7 +184,7 @@ class PermissionManager:
             return self._check_command(block.input.get("cmd")
                                        or block.input.get("command") or "")
 
-        # 文件工具（读+写）：路径越界即拒绝（M4：读工具也纳入，
+        # 文件工具：读取和写入都受工作区边界约束（
         # 防 LLM 读 workspace 外的系统文件如 /etc/passwd 泄露）
         if block.name in _PATH_BOUND_TOOLS:
             path = block.input.get("path", "")
@@ -246,7 +234,7 @@ class PermissionManager:
 
 def _path_escape_reason(path: str, workspace: str) -> str:
     """
-    路径是否逃逸 workspace（移植 s20 safe_path 的意图）。
+    检查路径是否超出工作区。
     返回空串表示安全，非空为拒绝原因。
     """
     import os

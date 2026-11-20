@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "coding-agent"
 version = "0.1.0"
-description = "A general-purpose coding agent supporting Claude, OpenAI, DeepSeek, Groq and Ollama"
+description = "A command-line coding agent and evaluation harness supporting Claude, OpenAI, DeepSeek, Groq and Ollama"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.30.0",
@@ -28,9 +28,9 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "httpx>=0.27.0",
 ]
-api = [
-    "fastapi>=0.110.0,<0.116.0",
-    "uvicorn>=0.27.0,<0.35.0",
+keyring = [
+    "pywin32>=306; sys_platform == 'win32'",
+    "keyring>=25; sys_platform != 'win32'",
 ]
 full = [
     "tiktoken>=0.7.0",
@@ -47,7 +47,7 @@ forgeAgent = "entry.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*", "runtime*", "ipc*", "harness*", "evals*", "skills*", "mcp_integration*", "experience*", "project_memory*"]
+include = ["agent*", "llm*", "tools*", "context*", "entry*", "config*", "task*", "runtime*", "durable_runtime*", "ipc*", "harness*", "evals*", "skills*", "mcp_integration*", "experience*", "project_memory*"]
 
 [tool.setuptools.package-data]
 tools = ["sandbox.Dockerfile"]

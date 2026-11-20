@@ -1,7 +1,7 @@
 """
 tests/test_agent_bus.py
 
-M2 Task 2.1：AgentBus 纯 pub/sub 异步消息总线测试。
+验证 AgentBus 异步发布订阅。
 覆盖：单订阅、多订阅广播、通配 topic 路由、unsubscribe、无订阅者丢弃。
 """
 

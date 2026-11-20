@@ -1,4 +1,4 @@
-"""Structured Planning runtime state for P2-1 / Planning v2.
+"""Runtime state for structured plans.
 
 The LLM owns semantic planning decisions. Runtime owns stable step identity, version
 lineage, legal state transitions, and the currently valid planning control surface.
@@ -403,6 +403,25 @@ class PlanningRuntime:
     @property
     def requires_plan(self) -> bool:
         return self.decision.enabled
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "plan": self.current_plan.to_dict() if self.current_plan else None,
+            "revisions": [revision.__dict__ for revision in self.revisions],
+            "legacy_step_aliases": dict(self._legacy_step_aliases),
+        }
+
+    def restore(self, state: dict[str, Any]) -> None:
+        if state.get("schema_version") != 1:
+            raise ValueError("unsupported Planning snapshot")
+        plan = state["plan"]
+        self.current_plan = ExecutionPlan.from_payload(
+            plan, version=plan["version"], previous_version=plan["previous_version"],
+            revision_reason=plan["revision_reason"], allow_status=True,
+        ) if plan else None
+        self.revisions = [PlanRevision(**revision) for revision in state["revisions"]]
+        self._legacy_step_aliases = dict(state["legacy_step_aliases"])
 
     def is_control(self, name: str) -> bool:
         return self.decision.enabled and name in PLAN_CONTROL_NAMES

@@ -239,6 +239,100 @@ def test_pr_retry_does_not_repeat_commit_or_push(tmp_path, monkeypatch):
     )
 
 
+def test_durable_delivery_records_unknown_pr_response(tmp_path, monkeypatch, record_property):
+    from durable_runtime import DurableRuntimeStore
+    from durable_runtime.run_manager import DurableRun
+    from project_memory.identity import ProjectIdentityResolver
+
+    repo = _repo(tmp_path)
+    (repo / "changed.txt").write_text("change\n", encoding="utf-8")
+    runtime_root = tmp_path / "runtime"
+    identity = ProjectIdentityResolver.resolve(repo)
+
+    def timeout(**kwargs):
+        raise TimeoutError("response lost")
+
+    with DurableRuntimeStore(identity, runtime_root) as store:
+        run = DurableRun(store, "run", "run")
+        run.create(Task("delivery fixture", str(repo)), "github_issue")
+        result = _result()
+        run.checkpoint(2, "delivery_pending", {"result": result.to_dict()}, status="delivery_pending")
+        assert github_issue.deliver_pull_request(
+            result, str(repo), _BRANCH, "fix: resolve issue #1", "owner/repo",
+            "Fix issue", "body", pr_creator=timeout, durable=run,
+        ) is None
+        assert result.delivery_status == "pr_failed"
+    with DurableRuntimeStore(identity, runtime_root) as store:
+        run = DurableRun(store, "run", "run")
+        states = dict(store._conn.execute("SELECT name, state FROM operations"))
+        assert states == {"git_stage": "result_committed", "git_commit": "result_committed",
+                          "git_push": "result_committed", "github_create_pr": "outcome_unknown"}
+        assert store._conn.execute("SELECT status FROM runs").fetchone()[0] == "reconciliation_required"
+        record_property("unknown_outcome_detected", 1)
+        url = "https://github.com/owner/repo/pull/42"
+        monkeypatch.setattr("durable_runtime.reconcilers.inspect_remote_delivery",
+                            lambda row, identity: {"outcome": "applied",
+                                                    "head_commit": _git(repo, "rev-parse", "HEAD"),
+                                                    "pull_request_number": 42, "url": url})
+        from durable_runtime.recovery import reconcile_delivery
+
+        assert reconcile_delivery(run) == url
+        assert run.load_checkpoint()["result"]["delivery_status"] == "delivered"
+        assert store._conn.execute("SELECT count(*) FROM operations WHERE name='github_create_pr'").fetchone()[0] == 1
+        record_property("duplicate_side_effect_executions", 0)
+
+
+def test_durable_push_retry_requires_verified_absent_ref(tmp_path, monkeypatch, record_property):
+    from durable_runtime import DurableRuntimeStore
+    from durable_runtime.reconcilers import inspect_remote_delivery
+    from durable_runtime.recovery import authorize_file_retry, resolve_operation
+    from durable_runtime.run_manager import DurableRun
+    from project_memory.identity import ProjectIdentityResolver
+
+    repo = _repo(tmp_path)
+    (repo / "changed.txt").write_text("fixture")
+    root = tmp_path / "runtime"
+    identity = ProjectIdentityResolver.resolve(repo)
+    args = (_result(), str(repo), _BRANCH, "fix: resolve issue #1", "owner/repo", "fixture", "fixture", "main")
+    real_push = github_issue.push_branch
+
+    def disconnected(*args, **kwargs):
+        raise RuntimeError("fixture transport disconnected before sending the ref")
+
+    with DurableRuntimeStore(identity, root) as store:
+        run = DurableRun(store, "push-run", "push-run")
+        run.create(Task("delivery fixture", str(repo)), "github_issue")
+        with monkeypatch.context() as fault:
+            fault.setattr(github_issue, "push_branch", disconnected)
+            assert github_issue.deliver_pull_request(*args, durable=run) is None
+    with DurableRuntimeStore(identity, root) as store:
+        row = store._conn.execute("SELECT * FROM operations WHERE name='git_push'").fetchone()
+        proof = inspect_remote_delivery(row, identity)
+        assert proof["outcome"] == "not_applied"
+        operation_id = row["operation_id"]
+        resolve_operation(store, operation_id, "absent", action="resolve_not_applied",
+                          actor="fixture", reason="remote ref absent", evidence=proof)
+    with DurableRuntimeStore(identity, root) as store:
+        authorize_file_retry(store, operation_id, "retry", actor="fixture", reason="remote ref absent")
+    used_absence_lease = []
+
+    def retry(path, branch, *, expect_absent=False):
+        used_absence_lease.append(expect_absent)
+        return real_push(path, branch, expect_absent=expect_absent)
+
+    monkeypatch.setattr(github_issue, "push_branch", retry)
+    with DurableRuntimeStore(identity, root) as store:
+        run = DurableRun(store, "push-run", "push-run")
+        assert github_issue.deliver_pull_request(
+            *args, durable=run, pr_creator=lambda **_: "https://github.com/owner/repo/pull/51",
+        )
+        child = store._conn.execute("SELECT * FROM operations WHERE parent_operation_id=?", (operation_id,)).fetchone()
+        assert child["state"] == "result_committed"
+        assert inspect_remote_delivery(child, identity)["outcome"] == "applied"
+    assert used_absence_lease == [True]
+    record_property("duplicate_side_effect_executions", 0)
+
+
 def test_delivery_outcome_appends_to_existing_trace(tmp_path):
     task = Task("issue", str(tmp_path), task_id="delivery-trace")
     log = EventLog.create(

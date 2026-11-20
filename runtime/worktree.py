@@ -1,22 +1,7 @@
-"""
-runtime/worktree.py
+"""为任务创建或重新绑定 Git worktree。
 
-Git Worktree 异步事务上下文（M1 Task 1.2）。
-
-把 s20_comprehensive/code.py 的同步函数式 worktree 系统（171-283 行）迁移成
-异步 WorktreeSession。完整保留 s20 的命令与约定：
-- git worktree add <path> -b wt/<name> <base>
-- git worktree remove <path> --force  +  git branch -D wt/<name>
-- 名字校验规则（validate_worktree_name，code.py:181）
-- 分支命名约定 wt/<name>
-
-核心语义（M1 任务规划 Task 1.2）：
-- __aenter__ 创建隔离工作区（可选绑定 TaskEngine）
-- __aexit__ 无论是否抛异常，强制 git worktree remove --force + 清理残余
-  → 智能体崩溃 / 测试失败时文件系统能安全、干净地回滚
-
-并发模型：Git 命令使用 argv 形式的 subprocess 执行，并通过
-asyncio.to_thread 移出事件循环；不依赖同步的 Runtime 抽象。
+WorktreeSession 管理任务绑定、成果检查和清理。Git 命令在线程中运行，
+避免阻塞异步编排器。
 """
 
 from __future__ import annotations
@@ -40,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# 名字校验（移植自 s20 code.py:178-189）
+# 工作树名称校验
 # ---------------------------------------------------------------------------
 
 VALID_WT_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -241,6 +226,27 @@ class WorktreeSession:
         logger.info("[worktree] created: %s at %s", self._name, self.path)
         return self
 
+    async def attach(self, binding: dict) -> None:
+        """Attach an existing linked worktree after verifying its Git identity."""
+        if (self.path.is_symlink() or not self.path.is_dir()
+                or str(self.path.resolve()) != binding["path"] or self.branch != binding["branch"]):
+            raise WorktreeError("saved worktree path or branch differs")
+        commands = [
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            ["rev-parse", "--show-toplevel"],
+            ["symbolic-ref", "--short", "HEAD"],
+            ["merge-base", "--is-ancestor", binding["base"], "HEAD"],
+        ]
+        main_ok, common = await self._run_git(commands[0])
+        actual = [await self._run_git_result_in(str(self.path), command) for command in commands]
+        if (not main_ok or not all(ok for ok, _ in actual)
+                or Path(actual[0][1]).resolve() != Path(common).resolve()
+                or Path(actual[1][1]).resolve() != self.path.resolve()
+                or actual[2][1] != self.branch):
+            raise WorktreeError("saved worktree Git identity could not be verified")
+        self._base_commit = binding["base"]
+        self._created = True
+
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """
         无论是否异常，强制清理：git worktree remove --force → 删分支 → 兜底 rmtree。
@@ -285,7 +291,7 @@ class WorktreeSession:
                     ) from exc
             return
 
-        # 安全门：非强制模式下，有改动则 refuse 清理（参考 s20 code.py:253-266）
+        # 非强制清理保留有改动的工作树。
         if not force:
             changes = await self.inspect_changes()
             if changes.inspection_error:
@@ -431,7 +437,7 @@ class WorktreeSession:
         return out.splitlines()[0].strip() if ok and out.strip() else None
 
     def keep(self) -> None:
-        """标记保留 worktree 供 review，后续 _cleanup 跳过清理（参考 s20 code.py:276）。"""
+        """标记工作树以供审查，清理阶段将保留它。"""
         self._keep = True
 
     async def close(self, discard_changes: bool | None = None) -> None:

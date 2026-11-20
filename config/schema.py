@@ -139,6 +139,7 @@ class MCPServerConfig:
     url: str | None = None
     timeout_seconds: float = 30.0
     trust_read_only_annotations: bool = False
+    recovery_queries: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,17 @@ class MemoryConfig:
     defer_promotion: bool = False
 
 
+@dataclass(frozen=True)
+class DurableRuntimeConfig:
+    # Enable by default only after replay and all entrypoints meet the runtime contract.
+    enabled: bool = False
+    root: str | None = None
+    busy_timeout_ms: int = 5000
+    archive_enabled: bool = True
+    archive_inline_limit_bytes: int = 65_536
+    archive_read_max_chars: int = 16_000
+
+
 @dataclass
 class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -167,6 +179,13 @@ class AppConfig:
     context: ContextConfig = field(default_factory=ContextConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    durable_runtime: DurableRuntimeConfig = field(default_factory=DurableRuntimeConfig)
+    cache_audit_enabled: bool = True
+    cache_audit_retention_days: int = 90
+    cache_audit_store_component_hashes: bool = True
+    onboarding_enabled: bool = True
+    onboarding_auto_start: bool = True
+    workspace_trust_required: bool = True
 
 
 _ENV_RE = re.compile(r"\$\{(\w+)\}")
@@ -256,6 +275,11 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     raw = _expand_env(config_path.read_text(encoding="utf-8"))
     data: dict[str, Any] = yaml.safe_load(raw) or {}
     config = _parse(data)
+    from config.credentials import PREFIX, keyring_credential
+
+    for model in (config.llm, *config.model_profiles.values()):
+        if isinstance(model.api_key, str) and model.api_key.startswith(PREFIX):
+            model.api_key = keyring_credential(model.api_key) or ""
     if not explicit_path and config_path == Path.home() / ".config" / "forge-agent" / "config.yaml":
         selected_path = config_path.parent / "selected-model"
         if selected_path.exists():
@@ -291,6 +315,43 @@ def save_selected_model(name: str, *, profile: bool = False) -> None:
 def _parse(data: dict[str, Any]) -> AppConfig:
     llm_raw = data.get("llm", {})
     agent_raw = data.get("agent", {})
+    durable_raw = data.get("durable_runtime", {})
+    if not isinstance(durable_raw, dict) or set(durable_raw) - set(DurableRuntimeConfig.__dataclass_fields__):
+        raise ValueError("invalid durable_runtime settings")
+    durable_enabled = durable_raw.get("enabled", False)
+    if type(durable_enabled) is not bool:
+        raise ValueError("durable_runtime.enabled must be boolean")
+    durable_root = durable_raw.get("root")
+    if durable_root is not None and (not isinstance(durable_root, str) or not Path(durable_root).expanduser().is_absolute()):
+        raise ValueError("durable_runtime.root must be an absolute path or null")
+    durable_timeout = durable_raw.get("busy_timeout_ms", 5000)
+    if type(durable_timeout) is not int or durable_timeout <= 0:
+        raise ValueError("durable_runtime.busy_timeout_ms must be a positive integer")
+    archive_enabled = durable_raw.get("archive_enabled", True)
+    if type(archive_enabled) is not bool:
+        raise ValueError("durable_runtime.archive_enabled must be boolean")
+    archive_limit = durable_raw.get("archive_inline_limit_bytes", 65_536)
+    archive_chars = durable_raw.get("archive_read_max_chars", 16_000)
+    if type(archive_limit) is not int or archive_limit <= 0:
+        raise ValueError("durable_runtime.archive_inline_limit_bytes must be positive")
+    if type(archive_chars) is not int or not 1 <= archive_chars <= 16_000:
+        raise ValueError("durable_runtime.archive_read_max_chars must be in 1..16000")
+    durable_runtime = DurableRuntimeConfig(durable_enabled, durable_root, durable_timeout,
+                                           archive_enabled, archive_limit, archive_chars)
+    audit_raw = data.get("cache_audit", {})
+    audit_flags = {"enabled", "store_component_hashes"}
+    if (not isinstance(audit_raw, dict) or set(audit_raw) - (audit_flags | {"retention_days"})
+            or any(type(audit_raw.get(key, True)) is not bool for key in audit_flags)):
+        raise ValueError("invalid cache_audit settings")
+    audit_retention = audit_raw.get("retention_days", 90)
+    if type(audit_retention) is not int or audit_retention <= 0:
+        raise ValueError("cache_audit.retention_days must be a positive integer")
+    onboarding_raw = data.get("onboarding", {})
+    onboarding_flags = {"enabled", "auto_start", "workspace_trust_required"}
+    if (not isinstance(onboarding_raw, dict) or set(onboarding_raw) - (onboarding_flags | {"credential_store"})
+            or any(type(onboarding_raw.get(key, True)) is not bool for key in onboarding_flags)
+            or onboarding_raw.get("credential_store", "env_file") != "env_file"):
+        raise ValueError("invalid onboarding settings")
     memory_raw = data.get("memory", {})
     if not isinstance(memory_raw, dict):
         raise ValueError("memory must be an object")
@@ -483,6 +544,14 @@ def _parse(data: dict[str, Any]) -> AppConfig:
             raise ValueError(
                 f"mcp server {server_id!r} trust_read_only_annotations must be boolean"
             )
+        recovery_queries = server_raw.get("recovery_queries", {})
+        if not isinstance(recovery_queries, dict) or any(
+            not isinstance(tool, str) or not tool.strip() or not isinstance(query, dict)
+            or set(query) != {"query_tool", "argument"} or query.get("query_tool") == tool
+            or any(not isinstance(value, str) or not value.strip() for value in query.values())
+            for tool, query in recovery_queries.items()
+        ):
+            raise ValueError("MCP recovery_queries must map a tool to a distinct query_tool and correlation argument")
         if timeout_seconds <= 0:
             raise ValueError(f"mcp server {server_id!r} timeout_seconds must be positive")
         args_raw = server_raw.get("args", [])
@@ -517,6 +586,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
                 url=url,
                 timeout_seconds=timeout_seconds,
                 trust_read_only_annotations=trust_read_only_annotations,
+                recovery_queries=recovery_queries,
             )
         )
     mcp = MCPConfig(enabled=mcp_enabled, servers=tuple(mcp_servers))
@@ -613,7 +683,13 @@ def _parse(data: dict[str, Any]) -> AppConfig:
         if "max_tokens" in settings and "max_output_tokens" not in settings:
             profile.max_output_tokens = settings["max_tokens"]
         profiles[name] = profile
-    config = AppConfig(llm=llm, model_profiles=profiles, agent=agent, tools=tools, context=context, mcp=mcp, memory=memory)
+    config = AppConfig(llm=llm, model_profiles=profiles, agent=agent, tools=tools, context=context, mcp=mcp, memory=memory,
+                       durable_runtime=durable_runtime, cache_audit_enabled=audit_raw.get("enabled", True),
+                       cache_audit_retention_days=audit_retention,
+                       cache_audit_store_component_hashes=audit_raw.get("store_component_hashes", True),
+                       onboarding_enabled=onboarding_raw.get("enabled", True),
+                       onboarding_auto_start=onboarding_raw.get("auto_start", True),
+                       workspace_trust_required=onboarding_raw.get("workspace_trust_required", True))
     _refresh_budget_bridges(config)
     return config
 

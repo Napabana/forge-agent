@@ -24,6 +24,7 @@ import logging
 import os
 import shlex
 import time
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +66,7 @@ from agent.task import (
 from harness.executor import ToolExecutionCanceled, ToolExecutorInfrastructureError
 from llm.request_budget import RequestBudgetExhausted
 from llm.base import LLMBackend, LLMMessage, LLMToolSchema
+from llm.cache_audit import capture_provider_requests, record_cache_audit
 from llm.errors import LLMCallbackError, LLMErrorInfo, classify_llm_error
 from llm.tool_schema import normalize_optional_nulls
 from llm.usage import SessionUsage
@@ -73,6 +75,8 @@ from skills.runtime import SKILL_LOAD, SkillRuntime
 from tools.base import ToolErrorType, ToolRegistry
 
 if TYPE_CHECKING:
+    from config.schema import DurableRuntimeConfig
+    from durable_runtime.run_manager import DurableRun
     from harness.hooks import Hooks
 
 logger = logging.getLogger(__name__)
@@ -162,6 +166,12 @@ class AgentConfig:
     repo_map_cache_dir: str | None = None
     memory_config: object = None
     memory_runtime: object = None
+    durable_runtime_config: DurableRuntimeConfig | None = None
+    durable_run: DurableRun | None = None
+    cache_audit_enabled: bool = True
+    cache_audit_retention_days: int = 90
+    cache_audit_store_component_hashes: bool = True
+    workspace_trust_required: bool = False
 
 
 class Agent:
@@ -264,12 +274,42 @@ class Agent:
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
                 raise ValueError("Trial budgets must be positive integers or None")
         self._usage_complete = True
-        result = self._run(task, log, history)
-        result.usage_complete = self._usage_complete and result.usage.llm_calls > 0
-        return result
+        self._durable_snapshot = None
+        archive_tool = None
+        durable = self._cfg.durable_run
+        if durable:
+            durable.log = log
+        if durable and durable.archive is not None:
+            from tools.archive_read import ArchiveReadTool
+
+            if self._registry.get_tool("archive_read") is not None:
+                raise ValueError("archive_read is reserved for the current Run")
+            archive_tool = ArchiveReadTool(durable.archive, self._is_cancel_requested,
+                                           self._cfg.durable_runtime_config.archive_read_max_chars)
+            self._registry.register(archive_tool)
+        try:
+            result = self._run(task, log, history)
+            result.usage_complete = self._usage_complete and result.usage.llm_calls > 0
+            if self._cfg.durable_run:
+                state = self._durable_snapshot()
+                state["usage_complete"] = result.usage_complete
+                self._cfg.durable_run.checkpoint(
+                    result.steps_taken + 1, "agent_result",
+                    {**state, "agent_result": result.to_dict()},
+                    status="paused" if result.termination_reason == "paused" else "agent_finished",
+                )
+            return result
+        finally:
+            self._durable_snapshot = None
+            self._prepared_history_override = None
+            if durable:
+                durable.log = None
+            if archive_tool is not None:
+                self._registry.unregister(archive_tool.name)
 
     def _run(self, task: Task, log: EventLog, history: ConversationHistory | None = None) -> RunResult:
         """执行一次完整的 agent 运行。"""
+        self._durable_view_step = None
         self._current_repo_path = task.repo_path
         self._model_repo_path = self._cfg.execution_workspace or task.repo_path
         self._repo_map_query = task.description
@@ -319,6 +359,7 @@ class Agent:
             SkillCatalog.discover(
                 task.repo_path,
                 global_root=self._cfg.skills_global_dir,
+                include_project=self._project_skills_trusted(task.repo_path),
             )
             if self._cfg.skills_enabled
             else SkillCatalog()
@@ -389,8 +430,135 @@ class Agent:
         candidate_snapshot: str | None = None
         candidate_hint_snapshot: str | None = None
         candidate_step = 0
+        durable = self._cfg.durable_run
+        first_step = 1
+        resumed_call = None
+        resumed_response = None
+        if durable:
+            from durable_runtime.run_manager import digest, encode
 
-        for step in range(1, task.max_steps + 1):
+            registry_signature = digest(encode([dataclasses.asdict(schema) for schema in
+                                                sorted(self._registry.get_schemas(), key=lambda entry: entry.name)]))
+            skill_signature = digest(encode([
+                {
+                    "definition": skill.render(max_chars=len(skill.instructions)),
+                    "root": str(skill.root), "source": skill.source,
+                    "references": {name: skill_catalog.resource_digest(skill, "references", name)
+                                   for name in skill.references},
+                    "scripts": {name: skill_catalog.resource_digest(skill, "scripts", name)
+                                for name in skill.scripts},
+                } for skill in skill_catalog.skills
+            ]))
+        if durable and durable.restoring:
+            from durable_runtime.store import StoreFormatError
+
+            saved = durable.load_checkpoint()
+            if (saved.get("bound_registry_digest"), saved.get("skill_catalog_digest")) != (registry_signature, skill_signature):
+                raise StoreFormatError("workspace tool registry or Skill content changed")
+            repository = saved["repository_state"]
+            current = {"worktree_path": task.repo_path, "repo_content_fingerprint": last_repo_content_state,
+                       "repo_revision": last_repo_state}
+            resumed_call = saved.get("pending_model_call")
+            expected_workspace = durable.committed_tool_workspace(resumed_call) or repository
+            if current != expected_workspace:
+                raise StoreFormatError("workspace changed since the checkpoint")
+            last_repo_state = repository["repo_revision"]
+            last_repo_content_state = repository["repo_content_fingerprint"]
+            guard = saved["completion_guard_state"]
+            first_step = saved["next_step"]
+            resumed_response = durable.pending_response(saved)
+            history.replace(ConversationHistory.from_dicts(saved["history"]).to_list())
+            self._memory_context = saved.get("memory_context", "")
+            policy = self._cfg.prepare_next_turn
+            if saved.get("compaction_state") is not None:
+                if policy is None or durable.archive is None:
+                    raise StoreFormatError("saved compaction requires a compatible archive and policy")
+                policy.restore(saved["compaction_state"], history)
+                if saved.get("prepared_view_step") == first_step:
+                    archived = durable.archive.restore_model_view(saved["model_archive_revision"])
+                    view = ConversationHistory.from_dicts(archived).to_list()
+                    self._prepared_history_override = self._annotate_archive_view(view, durable.archive)
+                    self._durable_view_step = first_step
+            usage = SessionUsage.from_dict(saved["usage"])
+            total_tokens = usage.total_tokens
+            self._usage_complete = saved["usage_complete"] and not durable.has_unknown_model_usage()
+            self._planning_runtime.restore(saved["planning_state"])
+            self._recovery_runtime.restore(saved["recovery_state"])
+            self._skill_runtime.restore(saved["skill_runtime_state"])
+            loop_detector.restore(saved["loop_detector_state"])
+            semantic_progress.restore(saved["semantic_progress_state"])
+            steps_without_semantic_progress = saved["steps_without_semantic_progress"]
+            recent_actions = list(saved["recent_actions"])
+            test_attempted = guard["test_attempted"]
+            last_test_passed = guard["last_test_passed"]
+            last_test_error_type = guard["last_test_error_type"]
+            last_successful_test_content_state = guard["last_successful_test_content_state"]
+            initial_repo_content_state = guard["initial_repo_content_state"]
+            initial_repo_state = guard["initial_repo_state"]
+            baseline_tests = guard["baseline_tests"]
+            initial_paths = set(guard["initial_paths"])
+            completion_checks = [
+                CheckEvidence(**{**check, "origin": CheckOrigin(check["origin"]), "outcome": CheckOutcome(check["outcome"])})
+                for check in guard["checks"]
+            ]
+            fatal_error_key, fatal_error_count = guard["fatal_error_key"], guard["fatal_error_count"]
+            candidate_snapshot = guard["candidate_snapshot"]
+            candidate_hint_snapshot = guard["candidate_hint_snapshot"]
+            candidate_step = guard["candidate_step"]
+
+        def durable_state() -> dict:
+            from context.compaction import TraceableCompaction
+
+            policy = self._cfg.prepare_next_turn
+            return {
+                "history": history.to_dicts(), "usage": usage.to_dict(),
+                "bound_registry_digest": registry_signature,
+                "skill_catalog_digest": skill_signature,
+                "memory_context": self._memory_context,
+                "usage_complete": self._usage_complete,
+                "planning_state": self._planning_runtime.snapshot(),
+                "recovery_state": self._recovery_runtime.snapshot(),
+                "skill_runtime_state": self._skill_runtime.snapshot(),
+                "loop_detector_state": loop_detector.snapshot(),
+                "semantic_progress_state": semantic_progress.snapshot(),
+                "compaction_state": policy.snapshot() if isinstance(policy, TraceableCompaction) else None,
+                "prepared_view_step": self._durable_view_step,
+                "steps_without_semantic_progress": steps_without_semantic_progress,
+                "recent_actions": recent_actions,
+                "repository_state": {
+                    "worktree_path": task.repo_path,
+                    "repo_revision": last_repo_state,
+                    "repo_content_fingerprint": last_repo_content_state,
+                },
+                "completion_guard_state": {
+                    "test_attempted": test_attempted, "last_test_passed": last_test_passed,
+                    "last_test_error_type": last_test_error_type,
+                    "last_successful_test_content_state": last_successful_test_content_state,
+                    "initial_repo_content_state": initial_repo_content_state,
+                    "initial_repo_state": initial_repo_state,
+                    "baseline_tests": baseline_tests,
+                    "initial_paths": sorted(initial_paths),
+                    "checks": [dataclasses.asdict(check) for check in completion_checks],
+                    "fatal_error_key": fatal_error_key,
+                    "fatal_error_count": fatal_error_count,
+                    "candidate_snapshot": candidate_snapshot,
+                    "candidate_hint_snapshot": candidate_hint_snapshot,
+                    "candidate_step": candidate_step,
+                },
+            }
+
+        if durable:
+            self._durable_snapshot = durable_state
+            if not durable.restoring:
+                durable.checkpoint(1, "agent_ready", durable_state(), status="running")
+
+        for step in range(first_step, task.max_steps + 1):
+            if durable and step > first_step:
+                durable.checkpoint(step, "step_completed", durable_state())
+            if durable and resumed_response is None and durable.store.pause_marker(durable.run_id).exists():
+                return RunResult(task.task_id, RunStatus.INCOMPLETE, "Paused at a safe execution boundary",
+                                 step - 1, total_tokens=total_tokens, usage=usage.snapshot(),
+                                 termination_reason="paused")
             resource_reason = None
             if self._cfg.max_model_calls is not None and usage.llm_calls >= self._cfg.max_model_calls:
                 resource_reason = "model_calls"
@@ -423,7 +591,7 @@ class Agent:
                     termination_reason="canceled",
                 )
 
-            if step > 1:
+            if step > 1 and resumed_response is None and self._durable_view_step != step:
                 prepare_result = self._prepare_next_turn(
                     task, step, history, repo_map, token_budget, log, total_tokens, usage
                 )
@@ -472,9 +640,18 @@ class Agent:
                     retry_after=error.retry_after,
                 )
 
+            replaying = resumed_response is not None
+            call_id = resumed_call if replaying else (
+                durable.start_model(step, messages, tools, durable_state()) if durable else None
+            )
             try:
-                response = self._call_with_retry(messages, tools, on_retry=log_retry)
+                with capture_provider_requests(
+                    bool(durable and self._cfg.cache_audit_enabled and not replaying), self._cache_prompt_parts,
+                ) as fingerprints:
+                    response = resumed_response if replaying else self._call_with_retry(messages, tools, on_retry=log_retry)
+                resumed_response = None
             except RequestBudgetExhausted as exc:
+                self._audit_provider_attempts(call_id, step, fingerprints)
                 reason = str(exc)
                 log.log_trace(EventType.LLM_CALL_FAILED, step, span_id=llm_span,
                               error_type="request_budget", error=reason,
@@ -487,6 +664,7 @@ class Agent:
                                  patch=self._get_git_diff(task.repo_path),
                                  termination_reason="resource_exhausted", resource_reason="request_budget")
             except Exception as exc:
+                self._audit_provider_attempts(call_id, step, fingerprints)
                 self._usage_complete = False
                 canceled = self._is_cancel_requested()
                 error = classify_llm_error(exc)
@@ -531,6 +709,9 @@ class Agent:
                     termination_reason="provider_error",
                 )
 
+            if durable and not replaying:
+                durable.commit_model(call_id, step, response, durable_state())
+                self._audit_provider_attempts(call_id, step, fingerprints, response.usage)
             log.log_trace(
                 EventType.LLM_CALL_FINISHED,
                 step,
@@ -923,10 +1104,26 @@ class Agent:
                         params,
                     )
 
+                operation_args = {}
+                if durable:
+                    from durable_runtime.operation_journal import ToolOperation
+
+                    def committed_workspace():
+                        return {
+                            "worktree_path": task.repo_path,
+                            "repo_revision": self._get_repo_state(task.repo_path),
+                            "repo_content_fingerprint": self._get_repo_content_state(
+                                task.repo_path, excluded_paths=(log.path.resolve(),),
+                            ),
+                        }
+                    operation_args["operation"] = ToolOperation(
+                        durable, call_id, step, action_event_ref, workspace_state=committed_workspace,
+                    )
                 try:
                     result = self._executor.execute(
                         tc.name,
                         tc.params,
+                        **operation_args,
                         decision_callback=log_permission_decision,
                         cancel_event=self._cfg.cancel_event,
                         invocation_callback=lambda: log.log_trace(
@@ -1400,6 +1597,24 @@ class Agent:
             resource_reason="max_steps",
         )
 
+    def _project_skills_trusted(self, repo_path: str) -> bool:
+        if not self._cfg.workspace_trust_required:
+            return True
+        if not (Path(repo_path) / ".agents" / "skills").is_dir():
+            return False
+        from durable_runtime.store import DurableRuntimeStore, StoreFormatError
+        from durable_runtime.workspace_trust import read_trust
+        from project_memory.identity import ProjectIdentityResolver
+
+        settings = self._cfg.durable_runtime_config
+        try:
+            with DurableRuntimeStore(ProjectIdentityResolver.resolve(repo_path),
+                                     settings.root if settings else None,
+                                     timeout_ms=settings.busy_timeout_ms if settings else 5000) as store:
+                return "project_skills" in read_trust(store)
+        except (OSError, StoreFormatError, ValueError):
+            return False
+
     @staticmethod
     def _completion_paths(repo_path: str) -> set[str]:
         root = Path(repo_path).resolve()
@@ -1707,6 +1922,23 @@ class Agent:
             return bool(is_set())
         return bool(event)
 
+    def _audit_provider_attempts(self, call_id, step, fingerprints, usage=None, *, kind=None) -> None:
+        durable = self._cfg.durable_run
+        if not durable or not call_id or not fingerprints:
+            return
+        request_kind = kind or ("worker" if durable.borrowed_owner else "generation")
+        try:
+            for attempt, fingerprint in enumerate(fingerprints, start=1):
+                last = attempt == len(fingerprints)
+                record_cache_audit(
+                    durable, call_id if last else f"{call_id}:{attempt}", step, type(self._backend).__name__,
+                    fingerprint, usage if last else None, request_kind=request_kind, attempt_index=attempt,
+                    logical_request_id=call_id, retention_days=self._cfg.cache_audit_retention_days,
+                    store_components=self._cfg.cache_audit_store_component_hashes,
+                )
+        except Exception as exc:
+            logger.warning("Cache audit could not be recorded: %s", type(exc).__name__)
+
     def _prepare_next_turn(
         self, task: Task, step: int, history: ConversationHistory, repo_map: RepoMap,
         token_budget: TokenBudget, log: EventLog, total_tokens: int, usage: SessionUsage,
@@ -1740,8 +1972,16 @@ class Agent:
             repo_map_content=repo_map_content,
             tool_schemas=schemas,
         )
+        from uuid import uuid4
+        from context.compaction import TraceableCompaction
+
+        semantic = isinstance(callback, TraceableCompaction)
         try:
-            prepared = callback(context)
+            with capture_provider_requests(bool(semantic and self._cfg.durable_run and self._cfg.cache_audit_enabled)) as fingerprints:
+                prepared = callback(context)
+            if fingerprints:
+                self._audit_provider_attempts(uuid4().hex, step, fingerprints, callback.last_request_usage,
+                                              kind="semantic_compaction")
         except Exception as exc:
             log.log_trace(
                 EventType.PREPARE_NEXT_TURN_FAILED,
@@ -1764,7 +2004,16 @@ class Agent:
         if refreshed:
             self.invalidate_repo_map_cache(task.repo_path)
         if prepared is not None and prepared.history_override is not None:
-            self._prepared_history_override = prepared.history_override
+            durable = self._cfg.durable_run
+            override = prepared.history_override
+            if durable and durable.archive is not None and self._durable_snapshot is not None:
+                model_history = ConversationHistory()
+                model_history.add_many(list(prepared.history_override))
+                self._durable_view_step = step
+                durable.checkpoint(step, "context_prepared", {**self._durable_snapshot(),
+                                                           "model_history": model_history.to_dicts()})
+                override = self._annotate_archive_view(override, durable.archive)
+            self._prepared_history_override = override
         log.log_trace(
             EventType.PREPARE_NEXT_TURN_FINISHED,
             step,
@@ -1789,6 +2038,15 @@ class Agent:
         if prepared is not None and prepared.messages:
             history.add_many(list(prepared.messages))
         return None
+
+    @staticmethod
+    def _annotate_archive_view(messages, archive) -> tuple[LLMMessage, ...]:
+        return tuple(
+            dataclasses.replace(message, content=message.content +
+                                f"\n[Archived context: use archive_read with id {archive_id} to find source IDs.]")
+            if archive_id else message
+            for message, archive_id in zip(messages, archive.model_archive_ids(), strict=True)
+        )
 
     def _active_tool_schemas(self) -> tuple[LLMToolSchema, ...]:
         """Single source of truth for schemas shown in prompt and sent to provider."""
@@ -1841,6 +2099,8 @@ class Agent:
         skill_context = self._skill_runtime.render_context() if self._skill_runtime else ""
         self._planning_context_cache = planning_context
         self._skill_context_cache = skill_context
+        self._cache_prompt_parts = {"repo_map": repo_map_content, "skills": skill_context,
+                                    "project_memory": getattr(self, "_memory_context", "")}
         constraint_context = (
             "## Trusted execution constraints\n"
             "Strict read_only is enabled. Repository writes, tests, unknown tools and MCP are denied. "

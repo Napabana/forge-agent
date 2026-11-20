@@ -138,51 +138,6 @@ def test_negative_provider_tokens_fail_closed(tmp_path):
         analyze_trace(t)
 
 
-def test_real_typer_pilot_r1_archived_trace_and_harbor_result():
-    # These are immutable, sanitized trial artifacts committed in this branch.
-    root = Path(__file__).resolve().parents[1]
-    base = root / "docs/research/harbor-typer-1788-qwen38-27b-pilot-r1"
-    actual = audit_trial(
-        base / "trace.sanitized.jsonl",
-        base / "harbor-result.sanitized.json",
-        verifier_details=base / "verifier-reward-details.json",
-    )
-    trace, harbor = actual["trace"], actual["harbor"]
-    assert trace["run_id"] == "c3f93ed2_20261113_152814"
-    assert trace["started_calls"] == 30
-    assert trace["finished_calls"] == 29
-    assert trace["failed_calls"] == 0
-    assert trace["retry_events"] == 2
-    assert len(trace["unresolved_calls"]) == 1
-    assert trace["unresolved_calls"][0]["step"] == 30
-    assert trace["terminal"] is None and not trace["trace_complete"]
-    assert trace["observed_finished_usage"] == {
-        "input_tokens": 849931,
-        "cached_tokens": 0,
-        "uncached_input_tokens": 849931,
-        "output_tokens": 18792,
-        "reasoning_tokens": 15264,
-        "total_tokens": 868723,
-    }
-    assert harbor["exception_type"] == "AgentTimeoutError"
-    assert harbor["verifier_reward"] == 1.0
-    assert harbor["verifier_details_parse_status"] == "ok"
-    assert harbor["agent_usage_reported"]["n_input_tokens"] is None
-    assert actual["observed_rollout"] == "external_timeout"
-    assert actual["scoreable"] is None and actual["provider_billed_cost"] is None
-
-
-def test_real_pilot_manifest_matches_trace_sha256():
-    import hashlib
-    root = Path(__file__).resolve().parents[1]
-    base = root / "docs/research/harbor-typer-1788-qwen38-27b-pilot-r1"
-    manifest = json.loads((base / "manifest.json").read_text(encoding="utf-8"))
-    expected = next(x["sha256"] for x in manifest["files"]
-                    if x["path"] == "trace.sanitized.jsonl")
-    actual = hashlib.sha256((base / "trace.sanitized.jsonl").read_bytes()).hexdigest()
-    assert actual == expected
-
-
 def test_missing_provider_token_field_is_not_silently_complete(tmp_path):
     t, _ = fixture(tmp_path)
     rows = t.read_text().splitlines()

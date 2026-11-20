@@ -181,7 +181,7 @@ def test_trace_v2_records_prepare_llm_tool_and_configured_hooks(tmp_path):
 
 def test_nested_schema_redaction_happens_at_jsonl_boundary_and_keeps_usage(tmp_path):
     task = Task("redact", str(tmp_path), task_id="redaction")
-    log = EventLog.create(task, log_dir=str(tmp_path / "logs"), entrypoint="api")
+    log = EventLog.create(task, log_dir=str(tmp_path / "logs"), entrypoint="eval")
     log.log_task_start(task)
     action = Action(
         ActionType.TOOL_CALL,
@@ -351,7 +351,7 @@ def test_provider_error_trace_is_redacted_and_normalized_at_run_termination(tmp_
         log_dir=str(tmp_path / "logs"),
     )
 
-    result = runner.run(RunRequest(task=task, entrypoint="api"))
+    result = runner.run(RunRequest(task=task, entrypoint="eval"))
     assert result.status is RunStatus.FAILED
     assert result.termination_reason == "provider_error"
     raw = (tmp_path / "logs" / (result.trace_path.split("/")[-1])).read_text(
@@ -372,7 +372,7 @@ def test_provider_error_trace_is_redacted_and_normalized_at_run_termination(tmp_
     assert REDACTED in termination["error"]
 
 
-def test_cancel_trace_uses_api_entrypoint_and_terminal_reason(tmp_path):
+def test_cancel_trace_preserves_cli_label_and_terminal_reason(tmp_path):
     cancel = threading.Event()
     cancel.set()
     task = Task("cancel", str(tmp_path), task_id="cancel-trace", max_steps=1)
@@ -389,7 +389,7 @@ def test_cancel_trace_uses_api_entrypoint_and_terminal_reason(tmp_path):
     )
     assert result.status is RunStatus.CANCELED
     assert termination["termination_reason"] == "canceled"
-    assert termination["entrypoint"] == "api"
+    assert termination["entrypoint"] == "cli"
 
 
 def test_acceptance_and_delivery_trace_statuses(tmp_path):
@@ -436,25 +436,26 @@ def test_acceptance_and_delivery_trace_statuses(tmp_path):
     [
         (RunRequest(Task("cli", ".")), "cli"),
         (RunRequest(Task("chat", "."), history=ConversationHistory()), "chat"),
-        (RunRequest(Task("api", "."), cancel_event=threading.Event()), "api"),
+        (RunRequest(Task("cancelable", "."), cancel_event=threading.Event()), "cli"),
+        (RunRequest(Task("eval", "."), entrypoint="eval"), "eval"),
         (
             RunRequest(Task("issue", ".", issue_url="https://github.com/o/r/issues/1")),
             "github_issue",
         ),
     ],
 )
-def test_four_entrypoints_resolve_to_one_trace_schema(run_request, expected):
+def test_trace_labels_identify_the_run_mode(run_request, expected):
     assert _resolve_entrypoint(run_request) == expected
 
 
 def test_trace_context_propagates_into_nested_event_log_create(tmp_path):
     task = Task("nested", str(tmp_path), task_id="nested-context")
-    with bind_trace_context(entrypoint="api", session_id="api-session"):
+    with bind_trace_context(entrypoint="chat", session_id="chat-session"):
         log = EventLog.create(task, log_dir=str(tmp_path / "logs"))
     log.log_task_start(task)
     payload = log.replay()[0].payload
-    assert payload["entrypoint"] == "api"
-    assert payload["session_id"] == "api-session"
+    assert payload["entrypoint"] == "chat"
+    assert payload["session_id"] == "chat-session"
     log.close()
 
 

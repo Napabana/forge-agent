@@ -123,7 +123,7 @@ class ShellTool(BaseTool):
         self._allow_git_mutation = bool(allow_git_mutation)
         self._full_access = full_access
         # default_cwd：LLM 未在 params 里显式传 cwd 时的默认工作目录。
-        # orchestrator 用它把工具执行锁定到 worktree（M4 第二波）。
+        # 隔离运行时由编排器传入工作树目录。
         self._default_cwd = default_cwd
 
     @property

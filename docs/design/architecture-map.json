@@ -1,68 +1,64 @@
 {
   "version": 1,
-  "verified_against": "fd700bdf48ace5f03bb9feab49d72f7c12e5ddcb",
-  "last_verified": "2026-11-12",
-  "source_index": "docs/design/源码索引.md",
+  "source_index": "docs/design/source-index.md",
   "knowledge_documents": [
+    "docs/design/agent-tools.md",
+    "docs/design/architecture.md",
+    "docs/design/configuration.md",
+    "docs/design/context.md",
+    "docs/design/durable-runtime.md",
+    "docs/design/evaluation.md",
+    "docs/design/execution.md",
+    "docs/design/extensions.md",
+    "docs/design/isolation-acceptance.md",
+    "docs/design/MAINTENANCE.md",
+    "docs/design/planning-recovery.md",
+    "docs/design/project-memory.md",
+    "docs/design/source-index.md",
+    "docs/design/workers.md",
+    "docs/PROJECT_STATE.md",
     "docs/README.md",
-    "docs/source-navigation.md",
-    "docs/interview-review.md",
     "docs/reference.md",
-    "docs/design/Forge-Agent-当前代码架构.md",
-    "docs/design/01-任务执行主链.md",
-    "docs/design/02-Agent与Tool生命周期.md",
-    "docs/design/03-Context与RepoMap.md",
-    "docs/design/04-Planning与Recovery.md",
-    "docs/design/05-Skills与MCP.md",
-    "docs/design/06-隔离与独立验收.md",
-    "docs/design/07-Evaluation与Evolution.md",
-    "docs/design/09-Supervisor-Worker架构.md",
-    "docs/design/10-Project-Memory-架构.md",
-    "docs/design/11-Long-Horizon-Runtime-架构.md",
-    "docs/design/源码索引.md",
-    "docs/design/MAINTENANCE.md"
+    "docs/source-navigation.md",
+    "agent/README.md",
+    "config/README.md",
+    "context/README.md",
+    "durable_runtime/README.md",
+    "entry/README.md",
+    "evals/README.md",
+    "experience/README.md",
+    "harness/README.md",
+    "ipc/README.md",
+    "llm/README.md",
+    "mcp_integration/README.md",
+    "project_memory/README.md",
+    "runtime/README.md",
+    "skills/README.md",
+    "task/README.md",
+    "tools/README.md",
+    "scripts/README.md",
+    "tests/README.md",
+    "examples/README.md",
+    "evals/coding_agent/README.md",
+    "evals/long_horizon/README.md",
+    "examples/harbor/README.md"
   ],
   "mermaid_documents": {
-    "docs/README.md": 1,
-    "docs/design/Forge-Agent-当前代码架构.md": 2,
-    "docs/design/01-任务执行主链.md": 1,
-    "docs/design/02-Agent与Tool生命周期.md": 1,
-    "docs/design/03-Context与RepoMap.md": 1,
-    "docs/design/04-Planning与Recovery.md": 1,
-    "docs/design/05-Skills与MCP.md": 1,
-    "docs/design/06-隔离与独立验收.md": 1,
-    "docs/design/07-Evaluation与Evolution.md": 1,
-    "docs/design/09-Supervisor-Worker架构.md": 1,
-    "docs/design/10-Project-Memory-架构.md": 1,
-    "docs/design/MAINTENANCE.md": 1
+    "docs/design/architecture.md": 1
   },
   "search_terms": [
-    "ReAct",
     "ExecutionRunner",
     "ToolExecutor",
     "RepoMap",
     "TokenBudget",
-    "Context Compaction",
-    "Planning",
-    "Recovery",
-    "Permission",
-    "Hooks",
-    "MCP",
-    "Skills",
-    "EvaluationHarness",
-    "PromotionGate",
-    "Git Worktree",
-    "Docker",
-    "Project Memory",
-    "设计取舍",
-    "Long-horizon Runtime",
-    "Durable Runtime Store",
-    "Tool Journal",
+    "ContextArchive",
     "Unknown Outcome",
-    "Context Archive",
-    "ArchiveRead",
     "Prefix Cache Audit",
-    "Onboarding"
+    "Git worktree",
+    "MCP",
+    "Worker",
+    "EvaluationHarness",
+    "PromotionGate"
   ],
   "source_roots": [
     "agent",
@@ -76,34 +72,32 @@
     "llm",
     "mcp_integration",
     "project_memory",
+    "durable_runtime",
     "runtime",
     "skills",
     "task",
-    "tools"
+    "tools",
+    "scripts",
+    "examples"
   ],
   "modules": [
     {
       "id": "task_execution",
       "name": "Agent Execution",
-      "document": "docs/design/01-任务执行主链.md",
+      "document": "docs/design/execution.md",
       "source_patterns": [
         "agent/runner.py",
         "agent/orchestrate.py",
         "agent/coordinator.py",
         "agent/task.py",
-        "entry/api.py",
-        "entry/api_store.py",
-        "entry/chat.py",
-        "entry/chat_input.py",
-        "entry/cli.py",
-        "entry/github_issue.py",
+        "entry/*.py",
         "ipc/*.py",
         "task/*.py"
       ],
       "related_documents": [
-        "docs/design/Forge-Agent-当前代码架构.md",
-        "docs/design/09-Supervisor-Worker架构.md",
-        "docs/design/源码索引.md",
+        "docs/design/architecture.md",
+        "docs/design/workers.md",
+        "docs/design/source-index.md",
         "docs/README.md"
       ],
       "cross_impacts": [
@@ -132,7 +126,7 @@
     {
       "id": "agent_tool_lifecycle",
       "name": "Tool Lifecycle & Security",
-      "document": "docs/design/02-Agent与Tool生命周期.md",
+      "document": "docs/design/agent-tools.md",
       "source_patterns": [
         "agent/core.py",
         "agent/event_log.py",
@@ -140,6 +134,7 @@
         "agent/prompt.py",
         "agent/trace_v2.py",
         "config/schema.py",
+        "harness/__init__.py",
         "harness/executor.py",
         "harness/hooks.py",
         "harness/permission.py",
@@ -159,9 +154,9 @@
         "tools/test_tool.py"
       ],
       "related_documents": [
-        "docs/design/Forge-Agent-当前代码架构.md",
-        "docs/design/06-隔离与独立验收.md",
-        "docs/design/源码索引.md"
+        "docs/design/architecture.md",
+        "docs/design/isolation-acceptance.md",
+        "docs/design/source-index.md"
       ],
       "cross_impacts": [
         "planning_recovery",
@@ -190,7 +185,7 @@
     {
       "id": "context_engineering",
       "name": "Context Engineering",
-      "document": "docs/design/03-Context与RepoMap.md",
+      "document": "docs/design/context.md",
       "source_patterns": [
         "agent/core.py",
         "agent/session.py",
@@ -200,8 +195,8 @@
         "llm/capabilities.py"
       ],
       "related_documents": [
-        "docs/design/Forge-Agent-当前代码架构.md",
-        "docs/design/源码索引.md"
+        "docs/design/architecture.md",
+        "docs/design/source-index.md"
       ],
       "cross_impacts": [
         "agent_tool_lifecycle",
@@ -233,16 +228,16 @@
     {
       "id": "planning_recovery",
       "name": "Planning & Recovery",
-      "document": "docs/design/04-Planning与Recovery.md",
+      "document": "docs/design/planning-recovery.md",
       "source_patterns": [
         "agent/core.py",
         "agent/planning.py",
         "agent/recovery.py"
       ],
       "related_documents": [
-        "docs/design/02-Agent与Tool生命周期.md",
-        "docs/design/Forge-Agent-当前代码架构.md",
-        "docs/design/源码索引.md"
+        "docs/design/agent-tools.md",
+        "docs/design/architecture.md",
+        "docs/design/source-index.md"
       ],
       "cross_impacts": [
         "agent_tool_lifecycle",
@@ -267,7 +262,7 @@
     {
       "id": "skills_mcp",
       "name": "Skills & MCP",
-      "document": "docs/design/05-Skills与MCP.md",
+      "document": "docs/design/extensions.md",
       "source_patterns": [
         "agent/core.py",
         "mcp_integration/*.py",
@@ -275,9 +270,9 @@
         "skills/*.py"
       ],
       "related_documents": [
-        "docs/design/02-Agent与Tool生命周期.md",
-        "docs/design/Forge-Agent-当前代码架构.md",
-        "docs/design/源码索引.md"
+        "docs/design/agent-tools.md",
+        "docs/design/architecture.md",
+        "docs/design/source-index.md"
       ],
       "cross_impacts": [
         "agent_tool_lifecycle",
@@ -305,7 +300,7 @@
     {
       "id": "isolation_acceptance",
       "name": "Isolation & Acceptance",
-      "document": "docs/design/06-隔离与独立验收.md",
+      "document": "docs/design/isolation-acceptance.md",
       "source_patterns": [
         "agent/completion.py",
         "agent/orchestrate.py",
@@ -320,10 +315,10 @@
         "tools/sandbox.Dockerfile"
       ],
       "related_documents": [
-        "docs/design/01-任务执行主链.md",
-        "docs/design/02-Agent与Tool生命周期.md",
-        "docs/design/Forge-Agent-当前代码架构.md",
-        "docs/design/源码索引.md"
+        "docs/design/execution.md",
+        "docs/design/agent-tools.md",
+        "docs/design/architecture.md",
+        "docs/design/source-index.md"
       ],
       "cross_impacts": [
         "task_execution",
@@ -359,7 +354,7 @@
     {
       "id": "project_memory",
       "name": "Project Memory",
-      "document": "docs/design/10-Project-Memory-架构.md",
+      "document": "docs/design/project-memory.md",
       "source_patterns": [
         "project_memory/*.py",
         "agent/core.py",
@@ -371,9 +366,9 @@
         "config/schema.py"
       ],
       "related_documents": [
-        "docs/design/03-Context与RepoMap.md",
-        "docs/design/09-Supervisor-Worker架构.md",
-        "docs/design/源码索引.md"
+        "docs/design/context.md",
+        "docs/design/workers.md",
+        "docs/design/source-index.md"
       ],
       "cross_impacts": [
         "task_execution",
@@ -403,19 +398,121 @@
       ]
     },
     {
+      "id": "durable_runtime",
+      "name": "Long-horizon Runtime",
+      "document": "docs/design/durable-runtime.md",
+      "source_patterns": [
+        "durable_runtime/*.py",
+        "context/archive.py",
+        "context/compaction.py",
+        "tools/archive_read.py",
+        "llm/cache_audit.py",
+        "llm/anthropic_backend.py",
+        "llm/openai_compat.py",
+        "llm/openai_responses.py",
+        "entry/onboarding.py",
+        "entry/chat_input.py",
+        "entry/resource_commands.py",
+        "evals/long_horizon/*.py",
+        "runtime/worktree.py",
+        "skills/catalog.py",
+        "agent/runner.py",
+        "agent/coordinator.py",
+        "agent/orchestrate.py",
+        "agent/core.py",
+        "agent/session.py",
+        "agent/session_store.py",
+        "harness/executor.py",
+        "entry/chat.py",
+        "entry/github_issue.py",
+        "entry/cli.py",
+        "config/schema.py",
+        "config/credentials.py"
+      ],
+      "related_documents": [
+        "docs/design/source-index.md"
+      ],
+      "cross_impacts": [
+        "task_execution",
+        "agent_tool_lifecycle",
+        "context_engineering"
+      ],
+      "symbols": [
+        {
+          "path": "durable_runtime/store.py",
+          "name": "DurableRuntimeStore"
+        },
+        {
+          "path": "durable_runtime/store.py",
+          "name": "OwnerReceipt"
+        },
+        {
+          "path": "durable_runtime/run_manager.py",
+          "name": "DurableRun"
+        },
+        {
+          "path": "durable_runtime/operation_journal.py",
+          "name": "ToolOperation"
+        },
+        {
+          "path": "durable_runtime/recovery.py",
+          "name": "resolve_operation"
+        },
+        {
+          "path": "durable_runtime/recovery.py",
+          "name": "reconcile_delivery"
+        },
+        {
+          "path": "durable_runtime/windows.py",
+          "name": "restrict_access"
+        },
+        {
+          "path": "durable_runtime/reconcilers.py",
+          "name": "inspect_file_operation"
+        },
+        {
+          "path": "context/archive.py",
+          "name": "ContextArchive"
+        },
+        {
+          "path": "context/archive.py",
+          "name": "ArchiveRewrite"
+        },
+        {
+          "path": "context/archive.py",
+          "name": "ContextArchive.import_bundle"
+        },
+        {
+          "path": "config/credentials.py",
+          "name": "keyring_credential"
+        },
+        {
+          "path": "tools/archive_read.py",
+          "name": "ArchiveReadTool"
+        },
+        {
+          "path": "evals/long_horizon/pytest_plugin.py",
+          "name": "collect_store"
+        }
+      ]
+    },
+    {
       "id": "evaluation_evolution",
       "name": "Evaluation & Evolution",
-      "document": "docs/design/07-Evaluation与Evolution.md",
+      "document": "docs/design/evaluation.md",
       "source_patterns": [
+        "evals/*.py",
         "evals/coding_agent/*.py",
+        "evals/long_horizon/*.py",
         "experience/*.py",
         "scripts/report_coding_agent_benchmark_v1.py",
         "scripts/run_real_skill_evolution_eval.py",
-        "scripts/run_skill_evolution.py"
+        "scripts/run_skill_evolution.py",
+        "scripts/*.py"
       ],
       "related_documents": [
-        "docs/design/Forge-Agent-当前代码架构.md",
-        "docs/design/源码索引.md",
+        "docs/design/architecture.md",
+        "docs/design/source-index.md",
         "docs/reference.md"
       ],
       "cross_impacts": [
@@ -435,6 +532,34 @@
           "path": "experience/promotion.py",
           "name": "PromotionManager"
         }
+      ]
+    },
+    {
+      "id": "documentation",
+      "name": "Documentation",
+      "document": "docs/design/MAINTENANCE.md",
+      "source_patterns": [
+        "scripts/check_docs.py"
+      ],
+      "related_documents": [
+        "docs/README.md"
+      ],
+      "symbols": [
+        {
+          "path": "scripts/check_docs.py",
+          "name": "validate_all"
+        }
+      ]
+    },
+    {
+      "id": "integration_examples",
+      "name": "Integration Examples",
+      "document": "docs/design/evaluation.md",
+      "source_patterns": [
+        "examples/harbor/*.py"
+      ],
+      "related_documents": [
+        "examples/harbor/README.md"
       ]
     }
   ]

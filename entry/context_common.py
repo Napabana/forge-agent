@@ -66,6 +66,11 @@ def configured_agent_options(config):
         "repo_map_summary_budget": config.context.repo_map_summary_budget,
         "test_python_executable": config.tools.test.python_executable,
         "memory_config": config.memory,
+        "durable_runtime_config": config.durable_runtime,
+        "cache_audit_enabled": config.cache_audit_enabled,
+        "cache_audit_retention_days": config.cache_audit_retention_days,
+        "cache_audit_store_component_hashes": config.cache_audit_store_component_hashes,
+        "workspace_trust_required": config.workspace_trust_required,
     }
 
 

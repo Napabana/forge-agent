@@ -10,8 +10,8 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 
 
-COMMANDS = ("/exit", "/stats", "/session", "/new", "/resume", "/rename",
-            "/clear", "/help", "/model")
+COMMANDS = ("/exit", "/stats", "/session", "/new", "/resume", "/rewind", "/rename",
+            "/clear", "/help", "/model", "/recovery", "/archive", "/cache")
 
 
 class ChatCompleter(Completer):

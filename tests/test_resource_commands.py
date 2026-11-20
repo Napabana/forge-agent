@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import os
 import stat
 
 from click.testing import CliRunner
@@ -39,10 +40,87 @@ def test_skill_add_local_and_list_preserves_source(tmp_path):
     assert len(SkillCatalog.discover(tmp_path, global_root=root).skills) == 1
 
 
+def test_managed_skill_update_preserves_source_and_removes_installation(tmp_path):
+    from entry.resource_commands import install_skill, managed_skill, update_managed_skill
+
+    source = _skill(tmp_path / "source")
+    root = tmp_path / "skills"
+    installed = install_skill(str(source), root)
+    old_digest = managed_skill(root, "ponytail")[1]["content_digest"]
+    (source / "new.md").write_text("updated", encoding="utf-8")
+    assert update_managed_skill(root, "ponytail")["content_digest"] != old_digest
+    assert (installed / "new.md").read_text(encoding="utf-8") == "updated"
+    update_managed_skill(root, "ponytail", remove=True)
+    assert not installed.exists()
+    assert source.is_dir()
+
+
+def test_skill_update_recovers_fatal_interruption_and_serializes_processes(tmp_path, record_property):
+    import json
+    import subprocess
+    import sys
+
+    from entry.resource_commands import install_skill, managed_skill
+
+    source = _skill(tmp_path / "source")
+    root = tmp_path / "skills"
+    installed = install_skill(str(source), root)
+    previous = managed_skill(root, "ponytail")[1]["content_digest"]
+    (source / "extra.md").write_text("updated", encoding="utf-8")
+    cut = """
+import os, sys
+from pathlib import Path
+from entry import resource_commands as resources
+root = Path(sys.argv[1])
+original = resources._refresh_skill_index
+def crash(folder):
+    if folder == root:
+        os._exit(38)
+    original(folder)
+resources._refresh_skill_index = crash
+resources.update_managed_skill(root, "ponytail")
+"""
+    assert subprocess.run([sys.executable, "-c", cut, str(root)], timeout=20).returncode == 38
+    assert managed_skill(root, "ponytail")[1]["content_digest"] == previous
+    assert not (installed / "extra.md").exists()
+    update = (
+        "import sys; from pathlib import Path; from entry.resource_commands import update_managed_skill;"
+        "update_managed_skill(Path(sys.argv[1]), 'ponytail')"
+    )
+    peers = [subprocess.Popen([sys.executable, "-c", update, str(root)]) for _ in range(2)]
+    try:
+        assert [process.wait(timeout=20) for process in peers] == [0, 0]
+    finally:
+        for process in peers:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+    index = json.loads((root / "skills.lock.json").read_text(encoding="utf-8"))
+    assert index["skills"] == [managed_skill(root, "ponytail")[1]]
+    assert (installed / "extra.md").exists()
+    record_property("skill_recovery_correct", 1)
+
+
+def test_mcp_lifecycle_preserves_unrelated_values(tmp_path):
+    import yaml
+    config = tmp_path / "config.yaml"
+    config.write_text("llm:\n  model: original\nmcp:\n  enabled: false\n  servers:\n"
+                      "    - id: docs\n      transport: stdio\n      command: python3\n", encoding="utf-8")
+    runner = CliRunner()
+    args = ["--config", str(config), "mcp"]
+    for action in ("inspect", "disable", "enable", "remove"):
+        result = runner.invoke(cli, [*args, action, "docs"])
+        assert result.exit_code == 0, result.exception
+    parsed = yaml.safe_load(config.read_text(encoding="utf-8"))
+    assert parsed == {"llm": {"model": "original"}, "mcp": {"enabled": False, "servers": []}}
+
+
 def test_skill_add_github_tree_uses_only_requested_folder(tmp_path, monkeypatch):
     from entry import resource_commands
 
     def fake_clone(argv, **kwargs):
+        if argv[1] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout="a" * 40)
         checkout = Path(argv[-1])
         _skill(checkout / "skills")
         _skill(checkout / "skills", "other")
@@ -86,7 +164,8 @@ def test_mcp_add_preserves_model_comments_and_existing_servers(tmp_path):
     assert added.exit_code == 0, added.output
     assert config.read_text(encoding="utf-8").startswith(original.split("mcp:\n")[0])
     assert "# keep this model comment" in config.read_text(encoding="utf-8")
-    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(config.stat().st_mode) == 0o600
     assert [server.id for server in load_config(config).mcp.servers] == ["original", "search"]
     assert "original\tstdio" in listed.output and "search\tstreamable_http" in listed.output
     assert duplicate.exit_code != 0

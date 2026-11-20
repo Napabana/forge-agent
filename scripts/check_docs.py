@@ -33,7 +33,7 @@ class ChangedPath:
 
 
 def _run(command: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=cwd, text=True, capture_output=True, check=check)
+    return subprocess.run(command, cwd=cwd, encoding="utf-8", capture_output=True, check=check)
 
 
 def load_mapping(repo_root: Path, mapping_path: Path = DEFAULT_MAP) -> dict:
@@ -289,22 +289,6 @@ def validate_mermaid(repo_root: Path, mapping: dict) -> list[str]:
     return errors
 
 
-def validate_versions(repo_root: Path, mapping: dict) -> list[str]:
-    errors: list[str] = []
-    expected_sha = mapping["verified_against"]
-    expected_date = mapping["last_verified"]
-    for relative in mapping["knowledge_documents"]:
-        if not relative.startswith("docs/design/") or relative.endswith("MAINTENANCE.md"):
-            continue
-        path = repo_root / relative
-        if not path.exists():
-            continue
-        text = path.read_text(encoding="utf-8")
-        if expected_sha not in text or expected_date not in text:
-            errors.append(f"INVALID_REFERENCE missing verification metadata: {relative}")
-    return errors
-
-
 def run_build(repo_root: Path) -> tuple[list[str], str]:
     configured = os.environ.get("FORGE_AGENT_DOCS_PYTHON")
     default = Path.home() / ".venvs/forge-agent-docs/bin/python"
@@ -330,7 +314,6 @@ def validate_built_site(repo_root: Path, mapping: dict) -> tuple[list[str], dict
     required = [
         "index.html",
         "source-navigation.html",
-        "interview-review.html",
         "reference.html",
         "search.json",
         "javascripts/iframe-worker-shim.js",
@@ -340,26 +323,14 @@ def validate_built_site(repo_root: Path, mapping: dict) -> tuple[list[str], dict
         if not (site / relative).exists():
             errors.append(f"INVALID_REFERENCE missing built asset: site/{relative}")
 
-    for excluded in ("changes", "evidence", "plans", "todo"):
+    for excluded in ("changes", "evidence", "plans", "research", "todo"):
         if (site / excluded).exists():
             errors.append(f"INVALID_REFERENCE excluded site directory was built: site/{excluded}")
 
-    expected_pages = {
-        "docs/README.md": "index.html",
-        "docs/design/Forge-Agent-当前代码架构.md": "design/Forge-Agent-当前代码架构.html",
-        "docs/design/01-任务执行主链.md": "design/01-任务执行主链.html",
-        "docs/design/02-Agent与Tool生命周期.md": "design/02-Agent与Tool生命周期.html",
-        "docs/design/03-Context与RepoMap.md": "design/03-Context与RepoMap.html",
-        "docs/design/04-Planning与Recovery.md": "design/04-Planning与Recovery.html",
-        "docs/design/05-Skills与MCP.md": "design/05-Skills与MCP.html",
-        "docs/design/06-隔离与独立验收.md": "design/06-隔离与独立验收.html",
-        "docs/design/07-Evaluation与Evolution.md": "design/07-Evaluation与Evolution.html",
-        "docs/design/09-Supervisor-Worker架构.md": "design/09-Supervisor-Worker架构.html",
-        "docs/design/10-Project-Memory-架构.md": "design/10-Project-Memory-架构.html",
-        "docs/design/MAINTENANCE.md": "design/MAINTENANCE.html",
-    }
     for document, expected_count in mapping["mermaid_documents"].items():
-        page = site / expected_pages[document]
+        relative = Path(document).relative_to("docs")
+        page = site / ("index.html" if relative.name == "README.md" and relative.parent == Path(".")
+                       else relative.with_suffix(".html"))
         if not page.exists():
             errors.append(f"INVALID_REFERENCE missing built page: {page.relative_to(repo_root)}")
             continue
@@ -410,7 +381,6 @@ def validate_all(repo_root: Path, mapping: dict, *, build: bool) -> list[str]:
     errors.extend(validate_source_references(repo_root, documents))
     errors.extend(validate_mapping(repo_root, mapping))
     errors.extend(validate_mermaid(repo_root, mapping))
-    errors.extend(validate_versions(repo_root, mapping))
     if build and not errors:
         build_errors, output = run_build(repo_root)
         print(output.strip())
