@@ -7,7 +7,7 @@ use_directory_urls = false
 extra_css = ["stylesheets/extra.css"]
 nav = [
   { "首页" = "README.md" },
-  { "当前功能" = [{ "整体架构" = "design/architecture.md" }, { "任务执行" = "design/execution.md" }, { "Agent 与工具执行" = "design/agent-tools.md" }, { "上下文与仓库导航" = "design/context.md" }, { "计划与执行恢复" = "design/planning-recovery.md" }, { "Skills 与 MCP" = "design/extensions.md" }, { "隔离、验收与 GitHub 交付" = "design/isolation-acceptance.md" }, { "评测与经验迭代" = "design/evaluation.md" }, { "Supervisor 与 Worker" = "design/workers.md" }, { "项目记忆" = "design/project-memory.md" }, { "长时运行与恢复" = "design/durable-runtime.md" }, { "配置、模型与用量" = "design/configuration.md" }] },
+  { "当前功能" = [{ "整体架构" = "design/architecture.md" }, { "CLI 终端界面" = "design/terminal-ui.md" }, { "任务执行" = "design/execution.md" }, { "Agent 与工具执行" = "design/agent-tools.md" }, { "上下文与仓库导航" = "design/context.md" }, { "计划与执行恢复" = "design/planning-recovery.md" }, { "Skills 与 MCP" = "design/extensions.md" }, { "隔离、验收与 GitHub 交付" = "design/isolation-acceptance.md" }, { "评测与经验迭代" = "design/evaluation.md" }, { "Supervisor 与 Worker" = "design/workers.md" }, { "项目记忆" = "design/project-memory.md" }, { "长时运行与恢复" = "design/durable-runtime.md" }, { "配置、模型与用量" = "design/configuration.md" }] },
   { "源码索引" = "design/source-index.md" },
   { "源码阅读路线" = "source-navigation.md" },
   { "命令查阅" = "reference.md" },

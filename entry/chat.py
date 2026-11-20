@@ -27,26 +27,12 @@ from typing import Callable
 import click
 
 from entry.event_renderer import RunEventRenderer
+from entry.ui.terminal import TerminalUI
+from entry.ui.summary import repo_branch
 
 _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-
-
-# ---------------------------------------------------------------------------
-# 彩色输出（复用 cli.py 的风格）
-# ---------------------------------------------------------------------------
-
-def _c(t: str, code: str) -> str:
-    return f"\033[{code}m{t}\033[0m" if sys.stdout.isatty() else t
-
-def green(t: str) -> str:  return _c(t, "32")
-def yellow(t: str) -> str: return _c(t, "33")
-def red(t: str) -> str:    return _c(t, "31")
-def cyan(t: str) -> str:   return _c(t, "36")
-def bold(t: str) -> str:   return _c(t, "1")
-def dim(t: str) -> str:    return _c(t, "2")
-def magenta(t: str) -> str: return _c(t, "35")
 
 
 def _format_usage(usage) -> str:
@@ -112,6 +98,7 @@ class ChatSession:
         session_id: str | None = None,
         prepare_next_turn=None,
         execution_workspace: str | None = None,
+        ui: TerminalUI | None = None,
     ) -> None:
         from agent.core import AgentConfig
         from entry.context_common import configured_agent_options, new_worker_backend
@@ -130,58 +117,27 @@ class ChatSession:
         self._state = None
         self.recovery_warning: str | None = None
         self._history_max_messages = config.context.history_window * 2
-        resolved_reasoning_stream = stream if reasoning_stream is None else reasoning_stream
-        self._event_renderer = RunEventRenderer(
-            preview_lines=20, compact=True, show_task=False,
-        )
-
-        # 流式回调：每个 token 立刻 flush 到终端
-        _stream_started = [False]
-        _thought_printed = [False]  # 标记是否打过 thought，用于 message 前换行
-
-        def _thought_cb(text: str) -> None:
-            """推理过程：dim 暗色，表示模型在思考"""
-            import sys
-            if not _stream_started[0]:
-                sys.stdout.write("\r  ")
-                sys.stdout.flush()
-                _stream_started[0] = True
-            sys.stdout.write(dim(text))
-            sys.stdout.flush()
-            _thought_printed[0] = True
-
-        def _stream_cb(text: str) -> None:
-            """最终回答：正常亮色"""
-            import sys
-            if not _stream_started[0]:
-                # 第一次打 message，之前没打过任何内容
-                sys.stdout.write("\r  ")
-                sys.stdout.flush()
-                _stream_started[0] = True
-            elif _thought_printed[0]:
-                # 之前打过 thought，先换两行作为分隔再打 message
-                sys.stdout.write("\n\n")
-                sys.stdout.flush()
-                _thought_printed[0] = False  # 只换一次
-            sys.stdout.write(text)
-            sys.stdout.flush()
-            self._event_renderer.record_streamed_text(text)
+        self.ui = ui or TerminalUI(config.ui, chat=True)
+        self.last_patch = None
+        self.sandbox = execution_workspace is not None
+        if confirm_callback and ui is None:
+            confirm_callback = self.ui.confirm_with(confirm_callback)
 
         agent_cfg = AgentConfig(
             **configured_agent_options(config),
             planning_mode=config.agent.planning_mode,
-        recovery_mode=config.agent.recovery_mode,
-        recovery_max_attempts=config.agent.recovery_max_attempts,
-        skills_enabled=config.agent.skills_enabled,
-        skills_global_dir=config.agent.skills_global_dir,
-        skills_max_loaded=config.agent.skills_max_loaded,
-        skills_max_chars=config.agent.skills_max_chars,
-        skills_reference_max_chars=config.agent.skills_reference_max_chars,
+            recovery_mode=config.agent.recovery_mode,
+            recovery_max_attempts=config.agent.recovery_max_attempts,
+            skills_enabled=config.agent.skills_enabled,
+            skills_global_dir=config.agent.skills_global_dir,
+            skills_max_loaded=config.agent.skills_max_loaded,
+            skills_max_chars=config.agent.skills_max_chars,
+            skills_reference_max_chars=config.agent.skills_reference_max_chars,
             llm_max_retries=3,
             llm_retry_delay=1.0,
-            stream=stream or resolved_reasoning_stream,
-            stream_callback=_stream_cb if stream else None,
-            thought_callback=_thought_cb if resolved_reasoning_stream else None,
+            stream=stream or bool(reasoning_stream),
+            stream_callback=self.ui.on_stream_text if stream else None,
+            thought_callback=self.ui.on_reasoning_text if reasoning_stream else None,
             confirm_dangerous=confirm_callback is not None,
             confirm_callback=confirm_callback,
             prepare_next_turn=prepare_next_turn,
@@ -342,6 +298,7 @@ class ChatSession:
                         self._checkpoint()
                     raise
         finally:
+            self.ui.close()
             # 本轮若修改或提交了代码，让下一轮重新生成 Repo Map。
             current_revision = _repository_revision(self.repo_path)
             if current_revision != self._repo_revision:
@@ -383,18 +340,12 @@ class ChatSession:
             self._state.pending_round = None
             self._checkpoint()
 
-        # 流式输出结束后打换行，重置 readline 的行状态
-        import sys as _sys
-        _sys.stdout.write("\n")
-        _sys.stdout.flush()
-
-        # 打印轮次统计
-        click.echo(dim(
-            f"  ─── Round {self.round_count} · "
-            f"{result.steps_taken} steps · "
-            f"{_format_usage(result.usage)} · "
-            f"{elapsed:.1f}s ───"
-        ))
+        self.last_patch = result.patch
+        self.ui.answer(result.summary)
+        parts = [f"Round {self.round_count}", result.status.value, f"{result.steps_taken} steps"]
+        if self.config.ui.show_token_usage and (result.usage.llm_calls or result.total_tokens):
+            parts.append(_format_usage(result.usage))
+        self.ui.line(" · ".join([*parts, f"{elapsed:.1f}s"]), "text.secondary")
 
         return result.is_success() or result.status.value == "gave_up"
 
@@ -424,6 +375,8 @@ class ChatSession:
                 with store.transaction(owner, owner.revision) as db:
                     archive.capture_history(db, self._shared_history.to_dicts())
                     archive.clear(db)
+        self.ui.reset()
+        self.last_patch = None
         self._shared_history.clear()
         reset_lineage = getattr(
             self._prepare_next_turn,
@@ -451,7 +404,7 @@ class ChatSession:
 
         store = self._durable_archive_store()
         if store is None:
-            click.echo("This session has no durable archive.")
+            self.ui.line("This session has no durable archive.")
             return
         try:
             with store:
@@ -470,9 +423,48 @@ class ChatSession:
                            AND state IN ('started', 'outcome_unknown') ORDER BY created_at DESC LIMIT 20""",
                         (self.session_id,),
                     )]
-                click.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+                self.ui.line(json.dumps(rows, ensure_ascii=False, indent=2))
         except (ValueError, StoreFormatError) as exc:
             click.echo(f"Runtime state could not be read: {exc}", err=True)
+
+    def show_ui_command(self, command: str) -> None:
+        import json
+        ui = self.ui
+        if command == "/status":
+            ui.panel("CHAT STATUS", {"Model": self.config.llm.model, "Provider": self.config.llm.provider,
+                     "Repo": self.repo_path, "Branch": repo_branch(self.repo_path),
+                     "Session": self.session_id or "ephemeral", "Rounds": self.round_count,
+                     "Approval": "ask" if self._confirm_callback else "deny",
+                     "Sandbox": "Docker" if self.sandbox else "local"})
+        elif command == "/diff":
+            if self.last_patch:
+                ui.diff(self.last_patch)
+            else:
+                ui.line("No patch recorded for the last round.")
+        elif command == "/tokens":
+            window = self.config.llm.context_window
+            used = ui.details.get("input_tokens")
+            ui.panel("TOKEN USAGE", {"Session": _format_usage(self.usage),
+                     "Latest model input": used, "Context window": window,
+                     "Context used": f"{used / window:.1%}" if used is not None and window else None})
+        elif command == "/skills":
+            from skills.catalog import SkillCatalog
+            names = ()
+            if self.config.agent.skills_enabled:
+                names = SkillCatalog.discover(self.repo_path, global_root=self.config.agent.skills_global_dir,
+                                              include_project=self.agent._project_skills_trusted(self.repo_path)).names
+            ui.panel("SKILLS", {"Available": ", ".join(names) or "none",
+                                "Loaded this round": ", ".join(sorted(ui.loaded)) or "none"})
+        elif command == "/mcp":
+            ui.panel("MCP", {"Enabled": self.config.mcp.enabled,
+                     "Configured servers": ", ".join(server.id for server in self.config.mcp.servers) or "none",
+                     "Discovered tools": ", ".join(sorted(ui.mcp_tools)) or "none"})
+        elif command == "/compact":
+            ui.panel("CONTEXT COMPACTION", {"Mode": self.config.context.compaction_mode,
+                     **ui.details.get("compact", {"Checkpoint": "No compact event recorded for this round."})})
+        elif command == "/plan":
+            plan = ui.details.get("plan")
+            ui.line(json.dumps(plan, ensure_ascii=False, indent=2) if plan else "No plan event recorded for this round.")
 
     def switch_backend(self, backend) -> None:
         """Use the new backend from the next round while retaining this session's history."""
@@ -503,6 +495,8 @@ class ChatSession:
         self.usage = SessionUsage()
         self.total_steps = 0
         self.round_count = 0
+        self.ui.reset()
+        self.last_patch = None
         self.recovery_warning = None
         self.agent.invalidate_repo_map_cache(self.repo_path)
         self._repo_revision = _repository_revision(self.repo_path)
@@ -520,6 +514,8 @@ class ChatSession:
 
             raise ChatSessionError("session persistence is disabled")
         self._restore_session(session_id)
+        self.ui.reset()
+        self.last_patch = None
         self.agent.invalidate_repo_map_cache(self.repo_path)
 
     def rewind(self, round_number: int) -> str:
@@ -606,14 +602,14 @@ class ChatSession:
 
     def print_session_info(self) -> None:
         if self._state is None:
-            click.echo("  Session  : ephemeral (--no-session)")
+            self.ui.line("  Session  : ephemeral (--no-session)")
             return
-        click.echo(f"  Session  : {self._state.session_id}")
-        click.echo(f"  Title    : {self._state.title or '-'}")
-        click.echo(f"  State    : {self.session_path}")
-        click.echo(f"  Rounds   : {self.round_count}")
+        self.ui.line(f"  Session  : {self._state.session_id}")
+        self.ui.line(f"  Title    : {self._state.title or '-'}")
+        self.ui.line(f"  State    : {self.session_path}")
+        self.ui.line(f"  Rounds   : {self.round_count}")
         if self._state.forked_from_session_id:
-            click.echo(f"  Rewound  : {self._state.forked_from_session_id} round {self._state.forked_from_round}")
+            self.ui.line(f"  Rewound  : {self._state.forked_from_session_id} round {self._state.forked_from_round}")
 
     def _restore_session(self, session_id: str) -> None:
         from agent.session import (
@@ -764,7 +760,10 @@ class ChatSession:
         """
         from agent.runner import RunRequest
 
-        self._event_renderer.reset()
+        self.ui.reset()
+        self.last_patch = None
+        self.ui.panel("YOU", {"Task": task.description})
+        self.ui.status("Preparing context")
 
         return self.runner.run(
             RunRequest(
@@ -776,18 +775,15 @@ class ChatSession:
                 resume=resume,
             ),
             log=log,
-            on_event=self._event_renderer,
+            on_event=self.ui,
         )
 
     def close(self) -> None:
         """Close external capability connections owned by this chat session."""
+        self.ui.close()
         self.runner.close()
 
     def print_stats(self) -> None:
         """打印会话总统计。"""
-        click.echo(bold(f"\n{'─'*50}"))
-        click.echo(f"  Session stats:")
-        click.echo(f"    Rounds  : {self.round_count}")
-        click.echo(f"    Steps   : {self.total_steps}")
-        click.echo(f"    Tokens  : {_format_usage(self.usage)}")
-        click.echo(bold(f"{'─'*50}\n"))
+        self.ui.panel("Session stats", {"Rounds": self.round_count, "Steps": self.total_steps,
+                      "Tokens": _format_usage(self.usage) if self.config.ui.show_token_usage else None})

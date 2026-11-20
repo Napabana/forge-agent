@@ -406,14 +406,16 @@ def terminal_confirm(cmd: str) -> bool:
     """
     import sys
 
+    from agent.trace_v2 import redact_trace_string
+    shown = repr(redact_trace_string(cmd))
     # 判断是否在交互式终端
     if not sys.stdin.isatty():
         # 非交互式（pipe / CI）：默认拒绝，避免意外执行
-        print(f"\n[confirm] Non-interactive terminal, rejecting: {cmd!r}", flush=True)
+        print(f"\n[confirm] Non-interactive terminal, rejecting: {shown}", flush=True)
         return False
 
-    print(f"\n\033[33m  ⚠  Agent wants to run:\033[0m")
-    print(f"     \033[1m$ {cmd}\033[0m")
+    print("\n  Agent wants to run:")
+    print(f"     {shown}")
 
     while True:
         try:
@@ -425,7 +427,7 @@ def terminal_confirm(cmd: str) -> bool:
         if ans in ("y", "yes"):
             return True
         if ans in ("n", "no", ""):
-            print("  \033[31m✗ Rejected\033[0m")
+            print("  Rejected")
             return False
         print("  Please enter y or n.")
 

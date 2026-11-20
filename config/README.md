@@ -18,4 +18,4 @@
 
 ## 设计文档
 
-[配置、模型与用量](../docs/design/configuration.md)
+[配置、模型与用量](../docs/design/configuration.md) · [终端显示配置](../docs/design/terminal-ui.md)

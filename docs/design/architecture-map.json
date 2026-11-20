@@ -25,6 +25,7 @@
     "context/README.md",
     "durable_runtime/README.md",
     "entry/README.md",
+    "entry/ui/README.md",
     "evals/README.md",
     "experience/README.md",
     "harness/README.md",
@@ -41,7 +42,9 @@
     "examples/README.md",
     "evals/coding_agent/README.md",
     "evals/long_horizon/README.md",
-    "examples/harbor/README.md"
+    "examples/harbor/README.md",
+    "docs/design/terminal-ui.md",
+    "docs/design/12-CLI-Terminal-UI-架构.md"
   ],
   "mermaid_documents": {
     "docs/design/architecture.md": 1
@@ -560,6 +563,43 @@
       ],
       "related_documents": [
         "examples/harbor/README.md"
+      ]
+    },
+    {
+      "id": "terminal_ui",
+      "name": "CLI Terminal UI",
+      "document": "docs/design/terminal-ui.md",
+      "source_patterns": [
+        "entry/ui/*.py",
+        "entry/event_renderer.py",
+        "entry/cli.py",
+        "entry/chat*.py",
+        "entry/github_issue.py",
+        "config/schema.py"
+      ],
+      "related_documents": [
+        "entry/README.md",
+        "docs/design/execution.md",
+        "docs/design/configuration.md",
+        "docs/design/source-index.md",
+        "docs/README.md"
+      ],
+      "cross_impacts": [
+        "task_execution"
+      ],
+      "symbols": [
+        {
+          "path": "entry/ui/terminal.py",
+          "name": "TerminalUI"
+        },
+        {
+          "path": "entry/ui/presenter.py",
+          "name": "present"
+        },
+        {
+          "path": "config/schema.py",
+          "name": "UIConfig"
+        }
       ]
     }
   ]

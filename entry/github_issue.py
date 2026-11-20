@@ -394,7 +394,7 @@ def run_on_issue(
     from agent.core import AgentConfig
     from agent.runner import AcceptanceContract, ExecutionRunner, RunRequest
     from agent.task import Task, infer_completion_requirements
-    from entry.event_renderer import RunEventRenderer
+    from entry.ui.terminal import TerminalUI
     from llm.router import create_backend_from_config
 
     config = load_config(config_path)
@@ -479,11 +479,9 @@ def run_on_issue(
         registry._tools.pop("git_add", None)
         registry._tools.pop("git_commit", None)
 
-    renderer = RunEventRenderer(compact=True)
-
-    def _thought_cb(text: str) -> None:
-        sys.stdout.write(text)
-        sys.stdout.flush()
+    renderer = TerminalUI(config.ui)
+    renderer.header("FORGE AGENT · ISSUE", {"Task": description, "Repo": local_path, "Branch": branch,
+                    "Model": config.llm.model if config.ui.show_model_metadata else None})
 
     agent_config = AgentConfig(
         **configured_agent_options(config),
@@ -497,7 +495,7 @@ def run_on_issue(
         skills_max_chars=config.agent.skills_max_chars,
         skills_reference_max_chars=config.agent.skills_reference_max_chars,
         stream=reasoning_stream,
-        thought_callback=_thought_cb if reasoning_stream else None,
+        thought_callback=renderer.on_reasoning_text if reasoning_stream else None,
     )
     require_changes, require_tests = infer_completion_requirements(description)
     task = Task(
@@ -536,14 +534,10 @@ def run_on_issue(
             on_event=renderer,
         )
     finally:
+        renderer.close()
         runner.close()
 
     elapsed = time.time() - t0
-    click.echo(f"  Status : {result.status.value}")
-    click.echo(f"  Acceptance: {result.acceptance_status}")
-    click.echo(f"  Steps  : {result.steps_taken}")
-    click.echo(f"  Tokens : {result.total_tokens:,}")
-    click.echo(f"  Time   : {elapsed:.1f}s")
 
     if not result.is_success():
         if create_pr:
@@ -556,6 +550,7 @@ def run_on_issue(
             issue_number=issue_number,
             on_event=renderer,
         )
+        renderer.finish(result, elapsed)
         click.echo("  Agent did not complete the task.", err=True)
         return 1
 
@@ -607,6 +602,7 @@ def run_on_issue(
                 f"Delivery stopped: {result.delivery_status}. Local artifact: {local_path}",
                 err=True,
             )
+            renderer.finish(result, elapsed)
             return 1
     else:
         _record_delivery_trace(
@@ -618,6 +614,7 @@ def run_on_issue(
             on_event=renderer,
         )
 
+    renderer.finish(result, elapsed)
     return 0
 
 

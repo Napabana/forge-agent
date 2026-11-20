@@ -23,6 +23,17 @@ python -m entry.github_issue --help
 
 `--isolate` 使用 Git worktree，`--sandbox` 启用 Docker，默认成果策略 `keep-if-changed` 保留有变更的工作树。GitHub Issue 命令可在独立验收后交付 PR。
 
+## 终端显示与 Chat 输入
+
+```bash
+forgeAgent run --ui plain --no-stream --repo . --task "只读分析测试结构" > run.log
+forgeAgent run --no-progress --verbose --repo . --task "检查失败测试"
+```
+
+`--no-stream` 关闭回答流，执行事件仍可见。默认隐藏模型推理，可用 `--reasoning-stream` 显式开启。交互终端使用内联 Rich，CI 和重定向自动使用纯文本。`NO_COLOR` 关闭颜色。
+
+Chat 中按 Enter 提交，Meta+Enter（或先 Esc 再 Enter）换行，Ctrl+G 在 `VISUAL` 或 `EDITOR` 中编辑当前输入。用 `/status` 看会话与执行环境，`/tokens` 看用量，`/diff` 看最近一轮记录的 Git patch，`/plan`、`/recovery`、`/compact`、`/skills` 和 `/mcp` 查看执行细节。完整配置见 [CLI 终端界面](docs/design/terminal-ui.md)。
+
 ## 暂停、续接和归档
 
 在用户 YAML 中设置：

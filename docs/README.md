@@ -5,6 +5,7 @@ Forge Agent 面向可验收、可追踪和可恢复的编码任务。这里介�
 ## 按需求阅读
 
 - [整体架构](design/architecture.md) · CLI 和评测共用执行层，形成可观察、可验收、可续接的任务。
+- [CLI 终端界面](design/terminal-ui.md) · Run、Chat、流式输出、工具事件与终端降级。
 - [任务执行](design/execution.md) · ExecutionRunner 为入口提供统一生命周期，使同一个任务在交互、自动化和评测中使用同一套 Agent 与工具。
 - [Agent 与工具执行](design/agent-tools.md) · 模型擅长选择下一步，工具执行层负责核验实际动作的执行条件和结果。
 - [上下文与仓库导航](design/context.md) · 长任务的模型窗口有限。分层上下文让模型优先看到目标、近期观察和相关源码，同时保留可回查的原始证据。

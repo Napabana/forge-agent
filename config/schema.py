@@ -170,6 +170,37 @@ class DurableRuntimeConfig:
     archive_read_max_chars: int = 16_000
 
 
+@dataclass(frozen=True)
+class UIConfig:
+    mode: str = "auto"
+    theme: str = "default"
+    show_status_line: bool = True
+    show_model_metadata: bool = True
+    show_token_usage: bool = True
+    tool_output_mode: str = "on_error"
+    tool_output_preview_lines: int = 4
+    live_refresh_per_second: int = 6
+    markdown_enabled: bool = True
+    animations: bool = False
+
+    def __post_init__(self):
+        for name, choices in (
+            ("mode", ("auto", "rich", "plain")),
+            ("theme", ("default", "light", "dark", "ansi")),
+            ("tool_output_mode", ("all", "on_error", "summary", "none")),
+        ):
+            if getattr(self, name) not in choices:
+                raise ValueError(f"ui.{name} must be one of {', '.join(choices)}")
+        for name in ("show_status_line", "show_model_metadata", "show_token_usage",
+                     "markdown_enabled", "animations"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"ui.{name} must be a boolean")
+        if type(self.tool_output_preview_lines) is not int or self.tool_output_preview_lines < 1:
+            raise ValueError("ui.tool_output_preview_lines must be a positive integer")
+        if type(self.live_refresh_per_second) is not int or not 1 <= self.live_refresh_per_second <= 10:
+            raise ValueError("ui.live_refresh_per_second must be an integer from 1 to 10")
+
+
 @dataclass
 class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -186,6 +217,7 @@ class AppConfig:
     onboarding_enabled: bool = True
     onboarding_auto_start: bool = True
     workspace_trust_required: bool = True
+    ui: UIConfig = field(default_factory=UIConfig)
 
 
 _ENV_RE = re.compile(r"\$\{(\w+)\}")
@@ -683,7 +715,10 @@ def _parse(data: dict[str, Any]) -> AppConfig:
         if "max_tokens" in settings and "max_output_tokens" not in settings:
             profile.max_output_tokens = settings["max_tokens"]
         profiles[name] = profile
-    config = AppConfig(llm=llm, model_profiles=profiles, agent=agent, tools=tools, context=context, mcp=mcp, memory=memory,
+    ui_raw = data.get("ui", {})
+    if not isinstance(ui_raw, dict) or ui_raw.keys() - UIConfig.__dataclass_fields__.keys():
+        raise ValueError("ui must be a mapping of supported terminal UI options")
+    config = AppConfig(llm=llm, model_profiles=profiles, agent=agent, tools=tools, context=context, mcp=mcp, memory=memory, ui=UIConfig(**ui_raw),
                        durable_runtime=durable_runtime, cache_audit_enabled=audit_raw.get("enabled", True),
                        cache_audit_retention_days=audit_retention,
                        cache_audit_store_component_hashes=audit_raw.get("store_component_hashes", True),

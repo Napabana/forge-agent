@@ -9,6 +9,8 @@
 ## 从哪里读代码
 
 - [`cli.py`](cli.py)
+- [ui/terminal.py](ui/terminal.py) · 事件、流、审批暂停和摘要共用的 Rich Console
+- [ui/presenter.py](ui/presenter.py) · 事件展示与工具预览
 - [`chat.py`](chat.py)
 - [`github_issue.py`](github_issue.py)
 - [`onboarding.py`](onboarding.py)
@@ -19,4 +21,4 @@
 
 ## 设计文档
 
-[任务执行](../docs/design/execution.md)
+[任务执行](../docs/design/execution.md) · [终端 UI 模块](ui/README.md) · [CLI 终端界面设计](../docs/design/terminal-ui.md)

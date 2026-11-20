@@ -46,40 +46,36 @@ from llm.router import create_backend_from_config            # noqa: E402
 
 # 模块级 import（供 patch 使用）
 from config.schema import load_config, merge_cli_overrides  # noqa: E402
-from entry.event_renderer import RunEventRenderer          # noqa: E402
+from entry.ui.terminal import TerminalUI
+from entry.ui.summary import repo_branch
 from llm.router import create_backend_from_config           # noqa: E402
+
+
+def _terminal_logging(ctx, ui, verbose):
+    """Let Rich print diagnostics above Live, and keep redirected diagnostics on stderr."""
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    if ui.rich:
+        from rich.logging import RichHandler
+        handler = RichHandler(console=ui.console, show_path=False, markup=False)
+    else:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s — %(message)s"))
+    previous_level = root.level
+    root.setLevel(logging.DEBUG if verbose else logging.WARNING)
+    root.addHandler(handler)
+
+    @ctx.call_on_close
+    def restore():
+        root.removeHandler(handler)
+        root.setLevel(previous_level)
+        handler.close()
 
 
 # ---------------------------------------------------------------------------
 # 辅助：彩色输出
 # ---------------------------------------------------------------------------
-
-def _c(text: str, code: str) -> str:
-    return f"\033[{code}m{text}\033[0m" if sys.stdout.isatty() else text
-
-
-def _rl_c(text: str, code: str) -> str:
-    """readline-safe 着色：给 input() 的提示符用。
-
-    GNU readline 接管 input() 提示符渲染时不识别原始 ANSI ESC，会吞掉 \\033
-    字节，导致终端显示成字面的 [35m。用 \\001/\\002 把转义标记为不可打印，
-    readline 才会正确忽略它、且不算入行宽。仅用于 prompt，普通 print 不要用。
-    """
-    if not sys.stdout.isatty():
-        return text
-    return f"\001\033[{code}m\002{text}\001\033[0m\002"
-
-
-def _rl_magenta(t: str) -> str: return _rl_c(t, "35")
-
-def green(t: str) -> str:  return _c(t, "32")
-def yellow(t: str) -> str: return _c(t, "33")
-def red(t: str) -> str:    return _c(t, "31")
-def cyan(t: str) -> str:   return _c(t, "36")
-def bold(t: str) -> str:   return _c(t, "1")
-def dim(t: str) -> str:    return _c(t, "2")
-def magenta(t: str) -> str: return _c(t, "35")
-
 
 # ---------------------------------------------------------------------------
 # 构建 agent 各组件
@@ -999,8 +995,8 @@ for _mcp_command in ("enable", "disable", "remove"):
 @click.option("--stream/--no-stream", "-s", default=True, help="Enable or disable streaming output (default: on)",)
 @click.option(
     "--reasoning-stream/--no-reasoning-stream",
-    default=None,
-    help="Stream model reasoning independently; defaults to the --stream setting.",
+    default=False,
+    help="Show model reasoning (opt in independently of answer streaming).",
 )
 @click.option("--confirm/--no-confirm", default=None, help="Legacy aliases for ask/deny approval modes")
 @click.option(
@@ -1016,7 +1012,9 @@ for _mcp_command in ("enable", "disable", "remove"):
     show_default=True,
     help="How --isolate handles generated changes.",
 )
-@click.option("--verbose", "-v", is_flag=True, help="Show debug logs")
+@click.option("--ui", type=click.Choice(["auto", "rich", "plain"]), help="Terminal presentation mode")
+@click.option("--no-progress", is_flag=True, help="Disable live status updates")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed events, tool output and debug logs")
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -1038,15 +1036,11 @@ def run(
     sandbox: bool,
     isolate: bool,
     result_policy: str,
+    ui: str | None,
+    no_progress: bool,
     verbose: bool,
 ) -> None:
     """Run the coding agent on a repository."""
-    # 配置日志
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)-7s %(name)s — %(message)s",
-        datefmt="%H:%M:%S",
-    )
 
     _maybe_onboard(ctx, repo)
     # 1.加载配置
@@ -1100,21 +1094,26 @@ def run(
         if not description:
             raise click.UsageError("task cannot be blank")
     else:
-        click.echo(red("Error: provide --task or --task-file"), err=True)
+        click.echo("Error: provide --task or --task-file", err=True)
         sys.exit(1)
 
     if not repo_path.exists():
-        click.echo(red(f"Error: repo path does not exist: {repo_path}"), err=True)
+        click.echo(f"Error: repo path does not exist: {repo_path}", err=True)
         sys.exit(1)
 
-    # 打印运行信息
-    click.echo(bold(f"\n🤖 Coding Agent"))
-    click.echo(f"  Provider : {config.llm.provider}")
-    click.echo(f"  Protocol : {config.llm.protocol}")
-    click.echo(f"  Model    : {config.llm.model}")
-    click.echo(f"  Features : plan={config.agent.planning_mode}, skills={config.agent.skills_enabled}, mcp={config.mcp.enabled}, workers={config.agent.multi_agent_enabled}")
-    click.echo(f"  Repo     : {repo_path}")
-    click.echo(f"  Max steps: {config.agent.max_steps}\n")
+    renderer = TerminalUI(replace(config.ui, mode=ui or config.ui.mode),
+                          verbose=verbose, no_progress=no_progress)
+    resolved_approval_mode = _resolve_run_approval_mode(approval_mode, confirm)
+    _terminal_logging(ctx, renderer, verbose)
+    renderer.header("FORGE AGENT · RUN", {
+        "Status": "INITIALIZING", "Task": description, "Repo": repo_path, "Branch": repo_branch(repo_path),
+        **({"Provider": config.llm.provider, "Model": config.llm.model, "Protocol": config.llm.protocol}
+           if config.ui.show_model_metadata else {}),
+        "Approval": resolved_approval_mode, "Sandbox": "Docker" if sandbox else "local",
+        "Isolate": isolate, "Planning": config.agent.planning_mode, "Skills": config.agent.skills_enabled,
+        "MCP": config.mcp.enabled, "Workers": config.agent.multi_agent_enabled,
+        "Max steps": config.agent.max_steps,
+    })
 
     # 3.构建各组件
     backend_options = {
@@ -1159,17 +1158,15 @@ def run(
                 worker_backend_factory, budget=eval_requests[0], input_upper_bound=eval_requests[1],
             )
     except ValueError as e:
-        click.echo(red(f"Error: {e}"), err=True)
+        click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
     from tools.shell_tool import terminal_confirm
     from tools.runtime import CONTAINER_WORKDIR, create_runtime
-    resolved_approval_mode = _resolve_run_approval_mode(approval_mode, confirm)
     confirm_cb = (
-        terminal_confirm if resolved_approval_mode == "ask" else
+        renderer.confirm_with(terminal_confirm) if resolved_approval_mode == "ask" else
         (lambda _prompt: True) if resolved_approval_mode in {"auto", "full"} else None
     )
-    click.echo(dim(f"  Approval: {resolved_approval_mode}"))
     #runtime是执行器实例， 有生命周期，后续还需要清理
     runtime = (
         create_runtime(
@@ -1180,9 +1177,6 @@ def run(
         if sandbox and not isolate
         else None
     )
-    if sandbox:
-        runtime_name = runtime.name if runtime is not None else "managed by isolate"
-        click.echo(dim(f"  Sandbox: Docker ({runtime_name})"))
     # 注册工具
     registry = _build_run_registry(
         config,
@@ -1204,23 +1198,6 @@ def run(
 
     context_policy = build_context_policy(config, compaction_backend)
 
-    resolved_reasoning_stream = stream if reasoning_stream is None else reasoning_stream
-    renderer = RunEventRenderer()
-
-    # 流式回调：最终回答正常亮色
-    def _stream_cb(text: str) -> None:
-        import sys
-        sys.stdout.write(text)
-        sys.stdout.flush()
-        renderer.record_streamed_text(text)
-
-    # 推理回调：思考过程 dim 暗色
-    def _thought_cb(text: str) -> None:
-        import sys
-        sys.stdout.write(dim(text))
-        sys.stdout.flush()
-
-
     agent_config = AgentConfig(
         **configured_agent_options(config),
         prepare_next_turn=context_policy,
@@ -1232,9 +1209,9 @@ def run(
         skills_max_loaded=config.agent.skills_max_loaded,
         skills_max_chars=config.agent.skills_max_chars,
         skills_reference_max_chars=config.agent.skills_reference_max_chars,
-        stream=stream or resolved_reasoning_stream,
-        stream_callback=_stream_cb if stream else None,
-        thought_callback=_thought_cb if resolved_reasoning_stream else None,
+        stream=stream or bool(reasoning_stream),
+        stream_callback=renderer.on_stream_text if stream else None,
+        thought_callback=renderer.on_reasoning_text if reasoning_stream else None,
         confirm_dangerous=confirm_cb is not None,
         confirm_callback=confirm_cb,
         approval_mode="full" if resolved_approval_mode == "full" else "ask",
@@ -1270,7 +1247,7 @@ def run(
         Path(config.agent.log_dir).mkdir(parents=True, exist_ok=True)
         bus = AgentBus() if verbose else None
         runner.bus = bus
-        click.echo(dim("  Isolate: worktree + TaskEngine\n"))
+        renderer.status("Initializing isolated execution")
 
         t0 = time.time()
         try:
@@ -1285,59 +1262,34 @@ def run(
                 on_event=renderer,
             )
         finally:
+            renderer.close()
             runner.close()
         elapsed = time.time() - t0
-        _print_run_result(result, elapsed)
+        renderer.finish(result, elapsed)
         ctx.exit(0 if result.is_success() else 1)
 
     if verbose:
-        click.echo(dim( f"  tiktoken: {'yes' if is_tiktoken_available() else 'no (char estimate)'}\n"))
+        renderer.line(f"  tiktoken: {'yes' if is_tiktoken_available() else 'no (char estimate)'}", "text.secondary")
 
-    # 直接同步运行
+    renderer.status("Initializing execution")
     t0 = time.time()
     try:
         with EventLog.create(task_obj, log_dir=config.agent.log_dir) as log:
-            click.echo(dim(f"  Log: {log.path}\n"))
+            renderer.line(f"Log: {log.path}", "text.secondary")
             #真正的执行核心。它的职责包括维护对话历史、组装 messages 调用 LLM、拿到 Action 后执行工具、写入 Action 和 Observation 到 EventLog、检测终止条件和 reflection 条件，最后返回 RunResult。
             result = runner.run(
                 RunRequest(task=task_obj, run_id=resume_id, resume=bool(resume_id)), log=log, on_event=renderer,
             )
     finally:
+        renderer.close()
         runner.close()
         if runtime is not None:
             runtime.cleanup()
 
     elapsed = time.time() - t0
-    _print_run_result(result, elapsed)
+    renderer.finish(result, elapsed)
 
     sys.exit(0 if result.is_success() else 1)
-
-
-def _print_run_result(result, elapsed: float) -> None:
-    """打印 RunResult 摘要（run 同步路径与 --isolate 路径共用）。"""
-    click.echo(bold("─" * 60))
-    status_str = green("SUCCESS") if result.is_success() else red(result.status.value.upper())
-    click.echo(f"Status  : {status_str}")
-    click.echo(f"Steps   : {result.steps_taken}")
-    click.echo(f"Tokens  : {result.total_tokens:,}")
-    click.echo(f"Time    : {elapsed:.1f}s")
-    if result.error:
-        click.echo(red(f"Error   : {result.error}"))
-    artifact = getattr(result, "worktree", None)
-    if artifact is not None:
-        click.echo(f"Branch  : {artifact.branch}")
-        if artifact.path:
-            click.echo(green(f"Worktree: {artifact.path}"))
-            click.echo(
-                f"Changes : {artifact.uncommitted_count} uncommitted, "
-                f"{artifact.commit_count} commit(s)"
-            )
-        elif artifact.changed_files:
-            click.echo(dim("Worktree: removed by result policy"))
-        if artifact.warning:
-            click.echo(red(f"Warning : {artifact.warning}"))
-    click.echo(bold("─" * 60) + "\n")
-
 
 
 # ---------------------------------------------------------------------------
@@ -1365,8 +1317,8 @@ def _chat_backend(config):
 )
 @click.option(
     "--reasoning-stream/--no-reasoning-stream",
-    default=None,
-    help="Stream model reasoning independently; defaults to the --stream setting.",
+    default=False,
+    help="Show model reasoning (opt in independently of answer streaming).",
 )
 @click.option("--sandbox", is_flag=True, default=False, help="Run commands in Docker sandbox (requires Docker)")
 @click.option(
@@ -1395,7 +1347,6 @@ def chat(
     verbose: bool,
 ) -> None:
     """Interactive chat mode — continuous conversation with the agent."""
-    import logging
     from agent.session import ChatSessionConflict, ChatSessionError
     from agent.session_store import JsonChatSessionStore
     from config.schema import save_selected_model, select_model
@@ -1411,11 +1362,6 @@ def chat(
             "--no-session cannot be combined with --continue or --resume"
         )
 
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)-7s %(name)s — %(message)s",
-        datefmt="%H:%M:%S",
-    )
 
     _maybe_onboard(ctx, repo)
     config = _load_cli_config(ctx)
@@ -1429,13 +1375,13 @@ def chat(
 
     repo_path = Path(repo).resolve()
     if not repo_path.exists():
-        click.echo(red(f"Error: repo path does not exist: {repo_path}"), err=True)
+        click.echo(f"Error: repo path does not exist: {repo_path}", err=True)
         sys.exit(1)
 
     try:
         backend = _chat_backend(config)
     except ValueError as e:
-        click.echo(red(f"Error: {e}"), err=True)
+        click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
     from tools.shell_tool import terminal_confirm
@@ -1449,11 +1395,12 @@ def chat(
         if sandbox
         else None
     )
-    if sandbox:
-        click.echo(dim(f"  Sandbox: Docker ({runtime.name})"))
+    renderer = TerminalUI(config.ui, verbose=verbose, chat=True)
+    _terminal_logging(ctx, renderer, verbose)
+    confirm_cb = renderer.confirm_with(terminal_confirm)
     registry = _build_registry(
         config,
-        confirm_callback=terminal_confirm,
+        confirm_callback=confirm_cb,
         runtime=runtime,
         default_cwd=str(repo_path),
         workspace=str(repo_path),
@@ -1478,7 +1425,8 @@ def chat(
             config=config,
             repo_path=str(repo_path),
             log_dir=config.agent.log_dir,
-            confirm_callback=terminal_confirm,   # chat 模式默认开启确认
+            confirm_callback=confirm_cb,   # chat 模式默认开启确认
+            ui=renderer,
             stream=stream,
             reasoning_stream=reasoning_stream,
             session_store=session_store,
@@ -1491,65 +1439,36 @@ def chat(
             runtime.cleanup()
         raise click.ClickException(str(exc)) from exc
 
-    # 欢迎信息
-    click.echo(bold(f"\n🤖 Coding Agent — Chat Mode"))
-    click.echo(f"  Provider : {config.llm.provider}")
-    click.echo(f"  Protocol : {config.llm.protocol}")
-    click.echo(f"  Model    : {config.llm.model}")
-    click.echo(f"  Repo     : {repo_path}")
-    if getattr(session, "is_persisted", False):
-        mode = "resumed" if continued_existing or resume_session else "new"
-        click.echo(f"  Session  : {session.session_id} ({mode})")
-        click.echo(dim(f"  State    : {session.session_path}"))
-    else:
-        click.echo("  Session  : ephemeral")
-    recovery_warning = getattr(session, "recovery_warning", None)
-    if recovery_warning:
-        click.echo(yellow(f"  Warning  : {recovery_warning}"))
-    click.echo(dim(
-        "  Type your task. Commands: "
-        "/exit /stats /session /new /resume /rewind /rename /clear /archive /cache /recovery /help /model\n"
-    ))
-
-    prompt_session = chat_prompt(repo_path, config.model_profiles)
-
-    # 启用行编辑：退格、方向键、Ctrl+A/E、历史记录（↑↓）
-    try:
-        import readline as _rl
-        import sys as _sys
-        # 检测后端：libedit（某些 Linux/macOS）还是 GNU readline
-        _is_libedit = "libedit" in getattr(_rl, "__doc__", "") or (
-            hasattr(_rl, "parse_and_bind") and _sys.platform == "darwin"
-        )
-        # 更可靠的检测：尝试 libedit 特有的绑定语法
-        try:
-            _rl.parse_and_bind("bind -e")   # libedit 启用 Emacs 模式
-            _is_libedit = True
-        except Exception:
-            _is_libedit = False
-
-        if _is_libedit:
-            _rl.parse_and_bind("bind -e")           # Emacs 模式：Ctrl+A/E/K 等
-            _rl.parse_and_bind("bind ^I rl_complete")  # Tab 补全
-        else:
-            _rl.parse_and_bind("set editing-mode emacs")  # GNU readline Emacs 模式
-            _rl.parse_and_bind("tab: complete")
-
-        _rl.set_history_length(500)   # 历史记录最多 500 条
-    except ImportError:
-        pass  # Windows 没有 readline，降级为普通 input
+    mode = "resumed" if continued_existing or resume_session else "new"
+    renderer.header("FORGE AGENT · CHAT", {
+        "Repo": repo_path, "Branch": repo_branch(repo_path),
+        **({"Provider": config.llm.provider, "Model": config.llm.model, "Protocol": config.llm.protocol}
+           if config.ui.show_model_metadata else {}),
+        "Sandbox": "Docker" if sandbox else "local", "Approval": "ask",
+        "Session": (f"{session.session_id} ({mode})" if getattr(session, "is_persisted", False) else "ephemeral"),
+        "State": getattr(session, "session_path", None),
+    })
+    if getattr(session, "recovery_warning", None):
+        renderer.line(session.recovery_warning, "status.warning")
+    renderer.line("/help for commands", "text.secondary")
+    prompt_session = chat_prompt(repo_path, config.model_profiles) if renderer.rich else None
+    if prompt_session is not None and renderer.progress:
+        def toolbar():
+            parts = [repo_path.name]
+            if config.ui.show_model_metadata:
+                parts.append(config.llm.model)
+            if config.ui.show_token_usage:
+                parts.append(f"{session.total_tokens:,} tokens")
+            return " · ".join(parts)
+        prompt_session.bottom_toolbar = toolbar
 
     try:
         # 主 REPL 循环
         while True:
             try:
-                # 清理当前行（流式输出后 readline 不知道屏幕上有残留字符）
-                # \r 回到行首，\033[2K 清除整行，然后显示提示符
-                sys.stdout.write("\r\033[2K")
-                sys.stdout.flush()
                 user_input = (
                     prompt_session.prompt("you > ") if prompt_session is not None
-                    else input(_rl_magenta("you") + " > ")
+                    else input("you > ")
                 ).strip()
             except EOFError:
                 click.echo()
@@ -1575,49 +1494,56 @@ def chat(
                 elif cmd == "/new":
                     new_id = session.start_new_session()
                     if new_id:
-                        click.echo(dim(f"  Started new session: {new_id}"))
+                        renderer.line(f"  Started new session: {new_id}", "text.secondary")
                     else:
-                        click.echo(dim("  Started new ephemeral session."))
+                        renderer.line("  Started new ephemeral session.", "text.secondary")
                 elif cmd == "/resume":
                     if not arg:
                         try:
                             session.run_round("", resume=True)
                         except (RuntimeError, ValueError) as exc:
-                            click.echo(red(f"  Cannot resume round: {exc}"))
+                            renderer.line(f"  Cannot resume round: {exc}", "status.error")
                     else:
                         try:
                             session.resume_session(arg)
-                            click.echo(dim(f"  Resumed session: {session.session_id}"))
+                            renderer.line(f"  Resumed session: {session.session_id}", "text.secondary")
                             if session.recovery_warning:
-                                click.echo(yellow(f"  Warning: {session.recovery_warning}"))
+                                renderer.line(f"  Warning: {session.recovery_warning}", "status.warning")
                         except ChatSessionError as exc:
-                            click.echo(red(f"  Cannot resume session: {exc}"))
+                            renderer.line(f"  Cannot resume session: {exc}", "status.error")
                 elif cmd == "/rewind":
                     try:
                         child = session.rewind(int(arg))
-                        click.echo(dim(f"  Rewound to round {arg} in session {child}."))
+                        renderer.line(f"  Rewound to round {arg} in session {child}.", "text.secondary")
                     except (ChatSessionError, ValueError, OSError, RuntimeError) as exc:
-                        click.echo(red(f"  Cannot rewind: {exc}"))
+                        renderer.line(f"  Cannot rewind: {exc}", "status.error")
                 elif cmd == "/rename":
                     if not arg:
-                        click.echo(dim("  Usage: /rename NAME"))
+                        renderer.line("  Usage: /rename NAME", "text.secondary")
                     else:
                         try:
                             session.rename(arg)
-                            click.echo(dim(f"  Session renamed: {arg}"))
+                            renderer.line(f"  Session renamed: {arg}", "text.secondary")
                         except (ChatSessionError, ValueError) as exc:
-                            click.echo(red(f"  Cannot rename session: {exc}"))
+                            renderer.line(f"  Cannot rename session: {exc}", "status.error")
                 elif cmd in {"/archive", "/cache", "/recovery"}:
+                    if cmd == "/recovery":
+                        if not renderer.recoveries:
+                            renderer.line("No recovery events recorded for this round.")
+                        for event in renderer.recoveries:
+                            renderer.line(event, "action.recovery")
                     session.show_runtime(cmd, arg or None)
+                elif cmd in ("/status", "/diff", "/tokens", "/plan", "/skills", "/mcp", "/compact"):
+                    session.show_ui_command(cmd)
                 elif cmd == "/clear":
                     session.clear_history()
-                    click.echo(dim("  Conversation history cleared."))
+                    renderer.line("  Conversation history cleared.", "text.secondary")
                 elif cmd == "/model":
                     if not arg:
-                        click.echo(f"  Current: {config.llm.model} ({config.llm.provider})")
+                        renderer.line(f"  Current: {config.llm.model} ({config.llm.provider})")
                         for name, profile in config.model_profiles.items():
-                            click.echo(f"    {name}: {profile.model} ({profile.provider})")
-                        click.echo(dim("  Usage: /model NAME_OR_MODEL_ID"))
+                            renderer.line(f"    {name}: {profile.model} ({profile.provider})")
+                        renderer.line("  Usage: /model NAME_OR_MODEL_ID", "text.secondary")
                     else:
                         try:
                             candidate = replace(config, agent=replace(config.agent))
@@ -1629,16 +1555,16 @@ def chat(
                             config.llm = candidate.llm
                             config.agent.budget_tokens = candidate.agent.budget_tokens
                             session.switch_backend(next_backend)
-                            click.echo(green(f"  Model: {config.llm.model} ({config.llm.provider})"))
+                            renderer.line(f"  Model: {config.llm.model} ({config.llm.provider})", "status.success")
                             if ctx.obj.get("config_path") is None:
                                 try:
                                     save_selected_model(arg, profile=arg in config.model_profiles)
                                 except OSError as exc:
-                                    click.echo(yellow(f"  Could not save model choice: {exc}"))
+                                    renderer.line(f"  Could not save model choice: {exc}", "status.warning")
                         except ValueError as exc:
-                            click.echo(red(f"  Cannot switch model: {exc}"))
+                            renderer.line(f"  Cannot switch model: {exc}", "status.error")
                 elif cmd == "/help":
-                    click.echo(dim(
+                    renderer.line(
                         "  Commands:\n"
                         "    /exit   — quit\n"
                         "    /stats  — show session statistics\n"
@@ -1649,25 +1575,31 @@ def chat(
                         "    /rename NAME — name the current session\n"
                         "    /clear  — clear effective conversation history\n"
                         "    /model [NAME_OR_MODEL_ID] — list or switch models\n"
+                        "    /status — model, repository and session\n"
+                        "    /diff   — last round patch\n"
+                        "    /tokens — session usage and latest model input\n"
+                        "    /plan /skills /mcp /compact — inspect execution details\n"
+                        "    /recovery /archive /cache — inspect recovery and durable records\n"
                         "    /help   — show this help\n"
-                        "  Anything else is sent to the agent."
-                    ))
+                        "  Anything else is sent to the agent.",
+                        "text.secondary",
+                    )
                 else:
-                    click.echo(dim(f"  Unknown command: {user_input}. Type /help for help."))
+                    renderer.line(f"  Unknown command: {user_input}. Type /help for help.", "text.secondary")
                 continue
 
             # 运行一轮 agent
-            click.echo(dim(f"\n  Agent working..."))
+
             try:
                 session.run_round(user_input)
             except KeyboardInterrupt:
-                click.echo(yellow("\n  Interrupted. Type /exit to quit or continue with a new task."))
+                renderer.line("\n  Interrupted. Type /exit to quit or continue with a new task.", "status.warning")
             except ChatSessionConflict:
                 # 冲突时保持 fail-closed，不覆盖另一进程已经写入的新状态。
-                click.echo(red("\n  Session conflict: another process saved a newer state; this round was not saved."))
-                click.echo(yellow(f"  Tool side effects may be partial. Use /resume {session.session_id} to reload, or /new to start separately."))
+                renderer.line("\n  Session conflict: another process saved a newer state; this round was not saved.", "status.error")
+                renderer.line(f"  Tool side effects may be partial. Use /resume {session.session_id} to reload, or /new to start separately.", "status.warning")
             except Exception as e:
-                click.echo(red(f"\n  Error: {e}"))
+                renderer.line(f"\n  Error: {e}", "status.error")
                 if verbose:
                     import traceback
                     traceback.print_exc()
@@ -1677,7 +1609,7 @@ def chat(
             runtime.cleanup()
 
     session.print_stats()
-    click.echo(dim("  Bye!\n"))
+    renderer.line("  Bye!\n", "text.secondary")
 
 
 # ---------------------------------------------------------------------------
@@ -1697,21 +1629,21 @@ def log_show(log_file: str) -> None:
 
     path = Path(log_file)
     if not path.exists():
-        click.echo(red(f"File not found: {path}"), err=True)
+        click.echo(f"File not found: {path}", err=True)
         sys.exit(1)
 
     with EventLog.open_existing(path) as elog:
         events = elog.replay()
         stats = summarize_run(elog)
 
-    click.echo(bold(f"\nEvent Log: {path.name}"))
+    click.echo(f"\nEvent Log: {path.name}")
     click.echo(f"  Total events : {stats['total_events']}")
     click.echo(f"  Actions      : {stats['actions']}")
     click.echo(f"  Reflections  : {stats['reflections']}")
     click.echo(f"  Tool calls   : {stats['tool_calls']}")
     click.echo(f"  Final status : {stats['final_status']}\n")
 
-    click.echo(bold("Events:"))
+    click.echo("Events:")
     for event in events:
         ts = event.timestamp[11:19]   # HH:MM:SS
         etype = event.event_type.value
@@ -1739,7 +1671,7 @@ def log_list(log_dir: str) -> None:
         click.echo("No log files found.")
         return
 
-    click.echo(bold(f"\nLog files in {log_path}:\n"))
+    click.echo(f"\nLog files in {log_path}:\n")
     for f in files:
         size_kb = f.stat().st_size / 1024
         click.echo(f"  {f.name}  ({size_kb:.1f} KB)")

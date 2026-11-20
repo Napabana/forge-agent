@@ -16,6 +16,7 @@ forgeAgent chat --repo .
 
 ## 核心能力
 
+- Run 和 Chat 在终端中展示工具进度和结果，支持流式回答、Markdown、Diff 与纯文本重定向。[终端界面](docs/design/terminal-ui.md)
 - 模型与工具共享执行链，支持仓库符号导航、上下文预算和可追溯压缩。
 - Git worktree 与 Docker 提供隔离执行，独立验收为任务结果提供可检查依据。
 - 运行时可保存检查点、恢复工具回执、导入归档包，并从历史 Chat 轮次分支继续。

@@ -22,9 +22,14 @@ flowchart LR
     C --> H[(Runtime Store)]
     E --> H
     C --> I[Trace]
+    I -->|Event observer| U[TerminalUI]
+    D -->|Stream callback| U
+    B -->|RunResult| U
 ```
 
 `entry/` 接收请求，`agent/` 组织执行，`context/` 组装模型上下文，`llm/` 统一协议和用量。`harness/` 管工具执行，`tools/` 提供具体能力。`runtime/` 管 Git 工作树，`task/` 管任务认领，`ipc/` 分发事件。`durable_runtime/` 保存可恢复状态。评测和经验迭代分别在 `evals/` 与 `experience/`。
+
+终端如何协调流式回答、权限确认和最终结果见 [CLI 终端界面](terminal-ui.md)。
 
 ## 预期效果
 

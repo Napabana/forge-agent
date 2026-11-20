@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.key_binding import KeyBindings
 
 
 COMMANDS = ("/exit", "/stats", "/session", "/new", "/resume", "/rewind", "/rename",
-            "/clear", "/help", "/model", "/recovery", "/archive", "/cache")
+            "/clear", "/help", "/model", "/recovery", "/archive", "/cache",
+            "/status", "/diff", "/tokens", "/plan", "/skills", "/mcp", "/compact")
 
 
 class ChatCompleter(Completer):
@@ -52,6 +55,18 @@ class ChatCompleter(Completer):
 
 def chat_prompt(repo_path: Path, model_names=()):
     """Use a live menu on a terminal; keep piped input compatible with Click tests."""
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
+    if (not sys.stdin.isatty() or not sys.stdout.isatty() or not sys.stderr.isatty()
+            or os.getenv("TERM") == "dumb" or os.getenv("CI", "").lower() in ("1", "true", "yes")):
         return None
-    return PromptSession(completer=ChatCompleter(repo_path, model_names), complete_while_typing=True)
+    keys = KeyBindings()
+
+    @keys.add("escape", "enter")
+    def newline(event):
+        event.current_buffer.insert_text("\n")
+
+    @keys.add("c-g")
+    def edit(event):
+        event.current_buffer.open_in_editor()
+
+    return PromptSession(completer=ChatCompleter(repo_path, model_names),
+                         complete_while_typing=True, key_bindings=keys)

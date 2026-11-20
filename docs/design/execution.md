@@ -1,5 +1,7 @@
 # 任务执行
 
+Run、Chat 和 Issue 将事件观察者和流式回调接入 [CLI 终端界面](terminal-ui.md)。
+
 ## 为什么实现
 
 ExecutionRunner 为入口提供统一生命周期，使同一个任务在交互、自动化和评测中使用同一套 Agent 与工具。
