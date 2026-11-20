@@ -40,6 +40,8 @@ def test_chat_commands_follow_the_turn_and_session(tmp_path, monkeypatch):
         assert expected in result.output
     assert result.output.count("first reply") == result.output.count("next reply") == 1
     assert result.output.index("first reply") < result.output.index("next reply")
+    assert "YOU" not in result.output and "Task: read-only" not in result.output
+    assert "Session stats" not in result.output
 
 
 def test_permission_boundaries_and_interleaved_stream(capsys):
@@ -71,8 +73,9 @@ def test_prompt_multiline_history_and_editor_binding(tmp_path, monkeypatch):
     monkeypatch.setenv("TERM", "xterm")
     with create_pipe_input() as input_pipe:
         monkeypatch.setattr(chat_input, "PromptSession", lambda **kw: PromptSession(
-            input=input_pipe, output=DummyOutput(), **kw))
+            input=input_pipe, output=DummyOutput(), validate_while_typing=False, **kw))
         session = chat_input.chat_prompt(tmp_path)
+        assert not session.default_buffer.complete_while_typing()
         # Replace launching a desktop editor with a deterministic edit of the same buffer.
         monkeypatch.setattr(session.default_buffer, "open_in_editor",
                             lambda: session.default_buffer.insert_text("edited"))
@@ -83,3 +86,29 @@ def test_prompt_multiline_history_and_editor_binding(tmp_path, monkeypatch):
             buffer.load_history_if_not_yet_loaded()
             buffer._load_history_task.add_done_callback(lambda _: input_pipe.send_text("\x1b[A\r"))
         assert session.prompt("> ", pre_run=recall_after_history_load) == "one\ntwoedited"
+        input_pipe.send_text("/mo\t\r")
+        assert session.prompt("> ") == "/model"
+        input_pipe.send_text("/\x1b[B\r")
+        assert session.prompt("> ") == "/model"
+
+
+def test_model_selector_search_save_and_cancel(monkeypatch):
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from entry import chat_input
+
+    profiles = {
+        "main": SimpleNamespace(model="primary-model", provider="ollama"),
+        "fast": SimpleNamespace(model="secondary-model", provider="openai"),
+    }
+    for keys, selected in (
+        ("openai second\r", ("fast", False)),
+        ("\x1b[B\x13", ("fast", True)),
+        ("\x03", None),
+    ):
+        with create_pipe_input() as pipe:
+            monkeypatch.setattr(chat_input, "PromptSession", lambda **kw: PromptSession(
+                input=pipe, output=DummyOutput(), **kw))
+            pipe.send_text(keys)
+            assert chat_input.choose_model(profiles, profiles["main"], allow_default=True) == selected

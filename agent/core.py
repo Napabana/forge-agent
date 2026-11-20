@@ -327,10 +327,13 @@ class Agent:
                 del self._repo_map_cache
 
         log.log_task_start(task)
+        token_budget = TokenBudget(
+            total=self._cfg.budget_tokens,
+            repo_map_cap=self._cfg.repo_map_budget,
+        )
         runtime = self._cfg.memory_runtime
         if runtime is not None:
-            counter = TokenBudget(total=self._cfg.budget_tokens).counter
-            self._memory_context = runtime.context(task.description, counter, log=log)
+            self._memory_context = runtime.context(task.description, token_budget.counter, log=log)
         log.log_trace(
             EventType.EXECUTION_CONSTRAINTS, 0,
             read_only=self._executor.constraints.read_only,
@@ -397,10 +400,6 @@ class Agent:
                 content=build_task_prompt(task.description, self._model_repo_path, task.issue_url),
             ))
 
-        token_budget = TokenBudget(
-            total=self._cfg.budget_tokens,
-            repo_map_cap=self._cfg.repo_map_budget,
-        )
         repo_map = getattr(self, "_repo_map_instance", RepoMap(task.repo_path))
         usage = SessionUsage()
         total_tokens = 0

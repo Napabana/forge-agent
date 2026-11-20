@@ -41,13 +41,7 @@ _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from config.schema import load_config, merge_cli_overrides   # noqa: E402
-from llm.router import create_backend_from_config            # noqa: E402
-
-# 模块级 import（供 patch 使用）
 from config.schema import load_config, merge_cli_overrides  # noqa: E402
-from entry.ui.terminal import TerminalUI
-from entry.ui.summary import repo_branch
 from llm.router import create_backend_from_config           # noqa: E402
 
 
@@ -1101,6 +1095,9 @@ def run(
         click.echo(f"Error: repo path does not exist: {repo_path}", err=True)
         sys.exit(1)
 
+    from entry.ui.summary import repo_branch
+    from entry.ui.terminal import TerminalUI
+
     renderer = TerminalUI(replace(config.ui, mode=ui or config.ui.mode),
                           verbose=verbose, no_progress=no_progress)
     resolved_approval_mode = _resolve_run_approval_mode(approval_mode, confirm)
@@ -1352,7 +1349,8 @@ def chat(
     from config.schema import save_selected_model, select_model
     from entry.context_common import build_context_policy
     from entry.chat import ChatSession
-    from entry.chat_input import chat_prompt
+    from entry.chat_input import chat_prompt, choose_model
+    from entry.ui.terminal import TerminalUI
     from dataclasses import replace
 
     if continue_session and resume_session:
@@ -1439,28 +1437,26 @@ def chat(
             runtime.cleanup()
         raise click.ClickException(str(exc)) from exc
 
-    mode = "resumed" if continued_existing or resume_session else "new"
-    renderer.header("FORGE AGENT · CHAT", {
-        "Repo": repo_path, "Branch": repo_branch(repo_path),
-        **({"Provider": config.llm.provider, "Model": config.llm.model, "Protocol": config.llm.protocol}
-           if config.ui.show_model_metadata else {}),
-        "Sandbox": "Docker" if sandbox else "local", "Approval": "ask",
-        "Session": (f"{session.session_id} ({mode})" if getattr(session, "is_persisted", False) else "ephemeral"),
-        "State": getattr(session, "session_path", None),
-    })
+    def footer():
+        items = []
+        if config.ui.show_model_metadata:
+            items.append(config.llm.model)
+        if config.ui.show_token_usage:
+            items.append(f"{session.total_tokens:,} tokens")
+        return " · ".join(items)
+
+    show_footer = config.ui.show_model_metadata or config.ui.show_token_usage
+    prompt_session = chat_prompt(repo_path, footer if show_footer else None) if renderer.rich else None
+    heading = ["Forge Agent", repo_path.name]
+    if prompt_session is None and config.ui.show_model_metadata:
+        heading.append(config.llm.model)
+    if continued_existing or resume_session:
+        heading.append("resumed")
+    if sandbox:
+        heading.append("Docker")
+    renderer.line(" · ".join(heading), "app.title")
     if getattr(session, "recovery_warning", None):
         renderer.line(session.recovery_warning, "status.warning")
-    renderer.line("/help for commands", "text.secondary")
-    prompt_session = chat_prompt(repo_path, config.model_profiles) if renderer.rich else None
-    if prompt_session is not None and renderer.progress:
-        def toolbar():
-            parts = [repo_path.name]
-            if config.ui.show_model_metadata:
-                parts.append(config.llm.model)
-            if config.ui.show_token_usage:
-                parts.append(f"{session.total_tokens:,} tokens")
-            return " · ".join(parts)
-        prompt_session.bottom_toolbar = toolbar
 
     try:
         # 主 REPL 循环
@@ -1539,12 +1535,21 @@ def chat(
                     session.clear_history()
                     renderer.line("  Conversation history cleared.", "text.secondary")
                 elif cmd == "/model":
+                    save_default = bool(arg)
+                    can_save_default = ctx.obj.get("config_path") is None
                     if not arg:
-                        renderer.line(f"  Current: {config.llm.model} ({config.llm.provider})")
-                        for name, profile in config.model_profiles.items():
-                            renderer.line(f"    {name}: {profile.model} ({profile.provider})")
-                        renderer.line("  Usage: /model NAME_OR_MODEL_ID", "text.secondary")
-                    else:
+                        if config.model_profiles and prompt_session is not None:
+                            renderer.close()
+                            selected = choose_model(config.model_profiles, config.llm, allow_default=can_save_default)
+                            if selected is None:
+                                continue
+                            arg, save_default = selected
+                        else:
+                            renderer.line(f"  Current: {config.llm.model} ({config.llm.provider})")
+                            for name, profile in config.model_profiles.items():
+                                renderer.line(f"  {name} · {profile.model} ({profile.provider})")
+                            renderer.line("  Usage: /model NAME_OR_MODEL_ID", "text.secondary")
+                    if arg:
                         try:
                             candidate = replace(config, agent=replace(config.agent))
                             if arg in candidate.model_profiles:
@@ -1556,7 +1561,7 @@ def chat(
                             config.agent.budget_tokens = candidate.agent.budget_tokens
                             session.switch_backend(next_backend)
                             renderer.line(f"  Model: {config.llm.model} ({config.llm.provider})", "status.success")
-                            if ctx.obj.get("config_path") is None:
+                            if save_default and can_save_default:
                                 try:
                                     save_selected_model(arg, profile=arg in config.model_profiles)
                                 except OSError as exc:
@@ -1608,8 +1613,8 @@ def chat(
         if runtime is not None:
             runtime.cleanup()
 
-    session.print_stats()
-    renderer.line("  Bye!\n", "text.secondary")
+    if verbose:
+        session.print_stats()
 
 
 # ---------------------------------------------------------------------------

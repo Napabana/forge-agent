@@ -156,7 +156,7 @@ class ChatSession:
         self._shared_history = ConversationHistory(
             max_messages=self._history_max_messages
         )
-        self._repo_revision = _repository_revision(self.repo_path)
+        self._repo_revision: str | None = None
 
         # 累计统计
         from llm.usage import SessionUsage
@@ -499,7 +499,7 @@ class ChatSession:
         self.last_patch = None
         self.recovery_warning = None
         self.agent.invalidate_repo_map_cache(self.repo_path)
-        self._repo_revision = _repository_revision(self.repo_path)
+        self._repo_revision = None
         if self._session_store is not None:
             self._state = self._session_store.create(self.repo_path)
             self._checkpoint()
@@ -636,7 +636,7 @@ class ChatSession:
         self.total_tokens = self.usage.total_tokens
         self.total_steps = state.total_steps
         self.round_count = state.round_count
-        self._repo_revision = state.repo_revision or _repository_revision(self.repo_path)
+        self._repo_revision = state.repo_revision
         self.recovery_warning = None
 
         restore_lineage = getattr(
@@ -762,7 +762,6 @@ class ChatSession:
 
         self.ui.reset()
         self.last_patch = None
-        self.ui.panel("YOU", {"Task": task.description})
         self.ui.status("Preparing context")
 
         return self.runner.run(

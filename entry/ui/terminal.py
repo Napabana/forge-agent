@@ -77,7 +77,6 @@ class TerminalUI:
         self.show_reasoning = show_reasoning
         self.lock = RLock()
         self.live = None
-        self.fields = {}
         self.reset()
 
     def reset(self):
@@ -105,7 +104,7 @@ class TerminalUI:
         self._print(Text(safe_text(value), style))
 
     @display_only
-    def panel(self, title, fields):
+    def panel(self, title, fields, *, border=True):
         body = Text()
         for key, value in fields.items():
             if value is None or value == "":
@@ -123,15 +122,15 @@ class TerminalUI:
                     value = Text("\n").join(lines[:2])
                     value.append("…")
             body.append_text(value)
-        if self.rich:
-            self._print(Panel(body, title=title, title_align="left", border_style="border.focused"))
+        if self.rich and border:
+            self._print(Panel(body, title=title, title_align="left", border_style="border.focused", expand=False))
         else:
-            self._print(Text(title))
-            self._print(body)
+            self._print(Text(title, "app.title"))
+            if body:
+                self._print(body)
 
     def header(self, title, fields):
-        self.fields = {k: v for k, v in fields.items() if k in ("Task", "Repo", "Branch", "Model", "Provider", "Protocol")}
-        self.panel(title, fields)
+        self.panel(title, fields, border=self.verbose)
 
     def _stop_live(self):
         live, self.live = self.live, None
@@ -261,6 +260,8 @@ class TerminalUI:
             self.streamed_answer.clear()
         if kind == E.ACTION and payload.get("action", {}).get("action_type") == "finish":
             self.pending_answer = payload["action"].get("message") or ""
+            if self.chat and not self.verbose:
+                return
         elif kind == E.OBSERVATION:
             self.tools[payload.get("observation", {}).get("status", "unknown")] += 1
         elif kind in (E.TOOL_EXECUTION_FINISHED, E.TOOL_EXECUTION_FAILED) and payload.get("duration_ms") is not None:
@@ -272,6 +273,8 @@ class TerminalUI:
         elif kind == E.LLM_CALL_FINISHED:
             usage = payload.get("usage") or {}
             self.details["input_tokens"] = usage.get("input_tokens") if usage.get("total_tokens") else None
+            if self.chat and not self.verbose:
+                return
         elif kind == E.CONTEXT_COMPACTED:
             self.details["compact"] = {k: payload[k] for k in ("before_tokens", "after_tokens", "checkpoint_id") if k in payload}
         elif kind in (E.PLAN_CREATED, E.PLAN_REVISED, E.PLAN_STEP_STARTED, E.PLAN_STEP_COMPLETED):
@@ -295,6 +298,11 @@ class TerminalUI:
         self._stop_live()
         if kind == E.TASK_COMPLETE:
             self.answer(self.pending_answer or payload.get("summary", ""))
+            if self.chat and not self.verbose:
+                return
+        if (self.chat and not self.verbose and kind == E.RUN_TERMINATED
+                and payload.get("termination_reason") == "completion_satisfied"):
+            return
         markers = {"action.tool": "▶", "status.success": "✓", "status.warning": "!", "status.error": "✕",
                    "action.plan": "◆", "action.recovery": "↻"}
         prefix = markers.get(view.style, "·") + " " if self.rich else ""
@@ -318,8 +326,7 @@ class TerminalUI:
     def finish(self, result, elapsed):
         self.close()
         rows = summary_fields(result, elapsed, self.tools, show_tokens=self.config.show_token_usage)
-        fields = {"Status": rows.pop("Status"), **self.fields, **rows}
         summary = getattr(result, "summary", "")
         if summary and summary.strip() != self.last_answer:
-            fields["Summary"] = summary
-        self.panel("RUN SUMMARY", fields)
+            rows["Summary"] = summary
+        self.panel("RUN SUMMARY", rows, border=self.verbose)

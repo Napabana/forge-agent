@@ -13,6 +13,8 @@ forgeAgent chat --repo /path/to/repo
 
 `forgeAgent --config PATH` 选择用户配置。无人值守初始化使用 `init --non-interactive --provider PROVIDER --model MODEL --api-key-env ENV_NAME`。详见[配置、模型与用量](docs/design/configuration.md)。
 
+在 WSL 或 Linux 上，可从源码目录执行 `bash scripts/install_cli.sh` 安装或升级用户级的 `forgeAgent` 命令。安装完成后直接运行 `forgeAgent chat` 和 `forgeAgent run`。
+
 ## 执行与验收
 
 ```bash
@@ -32,7 +34,9 @@ forgeAgent run --no-progress --verbose --repo . --task "检查失败测试"
 
 `--no-stream` 关闭回答流，执行事件仍可见。默认隐藏模型推理，可用 `--reasoning-stream` 显式开启。交互终端使用内联 Rich，CI 和重定向自动使用纯文本。`NO_COLOR` 关闭颜色。
 
-Chat 中按 Enter 提交，Meta+Enter（或先 Esc 再 Enter）换行，Ctrl+G 在 `VISUAL` 或 `EDITOR` 中编辑当前输入。用 `/status` 看会话与执行环境，`/tokens` 看用量，`/diff` 看最近一轮记录的 Git patch，`/plan`、`/recovery`、`/compact`、`/skills` 和 `/mcp` 查看执行细节。完整配置见 [CLI 终端界面](docs/design/terminal-ui.md)。
+Chat 中按 Enter 提交，输入 `/` 会在输入区下方显示命令和说明。用方向键选择，Tab 补全，Enter 执行。输入 `@` 后用 Tab 补全路径。Meta+Enter（或先 Esc 再 Enter）换行，Ctrl+G 打开编辑器。
+
+输入 `/model` 搜索已配置的模型。Enter 切换当前会话，Ctrl+S 保存为默认，Esc 取消。在默认用户配置下，直接运行 `/model NAME` 会切换并保存。用 `/status` 看会话与环境，`/tokens` 看用量，`/diff` 看最近一轮的 Git patch。完整命令和配置见 [CLI 终端界面](docs/design/terminal-ui.md)。
 
 ## 暂停、续接和归档
 

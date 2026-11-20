@@ -104,5 +104,6 @@ def test_rich_run_in_real_pty(tmp_path):
     result = subprocess.run(["script", "-qec", command, "/dev/null"], cwd=tmp_path, env=env, input=b"",
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=45)
     assert result.returncode == 0, result.stdout.decode(errors="replace")
+    assert b"RuntimeWarning" not in result.stdout
     assert all(marker in result.stdout for marker in (b"FORGE AGENT", b"RUN SUMMARY", b"SUCCESS", b"Fixture answer",
                                                       b"\x1b[?25l", b"\x1b[?25h"))

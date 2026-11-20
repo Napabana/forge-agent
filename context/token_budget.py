@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
-import warnings
 from dataclasses import dataclass
 from typing import Protocol
 
+logger = logging.getLogger(__name__)
 
 _tiktoken_enc = None
 _tiktoken_available = False
@@ -395,12 +396,7 @@ class TokenBudget:
         self._counter = token_counter or LegacyTokenCounter()
         self._capability_fallback = bool(capability_fallback)
         if bridge_is_model_aware and self._capability_fallback:
-            warnings.warn(
-                "Model context_window is unknown; Forge is using the configured "
-                "context budget cap as a compatibility fallback, not as model capability.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+            logger.debug("Using the configured context cap (%d tokens) for a model with an unknown window.", effective)
 
     @property
     def counter(self) -> TokenCounter:

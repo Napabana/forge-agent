@@ -1,5 +1,8 @@
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
@@ -14,16 +17,15 @@ def _choices(completer, text):
     return [item.text for item in completer.get_completions(Document(text), CompleteEvent())]
 
 
-def test_chat_completes_commands_and_repository_paths(tmp_path):
+def test_repository_path_completion_leaves_slash_commands_to_the_inline_list(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.py").write_text("", encoding="utf-8")
     (tmp_path / "README.md").write_text("", encoding="utf-8")
-    completer = ChatCompleter(tmp_path, ["default", "flash"])
+    completer = ChatCompleter(tmp_path)
 
-    assert "/model" in _choices(completer, "/")
-    assert _choices(completer, "/mo") == ["/model"]
-    assert _choices(completer, "/model ") == ["default", "flash"]
-    assert _choices(completer, "/model f") == ["flash"]
+    assert _choices(completer, "/") == []
+    assert _choices(completer, "/mo") == []
+    assert _choices(completer, "/model ") == []
     assert "src/" in _choices(completer, "open @")
     assert _choices(completer, "open @src/m") == ["main.py"]
     assert _choices(completer, "open @../") == []
@@ -86,7 +88,8 @@ def test_compaction_switches_semantic_backend():
     assert policy.semantic_summarizer.backend is second
 
 
-def test_chat_model_command_switches_next_backend_and_saves_choice(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("picker", "save"), [(False, True), (True, False), (True, True)])
+def test_chat_model_command_switches_backend_and_saves_only_when_requested(tmp_path, monkeypatch, picker, save):
     from click.testing import CliRunner
     from entry.cli import cli
 
@@ -111,17 +114,26 @@ def test_chat_model_command_switches_next_backend_and_saves_choice(tmp_path, mon
 
     monkeypatch.setattr("entry.cli._load_cli_config", lambda ctx: config)
     monkeypatch.setattr("entry.cli._chat_backend", lambda cfg: cfg.llm.model)
-    monkeypatch.setattr("entry.cli.chat_prompt", lambda *args: None, raising=False)
-    monkeypatch.setattr("entry.chat_input.chat_prompt", lambda *args: None)
+    if picker:
+        from entry.ui.terminal import make_console
+
+        def tty_console(config):
+            console, _ = make_console(config)
+            return console, True
+
+        commands = iter(("/model", "/exit"))
+        monkeypatch.setattr("entry.ui.terminal.make_console", tty_console)
+        monkeypatch.setattr("entry.chat_input.chat_prompt", lambda *_: SimpleNamespace(prompt=lambda _: next(commands)))
+        monkeypatch.setattr("entry.chat_input.choose_model", lambda *_, **kwargs: ("second", save))
     monkeypatch.setattr("entry.chat.ChatSession", FakeSession)
     monkeypatch.setattr("config.schema.save_selected_model", lambda name, **kwargs: seen.setdefault("saved", name))
     result = CliRunner().invoke(cli, ["chat", "--repo", str(tmp_path), "--no-session"],
-                                input="/model second\n/exit\n", catch_exceptions=False)
+                                input="" if picker else "/model second\n/exit\n", catch_exceptions=False)
 
     assert result.exit_code == 0
     assert seen["initial"] == "first"
     assert seen["switched"] == "second-model"
-    assert seen["saved"] == "second"
+    assert seen.get("saved") == ("second" if save else None)
     assert config.llm.model == "second-model"
 
 

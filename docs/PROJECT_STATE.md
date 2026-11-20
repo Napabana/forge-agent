@@ -5,7 +5,7 @@ Forge Agent 提供命令行和评测入口。CLI 支持单次运行、交互 Cha
 | 能力 | 当前入口 |
 | --- | --- |
 | 单次和交互编码 | `forgeAgent run`、`forgeAgent chat` |
-| 终端显示 | [Run 与 Chat 的内联界面、工具事件和结果摘要](design/terminal-ui.md) |
+| 终端显示 | [紧凑界面、流式输出、斜杠命令和可搜索模型选择](design/terminal-ui.md) |
 | 持久化和恢复 | `forgeAgent runtime`、Chat `/resume` 与 `/rewind` |
 | 归档共享 | 同项目内的 `archive-export` 与 `archive-import` |
 | 独立验收与交付 | 路径契约、Verifier、`python -m entry.github_issue` |

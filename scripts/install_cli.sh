@@ -17,8 +17,10 @@ build_source="$(mktemp -d)"
 trap 'rm -rf -- "$build_source"' EXIT
 tar -C "$repo_root" --exclude='evals/results' --exclude='*/__pycache__' \
   --exclude='*.pyc' -cf - \
-  pyproject.toml README.md agent config context entry evals experience harness ipc llm \
-  mcp_integration runtime skills task tools | tar -C "$build_source" -xf -
+  pyproject.toml README.md agent config/schema.py config/credentials.py context durable_runtime \
+  entry evals experience harness ipc llm mcp_integration project_memory runtime skills task tools \
+  | tar -C "$build_source" -xf -
+printf '{}\n' > "$build_source/config/default.yaml"
 "$venv/bin/python" -m pip install "$build_source"
 mkdir -p "$bin_dir"
 ln -sfn "$venv/bin/forgeAgent" "$bin_dir/forgeAgent"

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from agent.task import Action, ActionType, Task
 from config.schema import load_config
 from context.structured_compaction import DeterministicEvidence, build_semantic_packet
@@ -181,8 +179,8 @@ agent:
     config = load_config(config_path)
     assert config.llm.max_output_tokens == 8_192
     assert config.agent.context_budget_cap == 80_000
-    with pytest.warns(RuntimeWarning, match="context_window is unknown"):
-        budget = TokenBudget(total=config.agent.budget_tokens)
+    budget = TokenBudget(total=config.agent.budget_tokens)
+    assert budget.capability_fallback
     assert budget.effective_context_window == 80_000
     assert budget.reserved_output_tokens == 8_192
     assert budget.safety_margin_tokens == 1_024
