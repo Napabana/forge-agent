@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -5,11 +6,12 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from agent.task import Action, ActionType, Event, EventType as E
+from agent.task import Action, ActionType, Event, EventType as E, ToolCall
 from config.schema import AppConfig
 from entry.cli import cli
 from entry.ui.terminal import TerminalUI
 from llm.base import MockBackend
+from tools.base import ToolResult
 
 
 def _prompt_rows(session, message, text=""):
@@ -88,6 +90,63 @@ def test_permission_boundaries_and_interleaved_stream(capsys):
     out = capsys.readouterr().out
     assert out.count("first") == out.count("second") == 1
     assert out.index("reason\n") < out.index("first\n") < out.index("Skill loaded")
+
+
+def test_chat_approval_applies_to_the_next_round_and_restores_ask(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside fixture\n", encoding="utf-8")
+    config = AppConfig()
+    config.agent.log_dir = str(tmp_path / "logs")
+    shell = Action(ActionType.TOOL_CALL, "read", ToolCall("shell", {"cmd": "sed -n '1p' example.txt"}))
+    view = Action(ActionType.TOOL_CALL, "read", ToolCall("file_view", {"path": str(outside)}))
+    finish = Action(ActionType.FINISH, "", message="read complete")
+    script = [shell, finish, shell, view, finish, shell, finish, shell, finish]
+    backend = MockBackend(script)
+    received_tools = []
+    complete = backend.complete
+
+    def record_schemas(messages, tools):
+        received_tools.append(tuple(tool.name for tool in tools))
+        return complete(messages, tools)
+
+    prompts = []
+    shell_access = []
+
+    def reject(prompt):
+        prompts.append(prompt)
+        return False
+
+    def execute(tool, params):
+        shell_access.append(tool._full_access)
+        return ToolResult(True, "fixture content")
+
+    monkeypatch.setattr(backend, "complete", record_schemas)
+    monkeypatch.setattr("entry.cli._load_cli_config", lambda ctx: config)
+    monkeypatch.setattr("entry.cli._chat_backend", lambda cfg: backend)
+    monkeypatch.setattr("tools.shell_tool.terminal_confirm", reject)
+    monkeypatch.setattr("tools.shell_tool.ShellTool.execute", execute)
+    result = CliRunner().invoke(
+        cli, ["chat", "--repo", str(repo), "--no-session"],
+        input="/approval\ninspect first\n/approval auto\n/status\n/approval invalid\ninspect second\n"
+              "/approval full\ninspect third\n/approval ask\ninspect fourth\n/exit\n",
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Approval: ask" in result.output and "Approval: auto" in result.output and "Approval: full" in result.output
+    assert "Auto-approve confirmation requests and enforce denials" in result.output
+    assert result.output.count("Usage: /approval ask|auto|full") == 2
+    assert len(prompts) == 2 and shell_access == [False, True]
+    assert {"git_add", "git_commit"}.issubset(received_tools[5])
+    assert {"git_add", "git_commit"}.isdisjoint(received_tools[0])
+    assert received_tools[0] == received_tools[-1]
+    traces = [json.loads(line) for trace in (tmp_path / "logs").glob("*.jsonl")
+              for line in trace.read_text(encoding="utf-8").splitlines()]
+    assert any(event["event_type"] == "permission_decision" and event["payload"]["tool"] == "file_view"
+               and event["payload"]["decision"] == "deny" for event in traces)
 
 
 def test_prompt_multiline_history_and_editor_binding(tmp_path, monkeypatch):

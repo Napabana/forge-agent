@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import subprocess
 
-from agent.task import Action, ActionType
+from agent.task import Action, ActionType, ToolCall
 from config.schema import AppConfig
 from entry.chat import ChatSession
 from llm.base import MockBackend
 from tools.base import NoopTool, ToolRegistry
+from tools.file_tool import FileViewTool, FileWriteTool
 
 
 def _config(tmp_path) -> AppConfig:
@@ -69,3 +71,62 @@ def test_chat_query_change_reranks_same_persistent_index_without_reparse(tmp_pat
     assert len(metrics.full_rebuild_seconds) == 1
     assert metrics.incremental_update_seconds == []
     assert metrics.warm_load_seconds == []
+
+
+def test_chat_shares_warm_repo_snapshot_and_refreshes_after_edits(tmp_path, monkeypatch):
+    import agent.core as core
+    import context.incremental_repo_map as incremental
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("FORGE_AGENT_CACHE_DIR", str(tmp_path / "index"))
+    target = repo / "handler.py"
+    target.write_text("def original_handler():\n    return 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "handler.py"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "-qm", "fixture"], cwd=repo, check=True)
+    finish = Action(ActionType.FINISH, "", message="done")
+    backend = MockBackend([
+        finish,
+        Action(ActionType.TOOL_CALL, "read", ToolCall("file_view", {"path": "handler.py"})),
+        finish,
+        Action(ActionType.TOOL_CALL, "write", ToolCall("file_write", {
+            "path": "new_handler.py", "content": "def new_handler():\n    return 3\n",
+        })),
+        finish,
+    ])
+    session = ChatSession(backend, ToolRegistry().register(FileViewTool(workspace=str(repo)))
+                          .register(FileWriteTool(workspace=str(repo))),
+                          _config(tmp_path), str(repo), str(tmp_path / "logs"), stream=False,
+                          prepare_next_turn=lambda _context: None)
+    original_read = core.capture_repository_state
+    snapshots = []
+    full_hashes = []
+    original_hash = session.agent._get_repo_content_state
+
+    def capture(path):
+        snapshots.append(path)
+        return original_read(path)
+
+    def content_hash(path, **kwargs):
+        full_hashes.append(path)
+        return original_hash(path, **kwargs)
+
+    monkeypatch.setattr(core, "capture_repository_state", capture)
+    monkeypatch.setattr(incremental, "capture_repository_state", capture)
+    monkeypatch.setattr(session.agent, "_get_repo_content_state", content_hash)
+    assert session.run_round("inspect handler")
+    assert not full_hashes
+    snapshots.clear()
+    target.write_text("def renamed_handler():\n    return 2\n", encoding="utf-8")
+
+    assert session.run_round("read renamed_handler")
+    assert snapshots == [str(repo)]
+    assert not full_hashes
+    assert "renamed_handler" in backend.received_messages[1][0].content
+    assert "original_handler" not in backend.received_messages[1][0].content
+
+    assert session.run_round("add new_handler")
+    assert full_hashes
+    assert "function new_handler" in backend.received_messages[-1][0].content

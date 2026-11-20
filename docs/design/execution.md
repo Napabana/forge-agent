@@ -14,6 +14,8 @@ ExecutionRunner 为入口提供统一生命周期，使同一个任务在交互�
 
 `RunRequest` 携带任务、隔离策略、约束和验收合同。Runner 加载配置和仓库身份，构造 Agent 或工作树编排器。任务状态和 Trace 通过 `RunResult` 返回。隔离工作使用 `TaskEngine` 原子认领任务并更新状态，`AgentBus` 负责进程内事件分发。
 
+每条 Chat 消息通过同一个 Runner 执行独立轮次。会话可复用 Agent 和上下文，每轮根据当前审批配置和执行约束绑定工具执行器。
+
 CLI 中用 `forgeAgent log show PATH` 查看已保存的运行摘要与事件。
 
 ## 预期效果

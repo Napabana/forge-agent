@@ -99,6 +99,8 @@ def test_chat_model_command_switches_backend_and_saves_only_when_requested(tmp_p
     seen = {}
 
     class FakeSession:
+        approval_mode = "ask"
+
         def __init__(self, **kwargs):
             seen["session"] = self
             seen["initial"] = kwargs["backend"]

@@ -195,12 +195,12 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, BaseTool] = {}
 
-    def register(self, tool: BaseTool) -> "ToolRegistry":
+    def register(self, tool: BaseTool, *, replace: bool = False) -> "ToolRegistry":
         """
         注册一个工具。支持链式调用：
             registry.register(ShellTool()).register(FileTool())
         """
-        if tool.name in self._tools:
+        if tool.name in self._tools and not replace:
             raise ValueError(f"Tool '{tool.name}' is already registered.")
         self._tools[tool.name] = tool
         return self

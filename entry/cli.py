@@ -327,6 +327,14 @@ def _resolve_run_approval_mode(approval_mode: str | None, confirm: bool | None) 
     return approval_mode or ("ask" if confirm is True else "deny" if confirm is False else "auto")
 
 
+def _approval_confirm_callback(mode: str, ask_callback):
+    if mode == "ask":
+        return ask_callback
+    if mode in {"auto", "full"}:
+        return lambda _prompt: True
+    return None
+
+
 @cli.group("config")
 def config_commands() -> None:
     """Inspect the resolved configuration."""
@@ -1160,10 +1168,7 @@ def run(
 
     from tools.shell_tool import terminal_confirm
     from tools.runtime import CONTAINER_WORKDIR, create_runtime
-    confirm_cb = (
-        renderer.confirm_with(terminal_confirm) if resolved_approval_mode == "ask" else
-        (lambda _prompt: True) if resolved_approval_mode in {"auto", "full"} else None
-    )
+    confirm_cb = _approval_confirm_callback(resolved_approval_mode, renderer.confirm_with(terminal_confirm))
     #runtime是执行器实例， 有生命周期，后续还需要清理
     runtime = (
         create_runtime(
@@ -1348,7 +1353,7 @@ def chat(
     from agent.session_store import JsonChatSessionStore
     from config.schema import save_selected_model, select_model
     from entry.context_common import build_context_policy
-    from entry.chat import ChatSession
+    from entry.chat import APPROVAL_MODES, ChatSession
     from entry.chat_input import chat_prompt, choose_model
     from entry.ui.terminal import TerminalUI
     from dataclasses import replace
@@ -1396,13 +1401,14 @@ def chat(
     renderer = TerminalUI(config.ui, verbose=verbose, chat=True)
     _terminal_logging(ctx, renderer, verbose)
     confirm_cb = renderer.confirm_with(terminal_confirm)
-    registry = _build_registry(
-        config,
-        confirm_callback=confirm_cb,
-        runtime=runtime,
-        default_cwd=str(repo_path),
-        workspace=str(repo_path),
-    )
+
+    def build_chat_registry(mode: str):
+        return _build_run_registry(
+            config, runtime=runtime, default_cwd=str(repo_path), workspace=str(repo_path),
+            full_access=mode == "full",
+        )
+
+    registry = build_chat_registry("ask")
     session_store = (
         None
         if no_session
@@ -1438,15 +1444,14 @@ def chat(
         raise click.ClickException(str(exc)) from exc
 
     def footer():
-        items = []
+        items = [f"Approval: {session.approval_mode}"]
         if config.ui.show_model_metadata:
             items.append(config.llm.model)
         if config.ui.show_token_usage:
             items.append(f"{session.total_tokens:,} tokens")
         return " · ".join(items)
 
-    show_footer = config.ui.show_model_metadata or config.ui.show_token_usage
-    prompt_session = chat_prompt(repo_path, footer if show_footer else None) if renderer.rich else None
+    prompt_session = chat_prompt(repo_path, footer) if renderer.rich else None
     heading = ["Forge Agent", repo_path.name]
     if prompt_session is None and config.ui.show_model_metadata:
         heading.append(config.llm.model)
@@ -1454,6 +1459,8 @@ def chat(
         heading.append("resumed")
     if sandbox:
         heading.append("Docker")
+    if prompt_session is None:
+        heading.append(f"Approval: {session.approval_mode}")
     renderer.line(" · ".join(heading), "app.title")
     if getattr(session, "recovery_warning", None):
         renderer.line(session.recovery_warning, "status.warning")
@@ -1532,6 +1539,24 @@ def chat(
                     session.show_runtime(cmd, arg or None)
                 elif cmd in ("/status", "/diff", "/tokens", "/plan", "/skills", "/mcp", "/compact"):
                     session.show_ui_command(cmd)
+                elif cmd == "/approval":
+                    mode = arg.lower()
+                    if not mode:
+                        renderer.panel("APPROVAL", {"Current": session.approval_mode, **APPROVAL_MODES})
+                        renderer.line("  Usage: /approval ask|auto|full", "text.secondary")
+                    elif mode not in APPROVAL_MODES:
+                        renderer.line("  Usage: /approval ask|auto|full", "status.warning")
+                    else:
+                        if (session.approval_mode == "full") != (mode == "full"):
+                            tools_for_mode = build_chat_registry(mode)
+                            for name in ("shell", "git_add", "git_commit"):
+                                tool = tools_for_mode.get_tool(name)
+                                if tool is None:
+                                    registry.unregister(name)
+                                else:
+                                    registry.register(tool, replace=True)
+                        session.set_approval_mode(mode, _approval_confirm_callback(mode, confirm_cb))
+                        renderer.line(f"  Approval: {mode} · {APPROVAL_MODES[mode]}", "status.success")
                 elif cmd == "/clear":
                     session.clear_history()
                     renderer.line("  Conversation history cleared.", "text.secondary")
@@ -1581,6 +1606,7 @@ def chat(
                         "    /rename NAME — name the current session\n"
                         "    /clear  — clear effective conversation history\n"
                         "    /model [NAME_OR_MODEL_ID] — list or switch models\n"
+                        "    /approval [ask|auto|full] — show or change tool approval\n"
                         "    /status — model, repository and session\n"
                         "    /diff   — last round patch\n"
                         "    /tokens — session usage and latest model input\n"

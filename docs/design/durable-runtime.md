@@ -46,4 +46,6 @@ Durable Runtime Store 是按项目划分的 SQLite WAL 数据库。Scope Owner �
 
 续接要求仓库、配置、工具注册表与保存状态相符。无法核对的工具效果留待核查。真实供应商用量、外部 MCP、用户 Token 直连和实机跨启动或跨主机接管按各自环境验收。
 
+Chat 的中断轮次按原审批配置和工具列表校验。重启后 Chat 从 `ask` 开始。原轮次使用 `auto` 或 `full` 时，先用 `/approval` 选择对应模式，再执行 `/resume`。
+
 Windows 下可将 `durable_runtime.root` 指向 NTFS 卷上的私有目录，使运行时数据库和归档能应用用户级 ACL。exFAT 卷无法提供这一访问控制。

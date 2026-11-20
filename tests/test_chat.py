@@ -404,6 +404,8 @@ class TestChatCommand:
         captured = {}
 
         class FakeSession:
+            approval_mode = "ask"
+
             def __init__(self, **kwargs):
                 captured.update(kwargs)
 

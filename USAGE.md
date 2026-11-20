@@ -38,6 +38,8 @@ Chat 中按 Enter 提交，输入 `/` 会在输入区下方显示命令和说明
 
 输入 `/model` 搜索已配置的模型。Enter 切换当前会话，Ctrl+S 保存为默认，Esc 取消。在默认用户配置下，直接运行 `/model NAME` 会切换并保存。用 `/status` 看会话与环境，`/tokens` 看用量，`/diff` 看最近一轮的 Git patch。完整命令和配置见 [CLI 终端界面](docs/design/terminal-ui.md)。
 
+用 `/approval` 查看当前审批和三个模式的说明。用 `/approval ask` 在需要时询问，`/approval auto` 自动批准确认请求并保留拒绝规则，`/approval full` 启用完整工具权限。选择立即用于接下来的轮次，在当前 Chat 进程中生效，底栏和 `/status` 随之更新。`--profile safe` 的只读限制仍然生效。
+
 ## 暂停、续接和归档
 
 在用户 YAML 中设置：

@@ -97,7 +97,7 @@ class PersistentRepoMap(RepoMap):
         """Explicit full rebuild fallback, preserving RepoMap.refresh semantics."""
         return self._full_rebuild(force_refresh=True, reason="explicit_refresh")
 
-    def sync(self) -> RepoMapScanReport:
+    def sync(self, *, current_state: RepositoryState | None = None) -> RepoMapScanReport:
         """Load a warm index and apply only repository changes when reliable."""
         if not self._index.ready:
             reason = self._index.reset_reason or "missing_persistent_index"
@@ -106,7 +106,7 @@ class PersistentRepoMap(RepoMap):
         started = time.perf_counter()
         try:
             previous = RepositoryState.from_json(self._index.repository_state_json())
-            current = capture_repository_state(self._root)
+            current = current_state or capture_repository_state(self._root)
             files = self._load_files_from_index()
             changes = detect_repository_changes(self._root, previous, current)
         except Exception as exc:

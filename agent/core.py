@@ -46,7 +46,7 @@ from agent.recovery import (
 from context.history import ConversationHistory
 from context.incremental_repo_map import PersistentRepoMap
 from context.repo_map import RepoMap
-from context.repository_state import repository_content_fingerprint, repository_fingerprint, _git
+from context.repository_state import capture_repository_state, repository_content_fingerprint, repository_fingerprint, _git
 from context.token_budget import LegacyTokenCounter, TokenBudget
 from agent.prompt import (
     build_system_prompt,
@@ -192,6 +192,8 @@ class Agent:
         self._repo_map_cache_key: str | None = None
         self._repo_map_force_refresh = False
         self._repo_map_sync_requested = False
+        self._chat_repository_state = None
+        self._chat_repository_task = None
         self._repo_map_build_seconds = 0.0
         self._repo_map_build_calls = 0
         self._repo_map_cache_hits = 0
@@ -205,6 +207,7 @@ class Agent:
 
     def reset_run_runtime_state(self) -> None:
         """Clear transient per-run state before a Runner shared-history preflight."""
+        self._chat_repository_task = None
         self._planning_runtime = None
         self._planning_context_cache = ""
         self._recovery_runtime = None
@@ -260,6 +263,34 @@ class Agent:
             "index": index_metrics.snapshot() if index_metrics is not None else None,
         }
 
+    @property
+    def chat_repository_revision(self) -> str | None:
+        state = self._chat_repository_state
+        return state.fingerprint if state else None
+
+    def prepare_repository(self, task: Task, *, chat_turn: bool) -> RepoMap:
+        """Share RepoMap inputs between the context preflight and the run."""
+        self._repo_map_query = task.description
+        self._repo_map_located_file = None
+        if self._repo_map_cache_key != task.repo_path:
+            self.invalidate_repo_map_cache()
+            self._repo_map_force_refresh = False
+            self._repo_map_sync_requested = False
+            self._repo_map_cache_key = task.repo_path
+            self._repo_map_instance = self._new_repo_map(task.repo_path)
+        elif getattr(self, "_repo_map_cache_query", None) != task.description and hasattr(self, "_repo_map_cache"):
+            del self._repo_map_cache
+
+        if not chat_turn:
+            self._chat_repository_state = None
+        elif self._chat_repository_task is not task:
+            state = capture_repository_state(task.repo_path)
+            if state != self._chat_repository_state:
+                self.invalidate_repo_map_cache(task.repo_path)
+            self._chat_repository_state = state
+            self._chat_repository_task = task
+        return self._repo_map_instance
+
     def run(
         self,
         task: Task,
@@ -302,6 +333,7 @@ class Agent:
         finally:
             self._durable_snapshot = None
             self._prepared_history_override = None
+            self._chat_repository_task = None
             if durable:
                 durable.log = None
             if archive_tool is not None:
@@ -312,21 +344,13 @@ class Agent:
         self._durable_view_step = None
         self._current_repo_path = task.repo_path
         self._model_repo_path = self._cfg.execution_workspace or task.repo_path
-        self._repo_map_query = task.description
         self._memory_context = ""
-        self._repo_map_located_file = None
-        cache_key = task.repo_path
-        if self._repo_map_cache_key != cache_key:
-            self.invalidate_repo_map_cache()
-            self._repo_map_force_refresh = False
-            self._repo_map_sync_requested = False
-            self._repo_map_cache_key = cache_key
-            self._repo_map_instance = self._new_repo_map(task.repo_path)
-        elif getattr(self, "_repo_map_cache_query", None) != task.description:
-            if hasattr(self, "_repo_map_cache"):
-                del self._repo_map_cache
-
+        chat_turn = log.entrypoint == "chat" and history is not None
+        fast_chat = chat_turn and self._cfg.durable_run is None and self._cfg.hooks is None
         log.log_task_start(task)
+        repo_map = self.prepare_repository(task, chat_turn=chat_turn)
+        chat_state = self._chat_repository_state
+
         token_budget = TokenBudget(
             total=self._cfg.budget_tokens,
             repo_map_cap=self._cfg.repo_map_budget,
@@ -400,7 +424,6 @@ class Agent:
                 content=build_task_prompt(task.description, self._model_repo_path, task.issue_url),
             ))
 
-        repo_map = getattr(self, "_repo_map_instance", RepoMap(task.repo_path))
         usage = SessionUsage()
         total_tokens = 0
         steps_without_semantic_progress = 0
@@ -415,16 +438,28 @@ class Agent:
         last_successful_test_content_state: str | None = None
         # Progress/loop detection keeps the Git-aware repository fingerprint, while
         # completion verification separately tracks checkout-visible file content.
-        initial_repo_state = self._get_repo_state(task.repo_path)
-        initial_repo_content_state = self._get_repo_content_state(
-            task.repo_path, excluded_paths=(log.path.resolve(),),
-        )
+        log_excluded = (log.path.resolve(),)
+        initial_repo_state = chat_state.fingerprint if fast_chat else self._get_repo_state(task.repo_path)
         last_repo_state = initial_repo_state
-        last_repo_content_state = initial_repo_content_state
+        initial_repo_content_state = last_repo_content_state = ""
         fatal_error_key: str | None = None
         fatal_error_count = 0
-        baseline_tests = self._completion_test_files(task.repo_path)
-        initial_paths = self._completion_paths(task.repo_path)
+        baseline_tests: dict[str, str] = {}
+        initial_paths: set[str] = set()
+
+        def ensure_content_baseline() -> None:
+            nonlocal initial_repo_content_state, last_repo_content_state, baseline_tests, initial_paths
+            if initial_repo_content_state:
+                return
+            initial_repo_content_state = last_repo_content_state = self._get_repo_content_state(
+                task.repo_path, excluded_paths=log_excluded,
+            )
+            baseline_tests = self._completion_test_files(task.repo_path)
+            initial_paths = self._completion_paths(task.repo_path)
+
+        if (not fast_chat or task.require_changes or task.require_tests or task.test_cmd
+                or task.inferred_require_changes or task.inferred_require_tests):
+            ensure_content_baseline()
         completion_checks: list[CheckEvidence] = []
         candidate_snapshot: str | None = None
         candidate_hint_snapshot: str | None = None
@@ -905,9 +940,9 @@ class Agent:
             if action.action_type == ActionType.FINISH:
                 summary = action.message or "Task complete."
                 patch = self._get_git_diff(task.repo_path)
-                final_repo_state = self._get_repo_state(task.repo_path)
-                final_repo_content_state = self._get_repo_content_state(
-                    task.repo_path, excluded_paths=(log.path.resolve(),),
+                final_repo_content_state = (
+                    self._get_repo_content_state(task.repo_path, excluded_paths=log_excluded)
+                    if initial_repo_content_state else last_repo_content_state
                 )
                 rejection_code: str | None = None
                 verification_error: str | None = None
@@ -1086,6 +1121,10 @@ class Agent:
                     history.add(tool_feedback(detail))
                     continue
                 tool_metadata = self._registry.get_metadata(tc.name)
+                verify_workspace = (not fast_chat or test_attempted or tc.name in self._cfg.test_tool_names
+                                    or self._registry.is_mutating(tc.name, tc.params))
+                if verify_workspace:
+                    ensure_content_baseline()
                 tool_started = time.perf_counter()
                 tool_span = log.log_trace(
                     EventType.TOOL_EXECUTION_STARTED,
@@ -1237,11 +1276,15 @@ class Agent:
                         if hasattr(self, "_repo_map_cache"):
                             del self._repo_map_cache
 
-                current_repo_state = self._get_repo_state(task.repo_path)
+                current_repo_state = last_repo_state
+                current_repo_content_state = last_repo_content_state
+                if verify_workspace:
+                    if fast_chat:
+                        chat_state = capture_repository_state(task.repo_path)
+                        self._chat_repository_state = chat_state
+                    current_repo_state = chat_state.fingerprint if fast_chat else self._get_repo_state(task.repo_path)
+                    current_repo_content_state = self._get_repo_content_state(task.repo_path, excluded_paths=log_excluded)
                 repository_changed = current_repo_state != last_repo_state
-                current_repo_content_state = self._get_repo_content_state(
-                    task.repo_path, excluded_paths=(log.path.resolve(),),
-                )
                 repository_content_changed = (
                     current_repo_content_state != last_repo_content_state
                 )
@@ -1250,6 +1293,7 @@ class Agent:
                     tool_execution_id=tool_span, tool_name=tc.name,
                     repository_changed=repository_changed,
                     repository_content_changed=repository_content_changed,
+                    workspace_checked=verify_workspace,
                 )
                 if repository_content_changed:
                     last_repo_content_state = current_repo_content_state
@@ -1264,7 +1308,11 @@ class Agent:
                             else None
                         )
                         try:
-                            if changed_path and observation.is_success():
+                            if chat_turn:
+                                if not fast_chat:
+                                    self._chat_repository_state = None
+                                self._repo_map_sync_requested = True
+                            elif changed_path and observation.is_success():
                                 repo_map.update_paths([changed_path])  # type: ignore[attr-defined]
                                 self._repo_map_sync_requested = False
                             else:
@@ -1305,9 +1353,11 @@ class Agent:
                         log.log_trace(EventType.COMPLETION_CHECK, step, origin=origin.value, scope=scope,
                                       outcome=outcome.value, snapshot=check_snapshot)
 
-                untracked = _git(Path(task.repo_path).resolve(), "ls-files", "-z", "--others", "--exclude-standard")
-                new_paths = tuple(path for path in untracked.split("\0") if path) if untracked is not None else tuple(sorted(self._completion_paths(task.repo_path) - initial_paths))
-                new_paths = tuple(path for path in new_paths if (Path(task.repo_path) / path).resolve() != log.path.resolve())
+                new_paths = ()
+                if not fast_chat or completion_checks:
+                    untracked = _git(Path(task.repo_path).resolve(), "ls-files", "-z", "--others", "--exclude-standard")
+                    new_paths = tuple(path for path in untracked.split("\0") if path) if untracked is not None else tuple(sorted(self._completion_paths(task.repo_path) - initial_paths))
+                    new_paths = tuple(path for path in new_paths if (Path(task.repo_path) / path).resolve() not in log_excluded)
                 readiness = evaluate_completion_candidate(EvidenceSnapshot(
                     initial_repo_content_state, current_repo_content_state,
                     require_changes=task.require_changes, require_tests=True,
@@ -1749,19 +1799,12 @@ class Agent:
         if steps_without_semantic_progress < self._cfg.reflection_no_edit_steps:
             return steps_without_semantic_progress, None
 
-        current_content_state = self._get_repo_content_state(
-            task.repo_path, excluded_paths=(log.path.resolve(),),
-        )
-        current_change_is_verified = (
-            last_successful_test_content_state is not None
-            and current_content_state != initial_repo_content_state
-            and current_content_state == last_successful_test_content_state
-        )
-        if current_change_is_verified:
-            # Verification/read-only inspection after a tested repository change
-            # is real progress. Do not force a replan merely because no new edit
-            # happened during the verification phase.
-            return 0, None
+        if last_successful_test_content_state is not None:
+            current_content_state = self._get_repo_content_state(
+                task.repo_path, excluded_paths=(log.path.resolve(),),
+            )
+            if current_content_state == last_successful_test_content_state != initial_repo_content_state:
+                return 0, None
 
         if self._structured_recovery_enabled():
             recovery = self._handle_recovery(
@@ -2076,7 +2119,10 @@ class Agent:
                 self._repo_map_cache = ""
             elif mode == "incremental":
                 if self._repo_map_sync_requested:
-                    repo_map.sync()  # type: ignore[attr-defined]
+                    if self._chat_repository_state is None:
+                        repo_map.sync()  # type: ignore[attr-defined]
+                    else:
+                        repo_map.sync(current_state=self._chat_repository_state)  # type: ignore[attr-defined]
                 self._repo_map_cache = repo_map.build(budget=map_budget, query=query, counter=token_budget.counter)
             elif self._repo_map_force_refresh:
                 self._repo_map_cache = repo_map.build(

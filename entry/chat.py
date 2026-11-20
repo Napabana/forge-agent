@@ -62,6 +62,12 @@ def _repository_revision(repo_path: str | Path) -> str:
 
 _compat_renderer = RunEventRenderer(preview_lines=20, compact=True, show_task=False)
 
+APPROVAL_MODES = {
+    "ask": "Ask when approval is required",
+    "auto": "Auto-approve confirmation requests and enforce denials",
+    "full": "Skip approval checks and enable full tool access",
+}
+
 
 def _print_event_live(event) -> None:
     """Compatibility wrapper; product code uses a per-session shared renderer."""
@@ -108,7 +114,6 @@ class ChatSession:
         self.repo_path = repo_path
         self.log_dir = log_dir
         self.config = config
-        self._confirm_callback = confirm_callback
         self._session_store = session_store
         self._prepare_next_turn = prepare_next_turn
         bind_backend = getattr(self._prepare_next_turn, "bind_backend", None)
@@ -197,12 +202,6 @@ class ChatSession:
         from agent.session_store import utc_now
         from agent.task import Task
         from llm.base import LLMMessage
-
-        # 用户可能在两轮之间手动改仓库；先检查再构建本轮 Repo Map。
-        current_revision = _repository_revision(self.repo_path)
-        if current_revision != self._repo_revision:
-            self.agent.invalidate_repo_map_cache(self.repo_path)
-            self._repo_revision = current_revision
 
         prior_round = self._state.rounds[-1] if resume and self._state and self._state.rounds else None
         if resume and (prior_round is None or prior_round.status != "interrupted" or not prior_round.run_id):
@@ -299,11 +298,8 @@ class ChatSession:
                     raise
         finally:
             self.ui.close()
-            # 本轮若修改或提交了代码，让下一轮重新生成 Repo Map。
-            current_revision = _repository_revision(self.repo_path)
-            if current_revision != self._repo_revision:
-                self.agent.invalidate_repo_map_cache(self.repo_path)
-                self._repo_revision = current_revision
+            self.agent = self.runner.agent
+            self._repo_revision = self.agent.chat_repository_revision or self._repo_revision
 
         elapsed = time.time() - t0
         self.usage.add(result.usage)
@@ -431,10 +427,12 @@ class ChatSession:
         import json
         ui = self.ui
         if command == "/status":
+            mode = self.approval_mode
+            description = APPROVAL_MODES.get(mode, "Decline confirmation requests")
             ui.panel("CHAT STATUS", {"Model": self.config.llm.model, "Provider": self.config.llm.provider,
                      "Repo": self.repo_path, "Branch": repo_branch(self.repo_path),
                      "Session": self.session_id or "ephemeral", "Rounds": self.round_count,
-                     "Approval": "ask" if self._confirm_callback else "deny",
+                     "Approval": f"{mode} · {description}",
                      "Sandbox": "Docker" if self.sandbox else "local"})
         elif command == "/diff":
             if self.last_patch:
@@ -465,6 +463,21 @@ class ChatSession:
         elif command == "/plan":
             plan = ui.details.get("plan")
             ui.line(json.dumps(plan, ensure_ascii=False, indent=2) if plan else "No plan event recorded for this round.")
+
+    @property
+    def approval_mode(self) -> str:
+        if self.runner.confirm_callback is None:
+            return "deny"
+        return self.runner.config.approval_mode
+
+    def set_approval_mode(self, mode: str, confirm_callback) -> None:
+        """Apply an explicitly selected approval mode to subsequent rounds."""
+        if mode not in APPROVAL_MODES or confirm_callback is None:
+            raise ValueError("Invalid Chat approval configuration")
+        self.runner.config.approval_mode = mode
+        self.runner.config.confirm_dangerous = True
+        self.runner.config.confirm_callback = confirm_callback
+        self.runner.confirm_callback = confirm_callback
 
     def switch_backend(self, backend) -> None:
         """Use the new backend from the next round while retaining this session's history."""

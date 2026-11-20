@@ -6,6 +6,8 @@
 
 安装后用 `forgeAgent --help` 查看命令。使用 `forgeAgent chat` 进入交互会话，使用 `python -m entry.github_issue --help` 查阅 GitHub 交付参数。
 
+Chat 中的 `/approval` 显示和切换本进程的审批模式。共享执行器在下一轮使用所选审批与当前执行配置。
+
 ## 从哪里读代码
 
 - [`cli.py`](cli.py)

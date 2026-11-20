@@ -6,9 +6,9 @@
 | --- | --- | --- |
 | `agent/` | 将任务编排为模型调用、工具观察和独立验收。 | [Agent 执行](execution.md) |
 | `config/` | 将运行配置、模型档案、预算和系统凭据引用加载为类型化对象。 | [配置与凭据](configuration.md) |
-| `context/` | 维护完整历史、模型视图、上下文预算、RepoMap 和归档来源。 | [上下文与仓库导航](context.md) |
+| `context/` | 维护完整历史、模型视图、上下文预算、RepoMap 与其仓库状态，以及归档来源。 | [上下文与仓库导航](context.md) |
 | `durable_runtime/` | 管理 SQLite、Scope Owner、检查点、工具日志和未知副作用核对。 | [持久化运行时](durable-runtime.md) |
-| `entry/` | 将终端命令、Chat 会话和 GitHub Issue 转成 Runner 可执行任务。 | [命令行任务执行](execution.md) · [终端 UI 与事件展示](terminal-ui.md) |
+| `entry/` | 将终端命令、Chat 会话和 GitHub Issue 转成 Runner 可执行任务，并维护 Chat 进程的审批选择。 | [命令行任务执行](execution.md) · [终端 UI 与事件展示](terminal-ui.md) |
 | `evals/` | 运行编码任务、上下文实验和故障注入，记录独立 grader、Trace 及用量。 | [评测](evaluation.md) |
 | `experience/` | 从运行轨迹提取候选经验，对候选进行受控评测并决定是否晋升。 | [经验候选](evaluation.md) |
 | `harness/` | 在实际调用前实施 Hook、权限、只读约束和取消边界，并记录结果。 | [工具执行控制](agent-tools.md) |

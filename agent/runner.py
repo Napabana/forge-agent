@@ -17,7 +17,6 @@ from agent.orchestrate import orchestrate_run
 from agent.task import EventType, RunResult, RunStatus, Task
 from agent.trace_v2 import bind_trace_context
 from context.history import ConversationHistory
-from context.repo_map import RepoMap
 from context.token_budget import TokenBudget
 from config.schema import MCPConfig
 from harness import ExecutionConstraints, Hooks, PermissionManager, ToolExecutor
@@ -477,12 +476,10 @@ class ExecutionRunner:
             request.execution_constraints,
         )
         if key != self._agent_key:
-            if self._agent_key is None:
-                self.agent._cfg = config
-                self.agent._executor = executor
-            else:
+            if self._agent_key is not None:
                 self.agent = Agent(self.backend, self.registry, config, executor=executor)
             self._agent_key = key
+        self.agent._executor = executor
         self.agent._cfg = config
 
         own_log = log is None
@@ -644,26 +641,12 @@ class ExecutionRunner:
         # transient plan so context pressure can never observe stale planning state.
         self.agent.reset_run_runtime_state()
         self.agent._current_repo_path = task.repo_path
-        self.agent._repo_map_query = task.description
-        cache_key = task.repo_path
-        if self.agent._repo_map_cache_key != cache_key:
-            self.agent.invalidate_repo_map_cache()
-            self.agent._repo_map_force_refresh = False
-            self.agent._repo_map_sync_requested = False
-            self.agent._repo_map_cache_key = cache_key
-            self.agent._repo_map_instance = self.agent._new_repo_map(task.repo_path)
-        elif getattr(self.agent, "_repo_map_cache_query", None) != task.description:
-            if hasattr(self.agent, "_repo_map_cache"):
-                del self.agent._repo_map_cache
+        repo_map = self.agent.prepare_repository(task, chat_turn=log.entrypoint == "chat")
 
         token_budget = TokenBudget(
             total=config.budget_tokens,
             repo_map_cap=config.repo_map_budget,
         )
-        repo_map = getattr(self.agent, "_repo_map_instance", None)
-        if repo_map is None:
-            repo_map = self.agent._new_repo_map(task.repo_path)
-            self.agent._repo_map_instance = repo_map
         return self.agent._prepare_next_turn(
             task,
             1,

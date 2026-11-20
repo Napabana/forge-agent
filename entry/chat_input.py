@@ -23,6 +23,7 @@ from entry.ui.terminal import safe_text
 COMMANDS = {
     "/help": "Show commands",
     "/model": "Select a model",
+    "/approval": "Show or change tool approval",
     "/status": "Show session and workspace",
     "/new": "Start a fresh session",
     "/resume": "Resume a round or session",
