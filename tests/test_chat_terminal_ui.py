@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
@@ -9,6 +10,24 @@ from config.schema import AppConfig
 from entry.cli import cli
 from entry.ui.terminal import TerminalUI
 from llm.base import MockBackend
+
+
+def _prompt_rows(session, message, text=""):
+    from prompt_toolkit.application.current import set_app
+    from prompt_toolkit.document import Document
+    from prompt_toolkit.layout.mouse_handlers import MouseHandlers
+    from prompt_toolkit.layout.screen import Screen, WritePosition
+
+    session.message = message
+    session.default_buffer.reset(Document(text))
+    screen = Screen()
+    with set_app(session.app), patch.object(session.default_buffer, "load_history_if_not_yet_loaded"):
+        session.layout.container.write_to_screen(
+            screen, MouseHandlers(), WritePosition(xpos=0, ypos=0, width=95, height=40),
+            parent_style="", erase_bg=False, z_index=None,
+        )
+    return ["".join(c.char for _, c in sorted(screen.data_buffer[row].items())).rstrip()
+            for row in range(40)]
 
 
 def test_chat_commands_follow_the_turn_and_session(tmp_path, monkeypatch):
@@ -31,6 +50,14 @@ def test_chat_commands_follow_the_turn_and_session(tmp_path, monkeypatch):
     backend = MockBackend([Action(ActionType.FINISH, "", message=reply) for reply in ("first reply", "next reply")])
     monkeypatch.setattr("entry.cli._load_cli_config", lambda ctx: config)
     monkeypatch.setattr("entry.cli._chat_backend", lambda cfg: backend)
+    phases = []
+    status = TerminalUI.status
+
+    def record_phase(ui, phase):
+        phases.append(phase)
+        status(ui, phase)
+
+    monkeypatch.setattr(TerminalUI, "status", record_phase)
     result = CliRunner().invoke(cli, ["chat", "--repo", str(repo), "--no-session"],
                                 input="read-only first\n/diff\n/tokens\n/status\n/compact\n/plan\n/skills\n/mcp\n"
                                       "/new\n/diff\nread-only second\n/exit\n", catch_exceptions=False)
@@ -42,6 +69,8 @@ def test_chat_commands_follow_the_turn_and_session(tmp_path, monkeypatch):
     assert result.output.index("first reply") < result.output.index("next reply")
     assert "YOU" not in result.output and "Task: read-only" not in result.output
     assert "Session stats" not in result.output
+    assert phases[0] == "Checking workspace"
+    assert "Processing response" in phases
 
 
 def test_permission_boundaries_and_interleaved_stream(capsys):
@@ -76,6 +105,10 @@ def test_prompt_multiline_history_and_editor_binding(tmp_path, monkeypatch):
             input=input_pipe, output=DummyOutput(), validate_while_typing=False, **kw))
         session = chat_input.chat_prompt(tmp_path)
         assert not session.default_buffer.complete_while_typing()
+        rows = _prompt_rows(session, "you > ", "/")
+        assert rows[0] == "you > /"
+        assert "/help" in rows[1] and "Show commands" in rows[1]
+        assert "/model" in rows[2]
         # Replace launching a desktop editor with a deterministic edit of the same buffer.
         monkeypatch.setattr(session.default_buffer, "open_in_editor",
                             lambda: session.default_buffer.insert_text("edited"))
@@ -112,3 +145,24 @@ def test_model_selector_search_save_and_cancel(monkeypatch):
                 input=pipe, output=DummyOutput(), **kw))
             pipe.send_text(keys)
             assert chat_input.choose_model(profiles, profiles["main"], allow_default=True) == selected
+
+
+def test_model_choices_are_adjacent_to_input(monkeypatch):
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from entry import chat_input
+
+    def check_layout(session, message):
+        rows = _prompt_rows(session, message)
+        assert rows[0] == "model >"
+        assert "primary-model" in rows[1]
+        assert "Enter switch" in rows[2]
+        return None
+
+    with create_pipe_input() as pipe:
+        monkeypatch.setattr(chat_input, "PromptSession", lambda **kw: PromptSession(
+            input=pipe, output=DummyOutput(), **kw))
+        monkeypatch.setattr(PromptSession, "prompt", check_layout)
+        profile = SimpleNamespace(model="primary-model", provider="openai")
+        assert chat_input.choose_model({"main": profile}, profile, allow_default=True) is None

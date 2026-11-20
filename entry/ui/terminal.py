@@ -7,6 +7,7 @@ import re
 import sys
 import time
 from collections import Counter
+from contextlib import contextmanager
 from functools import wraps
 from threading import RLock
 
@@ -159,6 +160,15 @@ class TerminalUI:
                 self.live.start(refresh=True)
             # A status Live reads the current phase on each refresh.
 
+    @contextmanager
+    def activity(self, phase):
+        self.reset()
+        self.status(phase)
+        try:
+            yield
+        finally:
+            self.close()
+
     def confirm_with(self, callback):
         def confirm(prompt):
             with self.lock:
@@ -274,6 +284,8 @@ class TerminalUI:
             usage = payload.get("usage") or {}
             self.details["input_tokens"] = usage.get("input_tokens") if usage.get("total_tokens") else None
             if self.chat and not self.verbose:
+                self._flush()
+                self.status("Processing response")
                 return
         elif kind == E.CONTEXT_COMPACTED:
             self.details["compact"] = {k: payload[k] for k in ("before_tokens", "after_tokens", "checkpoint_id") if k in payload}

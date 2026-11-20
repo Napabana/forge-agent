@@ -11,8 +11,9 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import get_app
 from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.filters import Condition
+from prompt_toolkit.filters import Always, Condition, is_done
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import ConditionalContainer, Dimension, FormattedTextControl, HSplit, Window
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 
@@ -43,8 +44,6 @@ COMMANDS = {
 }
 
 _STYLE = Style.from_dict({
-    "bottom-toolbar": "noreverse",
-    "bottom-toolbar.text": "noreverse",
     "forge-selected": "bold ansicyan",
     "forge-detail": "dim",
 })
@@ -65,6 +64,24 @@ def _trim_to_columns(value: str, width: int) -> str:
         if remaining < 0:
             return value[:index] + "…"
     return value
+
+
+def _place_under_input(session, render, *, visible=Always()):
+    prompt = session.layout.container
+
+    def input_height():
+        size = session.app.output.get_size()
+        preferred = prompt.preferred_height(size.columns, size.rows).preferred
+        return Dimension.exact(preferred)
+
+    session.layout.container = HSplit([
+        HSplit([prompt], height=input_height),
+        ConditionalContainer(
+            Window(FormattedTextControl(render), dont_extend_height=True, wrap_lines=False),
+            filter=visible & ~is_done,
+        ),
+    ])
+    return session
 
 
 @dataclass(frozen=True)
@@ -216,13 +233,10 @@ def chat_prompt(repo_path: Path, footer=None):
             fragments.pop()
         return fragments
 
-    session = PromptSession(completer=ChatCompleter(repo_path), complete_while_typing=False, key_bindings=keys,
-                            style=_STYLE, bottom_toolbar=below_input if footer else None)
-    if footer is None:
-        def update_toolbar(buffer):
-            session.bottom_toolbar = below_input if _slash_prefix(buffer.text) else None
-        session.default_buffer.on_text_changed += update_toolbar
-    return session
+    session = PromptSession(completer=ChatCompleter(repo_path), complete_while_typing=False,
+                            key_bindings=keys, style=_STYLE)
+    visible = Condition(lambda: footer is not None or _slash_prefix(session.default_buffer.text))
+    return _place_under_input(session, below_input, visible=visible)
 
 
 def choose_model(profiles, current, *, allow_default):
@@ -261,7 +275,7 @@ def choose_model(profiles, current, *, allow_default):
         hint = "Enter switch · Ctrl+S save · Esc cancel" if allow_default else "Enter switch · Esc cancel"
         return [*menu.render(), ("class:forge-detail", _trim_to_columns(hint, width))]
 
-    prompt = PromptSession(key_bindings=keys, style=_STYLE, bottom_toolbar=below_search)
+    prompt = _place_under_input(PromptSession(key_bindings=keys, style=_STYLE), below_search)
     try:
         return prompt.prompt("model > ")
     except (KeyboardInterrupt, EOFError):

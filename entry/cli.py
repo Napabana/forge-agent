@@ -1496,7 +1496,8 @@ def chat(
                 elif cmd == "/resume":
                     if not arg:
                         try:
-                            session.run_round("", resume=True)
+                            with renderer.activity("Checking workspace"):
+                                session.run_round("", resume=True)
                         except (RuntimeError, ValueError) as exc:
                             renderer.line(f"  Cannot resume round: {exc}", "status.error")
                     else:
@@ -1596,7 +1597,8 @@ def chat(
             # 运行一轮 agent
 
             try:
-                session.run_round(user_input)
+                with renderer.activity("Checking workspace"):
+                    session.run_round(user_input)
             except KeyboardInterrupt:
                 renderer.line("\n  Interrupted. Type /exit to quit or continue with a new task.", "status.warning")
             except ChatSessionConflict:
