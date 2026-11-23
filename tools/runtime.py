@@ -37,9 +37,9 @@ import subprocess
 import sys
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from tools.execution_env import execution_environment
 
 logger = logging.getLogger(__name__)
@@ -49,12 +49,16 @@ logger = logging.getLogger(__name__)
 # RunResult — Runtime 执行结果
 # ---------------------------------------------------------------------------
 
+ProcessState = Literal["exited", "not_started", "timed_out", "interrupted", "unknown"]
+
+
 @dataclass
 class RunResult:
     """Runtime 执行单条命令的结果。"""
     returncode: int
     stdout: str
     stderr: str
+    process_state: ProcessState | None = None
 
     @property
     def success(self) -> bool:
@@ -163,19 +167,22 @@ class LocalRuntime(Runtime):
                 timeout=timeout,
                 cwd=cwd,
             )
+            interrupted = proc.returncode < 0 or (os.name == "nt" and proc.returncode == 0xC000013A)
             return RunResult(
                 returncode=proc.returncode,
                 stdout=proc.stdout,
                 stderr=proc.stderr,
+                process_state="interrupted" if interrupted else "exited",
             )
         except subprocess.TimeoutExpired:
             return RunResult(
                 returncode=-1,
                 stdout="",
                 stderr=f"Command timed out after {timeout}s: {cmd!r}",
+                process_state="timed_out",
             )
         except Exception as e:
-            return RunResult(returncode=-1, stdout="", stderr=str(e))
+            return RunResult(returncode=-1, stdout="", stderr=str(e), process_state="unknown")
 
     def exec_args(
         self,
@@ -469,16 +476,18 @@ class DockerRuntime(Runtime):
         if not self.is_running:
             startup_result = self._start_container()
             if startup_result is not None:
-                # 启动失败，返回错误
-                return startup_result
+                return replace(startup_result, process_state="not_started")
 
         container_cwd = self._resolve_container_workdir(cwd)
+        marker = f"forge-shell-exit-{uuid.uuid4().hex}"
 
+        # The Docker client can exit without receiving the container command's result.
+        receipt_script = 'bash -c "$1"\nstatus=$?\nprintf "\\n%s:%s\\n" "$2" "$status" >&2\nexit "$status"'
         docker_cmd = [
             "docker", "exec",
             "--workdir", container_cwd,
             self._container_id,
-            "bash", "-c", cmd,
+            "bash", "-c", receipt_script, "forge-shell", cmd, marker,
         ]
 
         try:
@@ -488,19 +497,23 @@ class DockerRuntime(Runtime):
                 text=True,
                 timeout=timeout + 5,   # docker exec 本身有少量开销
             )
+            receipt = f"\n{marker}:{proc.returncode}\n"
+            exited = proc.returncode >= 0 and proc.stderr.endswith(receipt)
             return RunResult(
                 returncode=proc.returncode,
                 stdout=proc.stdout,
-                stderr=proc.stderr,
+                stderr=proc.stderr.removesuffix(receipt) if exited else proc.stderr,
+                process_state="exited" if exited else "unknown",
             )
         except subprocess.TimeoutExpired:
             return RunResult(
                 returncode=-1,
                 stdout="",
                 stderr=f"Command timed out after {timeout}s in container: {cmd!r}",
+                process_state="timed_out",
             )
         except Exception as e:
-            return RunResult(returncode=-1, stdout="", stderr=str(e))
+            return RunResult(returncode=-1, stdout="", stderr=str(e), process_state="unknown")
 
     def exec_args(
         self,

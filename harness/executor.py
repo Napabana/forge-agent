@@ -184,13 +184,18 @@ class ToolExecutor:
         # 3. Tool：这是最后一个能保证“Tool 尚未发生”的 cancel 边界。
         self._raise_if_canceled("before_tool", cancel_event)
         worker_resume = False
+        worker_dispatch = False
         if operation is not None:
+            from agent.background_workers import WorkerStatusTool
             from agent.coordinator import DelegateTasksTool
             from durable_runtime.reconcilers import file_postcondition, mcp_postcondition
             from durable_runtime.run_manager import digest, encode
 
             tool = self._registry.get_tool(name)
-            worker_resume = type(tool) is DelegateTasksTool and tool.coordinator.parent_run_id == operation.run.run_id
+            worker_dispatch = type(tool) is DelegateTasksTool and tool.coordinator.parent_run_id == operation.run.run_id
+            worker_resume = worker_dispatch or (
+                isinstance(tool, WorkerStatusTool) and tool.background.durable is operation.run
+            )
             read_only = tool.effect is ToolEffect.READ_ONLY and not name.startswith("mcp__")
             policy_digest = digest(encode({
                 "policy": type(self._permission).__name__, "constraints": self.constraints.read_only,
@@ -208,7 +213,7 @@ class ToolExecutor:
             operation.start()
         if invocation_callback is not None:
             invocation_callback()
-        result = (tool.execute(params, operation_id=operation.operation_id) if worker_resume
+        result = (tool.execute(params, operation_id=operation.operation_id) if worker_dispatch
                   else self._registry.execute_tool(name, params))
         if not result.success and result.error_type is None:
             result.error_type = _classify_tool_error(name, result)

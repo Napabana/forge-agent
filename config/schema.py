@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 import tempfile
@@ -69,6 +70,7 @@ class AgentCfg:
     finish_policy: str = "balanced"
     run_profile: str = "interactive"
     multi_agent_enabled: bool = False
+    worker_mode: str = "sync"
     max_workers: int = 3
     max_delegate_tasks: int = 3
     total_worker_tokens: int = 72_000
@@ -418,12 +420,15 @@ def _parse(data: dict[str, Any]) -> AppConfig:
     multi_agent_enabled = agent_raw.get("multi_agent_enabled", False)
     if type(multi_agent_enabled) is not bool:
         raise ValueError("agent.multi_agent_enabled must be boolean")
+    worker_mode = agent_raw.get("worker_mode", "sync")
+    if worker_mode not in ("sync", "background"):
+        raise ValueError("agent.worker_mode must be sync or background")
     max_workers = _optional_positive_int(agent_raw, "max_workers") or 3
     max_delegate_tasks = _optional_positive_int(agent_raw, "max_delegate_tasks") or 3
     total_worker_tokens = _optional_positive_int(agent_raw, "total_worker_tokens") or 72_000
     worker_timeout_seconds = float(agent_raw.get("worker_timeout_seconds", 120.0))
-    if worker_timeout_seconds <= 0:
-        raise ValueError("agent.worker_timeout_seconds must be positive")
+    if not math.isfinite(worker_timeout_seconds) or worker_timeout_seconds <= 0:
+        raise ValueError("agent.worker_timeout_seconds must be finite and positive")
     worker_models = agent_raw.get("worker_models", {})
     if not isinstance(worker_models, dict) or any(
         role not in {"explorer", "test_analyst", "reviewer"}
@@ -632,6 +637,7 @@ def _parse(data: dict[str, Any]) -> AppConfig:
         finish_policy=finish_policy,
         run_profile=run_profile,
         multi_agent_enabled=multi_agent_enabled,
+        worker_mode=worker_mode,
         max_workers=max_workers,
         max_delegate_tasks=max_delegate_tasks,
         total_worker_tokens=total_worker_tokens,

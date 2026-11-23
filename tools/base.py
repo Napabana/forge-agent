@@ -19,8 +19,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from agent.task import Observation, ObservationStatus
+from agent.task import Observation, ObservationStatus, TestOutcome
 from llm.base import LLMToolSchema
+from tools.runtime import ProcessState
 
 
 class ToolEffect(str, Enum):
@@ -92,6 +93,9 @@ class ToolResult:
     error: str | None = None            # 失败时的错误信息
     error_type: ToolErrorType | None = None
     diagnostics: tuple[str, ...] = ()   # 不改变结果的观察阶段诊断
+    test_outcome: TestOutcome | None = None
+    process_state: ProcessState | None = None
+    exit_code: int | None = None
 
     def to_observation(self, tool_name: str) -> Observation:
         """转换为 Observation；TIMEOUT 保留独立状态，其余失败统一为 ERROR。"""
@@ -107,6 +111,7 @@ class ToolResult:
             tool_name=tool_name,
             error=self.error,
             error_type=self.error_type.value if self.error_type is not None else None,
+            test_outcome=self.test_outcome,
         )
 
 

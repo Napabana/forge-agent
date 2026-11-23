@@ -126,7 +126,7 @@ def _real_runner_factory(
         options = configured_agent_options(cfg)
         if total_token_budget is not None:
             worker_tokens = total_token_budget // 3 if variant == "supervisor_workers" else 0
-            options["max_total_tokens"] = total_token_budget - worker_tokens
+            options["max_total_tokens"] = total_token_budget
             options["multi_agent_enabled"] = variant == "supervisor_workers"
             options["total_worker_tokens"] = worker_tokens or options["total_worker_tokens"]
         # 不把 ContextBudgetSpec 转成 int：它携带模型计数器和请求预留配置。

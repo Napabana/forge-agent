@@ -13,7 +13,7 @@ from typing import Any
 from agent.task import Action, ActionType, ToolCall
 from llm.base import LLMBackend, LLMMessage, LLMResponse, LLMToolSchema, StreamCallback
 from llm.openai_compat import _parse_pseudo_tool_call
-from llm.request_budget import RequestBudget
+from llm.request_budget import RequestBudget, request_output_limit
 from llm.tool_schema import strictify_tool_parameters
 from llm.usage import TokenUsage
 
@@ -194,7 +194,7 @@ class OpenAIResponsesBackend(LLMBackend):
         kwargs: dict[str, Any] = {
             "model": self._model,
             "input": input_items,
-            "max_output_tokens": self._max_tokens,
+            "max_output_tokens": request_output_limit(self._max_tokens),
         }
         if tools:
             kwargs["tools"] = [

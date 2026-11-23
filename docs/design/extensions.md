@@ -8,6 +8,8 @@ Skills 提供按需载入的工作方法，MCP 适配外部工具，使扩展能
 
 用 `forgeAgent skill add PATH` 安装 Skill，随后通过 `skill list`、`inspect`、`update`、`remove` 管理。用 `forgeAgent mcp add ID --url https://example.com/mcp` 注册服务，并用 `mcp test ID` 检查发现结果。
 
+Run 从配置读取 `agent.skills_enabled` 和 `mcp.enabled`，内置默认均关闭。`--skills` 和 `--mcp` 覆盖本次 Run 的配置。启用后模型可以按任务选择加载 Skill 或调用已经发现的 MCP 工具。
+
 ## 怎样实现
 
 Skill Catalog 扫描作用域，Skill Runtime 加载正文及受限引用。安装记录来源和内容摘要，按根目录串行执行并恢复中断的目录更新。MCP Client Manager 管 stdio 与 Streamable HTTP 的连接、发现和超时。适配器把服务器工具注册为带命名空间的 Forge 工具。

@@ -489,7 +489,7 @@ def classify_tool_failure(
         return FailureCategory.INFRASTRUCTURE
     if error_type == "permission_denied":
         return FailureCategory.PERMISSION_DENIED
-    if tool_name in test_tool_names:
+    if tool_name in test_tool_names and error_type in {None, "tool_execution"}:
         return FailureCategory.TEST_FAILURE
     return FailureCategory.TOOL_FAILURE
 

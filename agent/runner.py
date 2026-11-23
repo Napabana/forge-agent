@@ -176,7 +176,8 @@ class ExecutionRunner:
                     "custom_verifier": acceptance.verifier is not None}
         cfg_fields = {
             key: value for key, value in vars(self.config).items()
-            if key != "prepare_next_turn" and (isinstance(value, (str, int, float, tuple, bool)) or value is None)
+            if key != "prepare_next_turn" and (key, value) != ("worker_mode", "sync")
+            and (isinstance(value, (str, int, float, tuple, bool)) or value is None)
         }
         policy = request.prepare_next_turn if request.prepare_next_turn is not None else self.config.prepare_next_turn
         compaction = ({
@@ -194,7 +195,8 @@ class ExecutionRunner:
             "memory": dataclasses.asdict(self.config.memory_config) if self.config.memory_config else None,
             "mcp": dataclasses.asdict(self.mcp_config) if self.mcp_config else None,
         }))
-        dynamic_tools = {"memory_read", "memory_propose", "memory_search", "delegate_tasks", "archive_read"}
+        dynamic_tools = {"memory_read", "memory_propose", "memory_search", "delegate_tasks", "worker_status",
+                         "worker_wait", "archive_read"}
         registry_digest = digest(encode([dataclasses.asdict(schema) for schema in self.registry.get_schemas()
                                          if schema.name not in dynamic_tools]))
         resumable = (
@@ -436,18 +438,17 @@ class ExecutionRunner:
                 task.repo_path, task.task_id, config,
                 worker_engine,
             )
-            from agent.coordinator import DelegateTasksTool
-            existing = self.registry.get_tool("delegate_tasks")
-            if existing is None:
-                self.registry.register(DelegateTasksTool(coordinator))
-            elif isinstance(existing, DelegateTasksTool):
-                existing.coordinator = coordinator
-            else:
-                raise ValueError("delegate_tasks is already registered by another tool")
+            coordinator.register_tools(self.registry)
+            config = dataclasses.replace(config, worker_coordinator=coordinator)
         else:
             from agent.coordinator import DelegateTasksTool
             if isinstance(self.registry.get_tool("delegate_tasks"), DelegateTasksTool):
                 self.registry.unregister("delegate_tasks")
+        if coordinator is None or coordinator.background is None:
+            from agent.background_workers import WorkerStatusTool
+            for name in ("worker_status", "worker_wait"):
+                if isinstance(self.registry.get_tool(name), WorkerStatusTool):
+                    self.registry.unregister(name)
         executor = ToolExecutor(
             self.registry,
             hooks=config.hooks,
@@ -471,6 +472,7 @@ class ExecutionRunner:
             config.run_profile,
             config.finish_policy,
             config.multi_agent_enabled,
+            config.worker_mode,
             config.max_model_calls,
             config.max_total_tokens,
             request.execution_constraints,
@@ -501,6 +503,8 @@ class ExecutionRunner:
             self.agent._memory_context = memory.context(task.description,
                 TokenBudget(total=config.budget_tokens).counter, log=log)
         try:
+            if coordinator is not None and coordinator.background is not None:
+                coordinator.background.attach(log)
             preparation_result = None if request.resume else self._prepare_shared_history_boundary(
                 task=task,
                 history=request.history,
@@ -515,6 +519,8 @@ class ExecutionRunner:
             )
             _merge_context_policy_usage(result, config.prepare_next_turn)
             if coordinator is not None:
+                if coordinator.background is not None:
+                    coordinator.background.close(preserve=result.termination_reason == "paused")
                 _merge_worker_usage(result, coordinator, log)
             result.trace_path = str(log.path)
             _apply_independent_acceptance(
@@ -548,6 +554,8 @@ class ExecutionRunner:
                 owned_parent_engine.fail_task(task.task_id)
             raise
         finally:
+            if coordinator is not None and coordinator.background is not None:
+                coordinator.background.close(preserve=durable is not None)
             if on_event is not None:
                 log.on_append(None)
             if own_log:
@@ -568,12 +576,13 @@ class ExecutionRunner:
             agent_config=dataclasses.replace(config, durable_run=None),
             parent_run_id=config.durable_run.run_id if config.durable_run else None,
             parent_owner=config.durable_run.owner if config.durable_run else None,
+            durable=config.durable_run,
             engine=engine, cancel_event=config.cancel_event,
             max_workers=config.max_workers, max_tasks=config.max_delegate_tasks,
             total_tokens=config.total_worker_tokens, timeout_seconds=config.worker_timeout_seconds,
             sandbox_workers=config.run_profile == "sandboxed",
         )
-        if config.durable_run and config.durable_run.restoring:
+        if config.durable_run and config.durable_run.restoring and coordinator.background is None:
             coordinator.restore_delegation_usage(config.durable_run)
         return coordinator
 

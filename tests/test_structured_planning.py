@@ -413,6 +413,13 @@ def test_tool_effect_defaults_fail_safe_and_read_tools_opt_in(tmp_path: Path):
     ) is False
     assert registry.is_mutating("shell", {"cmd": "pytest -q"}) is False
     assert registry.is_mutating("shell", {"cmd": "git status --short"}) is False
+    assert registry.is_mutating("shell", {
+        "cmd": "pwd && rg --files -g 'smt_engine.py' && sed -n '48,75p' smt_engine.py",
+    }) is False
+    assert registry.is_mutating("shell", {"cmd": 'pwd && rg -n "grid|solver" . --glob \'!*.jpg\''}) is False
+    assert registry.is_mutating("shell", {"cmd": "rg --pre 'formatter; other' pattern fixture.txt"}) is True
+    assert registry.is_mutating("shell", {"cmd": "sed -n '1p' -i value.txt"}) is True
+    assert registry.is_mutating("shell", {"cmd": "sed -n '1w output.txt' value.txt"}) is True
     assert registry.is_mutating("shell", {"cmd": "echo fixed > value.txt"}) is True
     assert registry.is_mutating("shell", {"cmd": "git commit -m fix"}) is True
     assert registry.is_mutating("shell", {"cmd": "cat value.txt; rm value.txt"}) is True

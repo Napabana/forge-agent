@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import threading
 import time
 import uuid
+from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,11 +16,11 @@ from typing import Callable
 
 from agent.core import AgentConfig
 from agent.runner import ExecutionRunner, RunRequest
-from agent.task import RunStatus, Task
+from agent.task import EventType, RunResult, Task
 from harness.permission import ExecutionConstraints
-from llm.usage import SessionUsage
+from llm.usage import SessionUsage, TokenUsage
 from task.engine import TaskEngine
-from tools.base import BaseTool, ToolEffect, ToolRegistry, ToolResult
+from tools.base import BaseTool, ToolEffect, ToolErrorType, ToolRegistry, ToolResult
 
 
 @dataclass(frozen=True)
@@ -67,9 +69,74 @@ class WorkerResult:
     parent_task_id: str
     usage_complete: bool | None = None
     memory_candidates: list[dict] | None = None
+    token_limit: int | None = None
+    termination_reason: str | None = None
+    resource_reason: str | None = None
+    evidence: list[dict] | None = None
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
+
+    def notice(self) -> dict:
+        return {
+            "task_id": self.task_id, "role": self.role, "status": self.status,
+            "summary": self.summary[:480],
+            "findings": [json.dumps(item, ensure_ascii=False)[:320] for item in self.findings[:2]],
+            "evidence": (self.evidence or [])[-2:],
+            "termination_reason": self.termination_reason, "resource_reason": self.resource_reason,
+            "trace_reference": self.trace_reference,
+        }
+
+
+class WorkerProgress:
+    """Keep a bounded copy of confirmed tool observations for interruption."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.usage = SessionUsage()
+        self.evidence = deque(maxlen=3)
+        self.action = None
+
+    def record(self, event) -> None:
+        with self.lock:
+            payload = event.payload
+            if event.event_type is EventType.LLM_CALL_FINISHED:
+                raw = payload.get("usage", {})
+                self.usage.record(TokenUsage(**{key: raw[key] for key in TokenUsage.__dataclass_fields__ if key in raw}))
+            elif event.event_type is EventType.ACTION:
+                self.action = payload["action"].get("tool_call")
+            elif event.event_type is EventType.OBSERVATION:
+                self._observe(payload, event.event_id)
+
+    def _observe(self, payload: dict, event_id: str) -> None:
+        observation = payload["observation"]
+        if observation["status"] != "success" or not observation["output"].strip():
+            return
+        parameters = (self.action or {}).get("params", {})
+        location = {key: str(parameters[key])[:160] for key in ("path", "pattern", "query", "start_line", "end_line")
+                    if key in parameters}
+        self.evidence.append({"step": payload["step"], "tool": observation["tool_name"], "location": location,
+                              "excerpt": observation["output"][:240], "event_id": event_id})
+
+    def snapshot(self) -> tuple[dict, list[dict]]:
+        with self.lock:
+            return self.usage.to_dict(), list(self.evidence)
+
+    @staticmethod
+    def saved_evidence(trace_path: str | None) -> list[dict]:
+        progress = WorkerProgress()
+        if trace_path:
+            try:
+                with open(trace_path, encoding="utf-8") as trace:
+                    for line in trace:
+                        row = json.loads(line)
+                        if row["event_type"] == EventType.ACTION.value:
+                            progress.action = row["payload"]["action"].get("tool_call")
+                        elif row["event_type"] == EventType.OBSERVATION.value:
+                            progress._observe(row["payload"], row["event_id"])
+            except (OSError, ValueError, KeyError):
+                pass
+        return list(progress.evidence)
 
 
 class _CombinedCancel:
@@ -80,6 +147,15 @@ class _CombinedCancel:
     def is_set(self) -> bool:
         parent_is_set = getattr(self.parent, "is_set", None)
         return self.local.is_set() or (bool(parent_is_set()) if callable(parent_is_set) else bool(self.parent))
+
+    def wait(self, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while not self.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.1, remaining))
+        return True
 
 
 class AgentCoordinator:
@@ -94,9 +170,10 @@ class AgentCoordinator:
         sandbox_workers: bool = False,
         parent_run_id: str | None = None,
         parent_owner=None,
+        durable=None,
     ) -> None:
-        if min(max_workers, max_tasks, total_tokens) < 1 or timeout_seconds <= 0:
-            raise ValueError("worker limits must be positive")
+        if min(max_workers, max_tasks) < 1 or total_tokens < 0 or not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("worker concurrency and timeout must be positive; token allowance cannot be negative")
         self.repo_path = str(Path(repo_path).resolve())
         self.log_dir = log_dir
         self.parent_task_id = parent_task_id
@@ -109,7 +186,11 @@ class AgentCoordinator:
         self.cancel_event = cancel_event
         self.max_workers = max_workers
         self.max_tasks = max_tasks
-        self.remaining_tokens = total_tokens
+        self.run_token_limit = agent_config.max_total_tokens
+        self.pool_tokens = min(total_tokens, self.run_token_limit // 3) if self.run_token_limit is not None else total_tokens
+        self.remaining_tokens = self.pool_tokens
+        self.lead_used = 0
+        self.lead_next_request = 0
         self.timeout_seconds = timeout_seconds
         self.sandbox_workers = sandbox_workers
         self.usage = SessionUsage()
@@ -119,8 +200,39 @@ class AgentCoordinator:
         self.worker_failure_count = 0
         self.worker_tool_calls = 0
         self.closed = False
+        self.background = None
+        if agent_config.worker_mode == "background":
+            from agent.background_workers import BackgroundWorkers
 
-    def delegate(self, requests: list[WorkerRequest], *, operation_id: str | None = None) -> list[WorkerResult]:
+            self.background = BackgroundWorkers(self, durable)
+
+    def lead_token_limit(self) -> int | None:
+        if self.run_token_limit is None:
+            return None
+        return self.run_token_limit - (self.pool_tokens - self.remaining_tokens)
+
+    def available_tokens(self) -> int:
+        limit = self.lead_token_limit()
+        remaining = self.remaining_tokens
+        if limit is not None:
+            remaining = min(remaining, limit - self.lead_used - self.lead_next_request)
+        return max(0, remaining)
+
+    def prompt(self) -> str:
+        profiles = ", ".join(f"{role}: up to {profile.max_tokens:,}" for role, profile in PROFILES.items())
+        return (
+            f"[Worker delegation] Available Worker pool: {self.available_tokens():,} cumulative tokens. "
+            f"Role caps: {profiles}. Delegate only independent work that will inform a Lead decision. "
+            "Describe one question, known context, evidence to return, and a clear stopping point per Worker. "
+            "Handle quick lookups yourself. Continue independent work; only wait for a required result."
+        )
+
+    def allocations(self, requests: list[WorkerRequest]) -> list[int]:
+        self.validate_requests(requests)
+        each = self.available_tokens() // len(requests)
+        return [min(each, PROFILES[request.role].max_tokens) for request in requests]
+
+    def validate_requests(self, requests: list[WorkerRequest]) -> None:
         if self.closed:
             raise RuntimeError("worker coordinator is closed after cancellation or timeout")
         if not 1 <= len(requests) <= self.max_tasks:
@@ -129,12 +241,10 @@ class AgentCoordinator:
                or not isinstance(request.task, str) or not request.task.strip() for request in requests):
             raise ValueError(f"each worker needs a non-empty task and one of these roles: {', '.join(PROFILES)}. "
                              "Retry with the same task and a listed role; put custom role instructions in task.")
-        if self.remaining_tokens < len(requests):
+        if self.available_tokens() < len(requests):
             raise RuntimeError("worker token budget exhausted")
-        self.delegation_count += 1
-        local_cancel = threading.Event()
-        cancel = _CombinedCancel(self.cancel_event, local_cancel)
-        allocation = min(self.remaining_tokens // len(requests), max(p.max_tokens for p in PROFILES.values()))
+
+    def worker_records(self, requests: list[WorkerRequest], operation_id: str | None):
         records = []
         for index, request in enumerate(requests):
             identity = uuid.uuid5(uuid.NAMESPACE_OID, f"{operation_id}:{index}") if operation_id else uuid.uuid4()
@@ -153,10 +263,22 @@ class AgentCoordinator:
                 ):
                     raise ValueError("saved worker task identity differs")
             records.append((task_id, agent_id, request))
+        return records
+
+    def delegate(self, requests: list[WorkerRequest], *, operation_id: str | None = None) -> list[WorkerResult]:
+        allocations = self.allocations(requests)
+        self.delegation_count += 1
+        local_cancel = threading.Event()
+        cancel = _CombinedCancel(self.cancel_event, local_cancel)
+        records = self.worker_records(requests, operation_id)
         pool = ThreadPoolExecutor(max_workers=min(self.max_workers, len(records)), thread_name_prefix="forge-worker")
         started = time.monotonic()
-        futures = {pool.submit(self._run_worker, task_id, agent_id, request, min(allocation, PROFILES[request.role].max_tokens), cancel):
-                   (task_id, agent_id, request) for task_id, agent_id, request in records}
+        futures = {}
+        for (task_id, agent_id, request), limit in zip(records, allocations, strict=True):
+            progress = WorkerProgress()
+            future = pool.submit(self._run_worker, task_id, agent_id, request, limit, cancel,
+                                 on_event=progress.record)
+            futures[future] = task_id, agent_id, request, limit, progress
         done, pending = set(), set(futures)
         deadline = started + self.timeout_seconds
         while pending and not cancel.is_set():
@@ -170,43 +292,69 @@ class AgentCoordinator:
             local_cancel.set()
             self.closed = True
         results: list[WorkerResult] = []
-        for future, (task_id, agent_id, request) in futures.items():
-            if future in done:
+        for future, (task_id, agent_id, request, limit, progress) in futures.items():
+            if future in done or future.done():
                 try:
                     result = future.result()
                 except Exception as exc:  # worker failure must not discard siblings
+                    usage, evidence = progress.snapshot()
                     result = WorkerResult(task_id, agent_id, request.role, "failed", f"{type(exc).__name__}: {exc}",
-                                          [], [], {}, time.monotonic() - started, None, self.parent_task_id, False)
+                                          [], [], usage, time.monotonic() - started, None, self.parent_task_id, False,
+                                          token_limit=limit, termination_reason="worker_error", evidence=evidence)
             else:
                 future.cancel()
+                usage, evidence = progress.snapshot()
                 result = WorkerResult(task_id, agent_id, request.role,
                                       "canceled" if canceled else "timed_out",
-                                      "Worker canceled or timed out; an in-flight synchronous provider call may still finish.",
-                                      [], [], {}, time.monotonic() - started, None, self.parent_task_id, False)
+                                      "Worker stopped; saved observations describe progress.",
+                                      [], [], usage, time.monotonic() - started, None, self.parent_task_id, False,
+                                      token_limit=limit, termination_reason="canceled" if canceled else "timeout",
+                                      evidence=evidence)
             results.append(result)
-            self.worker_count += 1
-            self.worker_failure_count += int(result.status != "success")
-            if result.trace_reference:
-                try:
-                    with open(result.trace_reference, encoding="utf-8") as trace:
-                        self.worker_tool_calls += sum(
-                            json.loads(line).get("event_type") == "tool_execution_started"
-                            for line in trace
-                        )
-                except (OSError, ValueError):
-                    self.usage_complete = False
-            from task.engine import STATUS_COMPLETED, STATUS_FAILED
-
-            if self.engine.get_task(task_id).status not in {STATUS_COMPLETED, STATUS_FAILED}:
-                self.engine.complete_task(task_id) if result.status == "success" else self.engine.fail_task(task_id)
-            self.usage.add(SessionUsage.from_dict(result.token_usage))
-            if result.usage_complete is False:
-                self.usage_complete = False
-        self.remaining_tokens = max(0, self.remaining_tokens - sum(r.token_usage.get("total_tokens", 0) for r in results))
+            self.record_worker_result(result)
+        self.remaining_tokens -= sum(self.result_charge(result) for result in results)
         pool.shutdown(wait=False, cancel_futures=True)
         return results
 
-    def _run_worker(self, task_id: str, agent_id: str, request: WorkerRequest, token_limit: int, cancel) -> WorkerResult:
+    @staticmethod
+    def result_charge(result: WorkerResult) -> int:
+        used = result.token_usage.get("total_tokens", 0)
+        return max(used, result.token_limit or 0) if result.usage_complete is False else used
+
+    def record_worker_result(self, result: WorkerResult) -> None:
+        from task.engine import STATUS_COMPLETED, STATUS_FAILED
+
+        self.worker_count += 1
+        self.worker_failure_count += int(result.status != "success")
+        if result.trace_reference:
+            try:
+                with open(result.trace_reference, encoding="utf-8") as trace:
+                    self.worker_tool_calls += sum(
+                        json.loads(line).get("event_type") == "tool_execution_started"
+                        for line in trace
+                    )
+            except (OSError, ValueError):
+                self.usage_complete = False
+        if self.engine.get_task(result.task_id).status not in {STATUS_COMPLETED, STATUS_FAILED}:
+            self.engine.complete_task(result.task_id) if result.status == "success" else self.engine.fail_task(result.task_id)
+        self.usage.add(SessionUsage.from_dict(result.token_usage))
+        if result.usage_complete is False:
+            self.usage_complete = False
+
+    def register_tools(self, registry: ToolRegistry) -> None:
+        tools = [DelegateTasksTool(self)]
+        if self.background is not None:
+            from agent.background_workers import WorkerStatusTool, WorkerWaitTool
+
+            tools.extend([WorkerStatusTool(self.background), WorkerWaitTool(self.background)])
+        for tool in tools:
+            existing = registry.get_tool(tool.name)
+            if existing is not None and type(existing) is not type(tool):
+                raise ValueError(f"{tool.name} is already registered by another tool")
+            registry.register(tool, replace=True)
+
+    def _run_worker(self, task_id: str, agent_id: str, request: WorkerRequest, token_limit: int, cancel,
+                    *, on_event=None) -> WorkerResult:
         started = time.monotonic()
         from task.engine import STATUS_PENDING
 
@@ -239,10 +387,12 @@ class AgentCoordinator:
                 worker_tools.register(MemorySearchTool(memory)).register(MemoryReadTool(memory))
             cfg = dataclasses.replace(
                 self.agent_config, run_profile="safe", finish_policy="advisory",
-                multi_agent_enabled=False, planning_mode="off",
+                multi_agent_enabled=False, worker_mode="sync", planning_mode="off",
                 max_steps=profile.max_steps, max_model_calls=profile.max_steps,
                 max_total_tokens=token_limit, cancel_event=cancel,
+                worker_budget=True, worker_coordinator=None, llm_max_retries=1,
                 budget_tokens=budget_tokens,
+                repo_map_budget=min(self.agent_config.repo_map_budget or 1_200, 1_200),
                 prepare_next_turn=None, skills_enabled=False,
                 execution_workspace=CONTAINER_WORKDIR if self.sandbox_workers else None,
                 repo_map_cache_dir=str(Path(self.log_dir) / "worker-cache" / task_id),
@@ -259,18 +409,13 @@ class AgentCoordinator:
             try:
                 saved = self._worker_checkpoint(task_id)
                 if saved and saved.get("result") is not None:
-                    raw = saved["result"]
-                    from agent.task import RunResult, RunStatus
-
-                    result = RunResult(task_id, RunStatus(raw["status"]), raw["summary"], raw["steps_taken"],
-                                       usage=SessionUsage.from_dict(raw["usage"]), trace_path=raw["trace_path"],
-                                       usage_complete=raw["usage_complete"])
+                    result = RunResult.from_dict(saved["result"])
                 else:
                     result = runner.run(RunRequest(
                         task, execution_constraints=ExecutionConstraints(read_only=True), entrypoint="worker",
                         run_id=task_id, parent_run_id=self.parent_run_id, resume=saved is not None,
                         parent_owner=self.parent_owner if not saved or saved["scope_id"] != task_id else None,
-                    ))
+                    ), on_event=on_event)
             finally:
                 runner.close()
         finally:
@@ -291,7 +436,9 @@ class AgentCoordinator:
         return WorkerResult(task_id, agent_id, request.role, result.status.value, summary,
                             findings, recommendations, result.usage.to_dict(),
                             time.monotonic() - started, result.trace_path, self.parent_task_id,
-                            result.usage_complete, memory_candidates)
+                            result.usage_complete, memory_candidates,
+                            token_limit, result.termination_reason, result.resource_reason,
+                            WorkerProgress.saved_evidence(result.trace_path) if not result.is_success() else None)
 
     def _worker_checkpoint(self, task_id: str) -> dict | None:
         settings = self.agent_config.durable_runtime_config
@@ -323,6 +470,7 @@ class AgentCoordinator:
             """SELECT result_json, observation_json, result_digest FROM operations
                WHERE run_id=? AND replay_policy='worker_resume' AND state='result_committed'""", (run.run_id,),
         )
+        charged = 0
         for payload, observation, checksum in rows:
             if digest(encode([payload, observation])) != checksum:
                 raise StoreFormatError("saved delegation result digest differs")
@@ -334,9 +482,10 @@ class AgentCoordinator:
                 self.worker_count += 1
                 self.worker_failure_count += int(worker["status"] != "success")
                 self.usage.add(SessionUsage.from_dict(worker["token_usage"]))
+                charged += self.result_charge(WorkerResult(**worker))
                 if worker.get("usage_complete") is False:
                     self.usage_complete = False
-        self.remaining_tokens = max(0, self.remaining_tokens - self.usage.total_tokens)
+        self.remaining_tokens -= charged
 
 
 class DelegateTasksTool(BaseTool):
@@ -349,6 +498,13 @@ class DelegateTasksTool(BaseTool):
 
     @property
     def description(self) -> str:
+        if self.coordinator.background is not None:
+            return (
+                "Start independent read-only workers and immediately return their task IDs. "
+                f"Submit at most {self.coordinator.max_tasks} tasks per call. "
+                "Continue independent work, use worker_status for progress and worker_wait to collect needed results. "
+                "Finishing the parent cancels outstanding work."
+            )
         return "Delegate independent read-only repository analysis tasks to bounded parallel workers."
 
     @property
@@ -370,8 +526,12 @@ class DelegateTasksTool(BaseTool):
             if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
                 raise ValueError("tasks must be an array of objects")
             requests = [WorkerRequest(item["role"], item["task"]) for item in raw]
-            results = (self.coordinator.delegate(requests, operation_id=operation_id)
-                       if operation_id else self.coordinator.delegate(requests))
-        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            if self.coordinator.background is not None:
+                results = self.coordinator.background.submit(requests, operation_id=operation_id)
+            else:
+                results = [r.to_dict() for r in self.coordinator.delegate(requests, operation_id=operation_id)]
+        except (KeyError, TypeError, ValueError) as exc:
+            return ToolResult(False, "", error=str(exc), error_type=ToolErrorType.INVALID_ARGUMENTS)
+        except RuntimeError as exc:
             return ToolResult(False, "", error=str(exc))
-        return ToolResult(True, json.dumps([r.to_dict() for r in results], ensure_ascii=False))
+        return ToolResult(True, json.dumps(results, ensure_ascii=False))

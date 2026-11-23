@@ -16,6 +16,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from agent.task import TestOutcome
 from tools.base import BaseTool, ToolEffect, ToolErrorType, ToolResult
 from tools.runtime import LocalRuntime, Runtime
 
@@ -24,16 +25,22 @@ PYTEST_TIMEOUT = 120        # pytest 默认超时，比 shell 工具更长
 MAX_OUTPUT_CHARS = 6_000    # 测试输出比普通 shell 输出更容易很长
 
 
-def _classify_pytest_failure(returncode: int, raw: str) -> tuple[ToolErrorType, str]:
-    """区分真实测试失败与 pytest/解释器基础设施故障。"""
-    lowered = raw.lower()
+_TEST_OUTCOMES: dict[int, TestOutcome] = {0: "passed", 1: "failed", 5: "no_tests"}
+
+
+def _classify_pytest_error(returncode: int, stderr: str) -> tuple[ToolErrorType, str] | None:
     if returncode < 0:
+        if "timed out" in stderr.lower():
+            return ToolErrorType.TIMEOUT, f"pytest timed out after {PYTEST_TIMEOUT}s"
         return ToolErrorType.INFRASTRUCTURE, "pytest process could not be started"
-    if "no module named pytest" in lowered:
+    if returncode == 1 and re.fullmatch(r"[^\r\n]+: No module named pytest", stderr.strip(), re.IGNORECASE):
         return ToolErrorType.INFRASTRUCTURE, "pytest is not installed in the configured test Python"
-    # pytest: 1=tests failed，5=no tests collected；其余标准退出码表示执行环境/调用损坏。
-    if returncode in {2, 3, 4}:
+    if returncode in {2, 3}:
         return ToolErrorType.INFRASTRUCTURE, f"pytest runtime failed with exit code {returncode}"
+    if returncode == 4:
+        return ToolErrorType.INVALID_ARGUMENTS, "pytest rejected the test invocation (exit code 4)"
+    if returncode in _TEST_OUTCOMES:
+        return None
     return ToolErrorType.TOOL_EXECUTION, f"pytest exited with code {returncode}"
 
 
@@ -172,24 +179,21 @@ class PytestTool(BaseTool):
                 cwd=cwd,
                 timeout=PYTEST_TIMEOUT,
             )
-        if "timed out" in run_result.stderr.lower():
+        error_info = _classify_pytest_error(run_result.returncode, run_result.stderr)
+        if error_info is not None:
+            error_type, error = error_info
             return ToolResult(
                 success=False,
-                output="",
-                error=f"pytest timed out after {PYTEST_TIMEOUT}s",
-                error_type=ToolErrorType.TIMEOUT,
+                output=_format_pytest_output(run_result.output, False),
+                error=error,
+                error_type=error_type,
             )
-        raw = run_result.output
-        success = run_result.returncode == 0
 
-        output = _format_pytest_output(raw, success)
-
-        error_type, error = _classify_pytest_failure(run_result.returncode, raw)
+        outcome = _TEST_OUTCOMES[run_result.returncode]
         return ToolResult(
-            success=success,
-            output=output,
-            error=None if success else error,
-            error_type=None if success else error_type,
+            success=True,
+            output=_format_pytest_output(run_result.output, outcome == "passed"),
+            test_outcome=outcome,
         )
 
 

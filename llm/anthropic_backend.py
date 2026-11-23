@@ -20,6 +20,7 @@ from typing import Any
 
 from agent.task import Action, ActionType, ToolCall
 from llm.base import LLMBackend, LLMMessage, LLMResponse, LLMToolSchema
+from llm.request_budget import request_output_limit
 from llm.usage import TokenUsage
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class AnthropicBackend(LLMBackend):
 
         kwargs: dict[str, Any] = {
             "model": self._model,
-            "max_tokens": self._max_tokens,
+            "max_tokens": request_output_limit(self._max_tokens),
             "messages": api_messages,
         }
         if system_content:
@@ -302,7 +303,7 @@ def _anthropic_stream(
 
     kwargs: dict = {
         "model": self._model,
-        "max_tokens": self._max_tokens,
+        "max_tokens": request_output_limit(self._max_tokens),
         "messages": api_messages,
     }
     if system_content:

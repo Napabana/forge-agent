@@ -12,7 +12,7 @@ from llm.base import LLMMessage
 
 
 _OBSERVATION_HEADER = re.compile(
-    r"^\[Tool: (?P<tool>[^|]+) \| (?P<status>SUCCESS|ERROR)\](?:\n|$)"
+    r"^\[Tool: (?P<tool>[^|]+) \| (?P<status>SUCCESS|ERROR|TEST_FAILED|NO_TESTS)\](?:\n|$)"
 )
 _ACTION_TOOL = re.compile(r"(?m)^Action:\s*(?P<tool>[^\s]+)\s*$")
 _ACTION_PARAMS = re.compile(r"(?m)^Params:\s*(?P<params>\{.*\})\s*$")
@@ -76,7 +76,7 @@ def parse_action_message(message: LLMMessage) -> ParsedAction | None:
 
 
 def parse_observation_message(message: LLMMessage) -> ParsedObservation | None:
-    """解析 Core 生成的 ``[Tool: ... | SUCCESS/ERROR]`` Observation。"""
+    """解析 Core 生成的带状态的工具 Observation。"""
     if message.role not in {"user", "tool"}:
         return None
     match = _OBSERVATION_HEADER.match(message.content)

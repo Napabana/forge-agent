@@ -22,6 +22,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Callable, Iterator
 
 from agent.task import Action, Event, EventType, Observation, RunResult, Task
@@ -151,6 +152,7 @@ class EventLog:
         self._run_span_id = run_span_id or uuid.uuid4().hex[:16]
         self._started_at = started_at or _utc_now()
         self._on_append: "Callable[[Event], None] | None" = None
+        self._write_lock = Lock()
         self._tool_args_by_step: dict[int, dict] = {}
         self._active_spans: dict[tuple[str, int], str] = {}
 
@@ -730,8 +732,9 @@ class EventLog:
     def _append(self, event: Event) -> None:
         event.payload = self._enrich_payload(event)
         line = json.dumps(event.to_dict(), ensure_ascii=False)
-        self._file.write(line + "\n")
-        self._file.flush()
+        with self._write_lock:
+            self._file.write(line + "\n")
+            self._file.flush()
         if self._on_append is not None:
             try:
                 self._on_append(event)
@@ -739,9 +742,10 @@ class EventLog:
                 pass
 
     def close(self) -> None:
-        if not self._file.closed:
-            self._file.flush()
-            self._file.close()
+        with self._write_lock:
+            if not self._file.closed:
+                self._file.flush()
+                self._file.close()
 
     def __enter__(self) -> "EventLog":
         return self

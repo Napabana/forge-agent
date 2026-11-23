@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 
@@ -74,6 +75,105 @@ def test_committed_result_replays_and_unknown_effect_blocks_mutation(tmp_path):
         with pytest.raises(OutcomeUnknown):
             ToolOperation(run, "new", 3, None).prepare("write", {"path": "three"}, **options)
         assert ToolOperation(run, "inspect", 3, None).prepare("read", {}, read_only=True, decision=None) is None
+
+
+@pytest.mark.parametrize("command", [
+    "pwd && rg --files -g '!*.pyc' && printf '\\n--- fixture ---\\n' && sed -n '1,180p' fixture.txt",
+    'pwd && rg -n "grid|GridRequest|solve_full|ValueError|candidates" . --glob \'!*.jpg\'',
+])
+def test_exited_shell_failure_is_committed_and_agent_continues(tmp_path, monkeypatch, command):
+    from agent.core import AgentConfig
+    from agent.runner import ExecutionRunner, RunRequest
+    from config.schema import DurableRuntimeConfig
+    from llm.base import MockBackend
+    from project_memory.identity import ProjectIdentityResolver
+    from tools.base import ToolRegistry
+    from tools.file_tool import FileReadTool
+    from tools.runtime import LocalRuntime, RunResult as ProcessResult
+    from tools.shell_tool import ShellTool
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "fixture.txt").write_text("fixture", encoding="utf-8")
+    calls = []
+
+    def missing_rg(runtime, cmd, **_):
+        calls.append(cmd)
+        return ProcessResult(127, str(repo) + "\n", "/bin/sh: 1: rg: not found\n", process_state="exited")
+
+    monkeypatch.setattr(LocalRuntime, "exec", missing_rg)
+    backend = MockBackend([
+        Action(ActionType.TOOL_CALL, "", ToolCall("shell", {"cmd": command, "cwd": str(repo)})),
+        Action(ActionType.TOOL_CALL, "", ToolCall("file_read", {"path": "fixture.txt"})),
+        Action(ActionType.FINISH, "", message="read with the built-in tool"),
+    ])
+    root = tmp_path / "runtime"
+    registry = ToolRegistry().register(ShellTool()).register(FileReadTool(workspace=repo))
+    runner = ExecutionRunner(
+        backend=backend, registry=registry, config=AgentConfig(repo_map_mode="none",
+            durable_runtime_config=DurableRuntimeConfig(True, str(root))), log_dir=str(tmp_path / "logs"),
+    )
+    result = runner.run(RunRequest(Task("Inspect the fixture.", str(repo))))
+    assert result.is_success()
+    assert calls == [command]
+    assert any("rg: not found" in message.content for message in backend.received_messages[1])
+    with DurableRuntimeStore(ProjectIdentityResolver.resolve(repo), root) as store:
+        row = store._conn.execute("SELECT effect, state, result_json FROM operations WHERE name='shell'").fetchone()
+        assert tuple(row)[:2] == ("may_mutate_repository", "result_committed")
+        saved = json.loads(row["result_json"])
+        assert saved["error"] == "Exit code: 127" and not saved["success"]
+        assert saved["process_state"] == "exited" and saved["exit_code"] == 127
+
+
+def test_exited_shell_failure_keeps_partial_write_and_replays_result(tmp_path):
+    from harness.executor import ToolExecutor
+    from tools.base import ToolRegistry
+    from tools.shell_tool import ShellTool
+
+    identity = ProjectIdentity("test", "path", str(tmp_path))
+    shell = ShellTool()
+    executor = ToolExecutor(ToolRegistry().register(shell))
+    cmd = "echo changed>fixture.txt & exit /b 7" if sys.platform == "win32" else "printf changed > fixture.txt; exit 7"
+    params = {"cmd": cmd, "cwd": str(tmp_path)}
+    with DurableRuntimeStore(identity, tmp_path) as store:
+        run = DurableRun(store, "run", "scope")
+        run.create(Task("Task", str(tmp_path)), "cli")
+        result = executor.execute("shell", params, operation=ToolOperation(run, "call", 1, None))
+        assert not result.success and result.exit_code == 7
+        assert (tmp_path / "fixture.txt").read_text().strip() == "changed"
+        assert store._conn.execute("SELECT state FROM operations").fetchone()["state"] == "result_committed"
+        (tmp_path / "fixture.txt").write_text("updated")
+        replayed = executor.execute("shell", params, operation=ToolOperation(run, "call", 1, None))
+        assert replayed == result
+        assert (tmp_path / "fixture.txt").read_text() == "updated"
+
+
+@pytest.mark.parametrize("interruption", ["timed_out", "interrupted"])
+def test_shell_without_completion_still_blocks_further_mutations(tmp_path, monkeypatch, interruption):
+    from harness.executor import ToolExecutor
+    from tools.base import ToolRegistry
+    from tools.shell_tool import ShellTool
+
+    def interrupted_process(cmd, **kwargs):
+        if interruption == "timed_out":
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+        return subprocess.CompletedProcess(cmd, -15, "", "")
+
+    monkeypatch.setattr("tools.runtime.subprocess.run", interrupted_process)
+    identity = ProjectIdentity("test", "path", str(tmp_path))
+    with DurableRuntimeStore(identity, tmp_path) as store:
+        run = DurableRun(store, "run", "scope")
+        run.create(Task("Task", str(tmp_path)), "cli")
+        operation = ToolOperation(run, "call", 1, None)
+        executor = ToolExecutor(ToolRegistry().register(ShellTool()))
+        with pytest.raises(OutcomeUnknown):
+            executor.execute("shell", {"cmd": "printf changed > fixture", "cwd": str(tmp_path)}, operation=operation)
+        row = store._conn.execute("SELECT effect, state, result_json FROM operations").fetchone()
+        assert tuple(row)[:2] == ("may_mutate_repository", "outcome_unknown")
+        assert json.loads(row["result_json"])["process_state"] == interruption
+        with pytest.raises(OutcomeUnknown, match="unresolved side effect"):
+            executor.execute("shell", {"cmd": "echo new > other", "cwd": str(tmp_path)},
+                             operation=ToolOperation(run, "next", 2, None))
 
 
 def test_runner_persists_agent_and_acceptance_results(tmp_path):

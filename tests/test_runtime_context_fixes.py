@@ -177,15 +177,19 @@ def test_pytest_tool_rejects_option_like_path_before_execution(tmp_path):
     assert runtime.args is None
 
 
-@pytest.mark.parametrize("returncode", [1, 5])
-def test_pytest_tool_classifies_test_outcomes_as_tool_failures(tmp_path, returncode):
+@pytest.mark.parametrize(("returncode", "output", "outcome"), [
+    (1, "1 failed\n", "failed"),
+    (5, "no tests ran\n", "no_tests"),
+])
+def test_pytest_tool_returns_nonpassing_test_outcomes_without_tool_error(tmp_path, returncode, output, outcome):
     runtime = _RecordingRuntime()
-    runtime.exec_args = lambda *args, **kwargs: RunResult(returncode, "1 failed\n", "")
+    runtime.exec_args = lambda *args, **kwargs: RunResult(returncode, output, "")
 
     result = PytestTool(runtime=runtime, default_cwd=str(tmp_path)).execute({"path": "tests"})
 
-    assert not result.success
-    assert result.error_type is ToolErrorType.TOOL_EXECUTION
+    assert result.success
+    assert result.error_type is None
+    assert result.to_observation("test").to_dict()["test_outcome"] == outcome
 
 
 @pytest.mark.parametrize(
@@ -207,6 +211,19 @@ def test_pytest_tool_classifies_environment_failures_as_infrastructure(
     assert not result.success
     assert result.error_type is ToolErrorType.INFRASTRUCTURE
     assert expected_error in result.error
+
+
+@pytest.mark.parametrize(("returncode", "stderr", "error_type"), [
+    (4, "ERROR: file or directory not found: tests", ToolErrorType.INVALID_ARGUMENTS),
+    (-1, "Command timed out after 120s", ToolErrorType.TIMEOUT),
+])
+def test_pytest_tool_keeps_invocation_errors_separate(tmp_path, returncode, stderr, error_type):
+    runtime = _RecordingRuntime()
+    runtime.exec_args = lambda *args, **kwargs: RunResult(returncode, "", stderr)
+    result = PytestTool(runtime=runtime, default_cwd=str(tmp_path)).execute({"path": "tests"})
+    assert not result.success
+    assert result.error_type is error_type
+    assert result.test_outcome is None
 
 
 def test_local_runtime_exec_args_never_invokes_a_shell(monkeypatch, tmp_path):

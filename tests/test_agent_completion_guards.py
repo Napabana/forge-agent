@@ -11,6 +11,8 @@ from agent.task import (
 )
 from llm.base import MockBackend
 from tools.base import BaseTool, FailingTool, NoopTool, ToolErrorType, ToolRegistry, ToolResult
+from tools.runtime import RunResult as CommandResult
+from tools.test_tool import PytestTool
 
 
 def _tool_action(name: str) -> Action:
@@ -583,6 +585,31 @@ def test_failed_test_rejection_then_successful_retest_recovers(tmp_path):
         and event.payload["code"] == "LATEST_TEST_FAILED"
         for event in events
     )
+
+
+@pytest.mark.parametrize(("exit_code", "outcome", "history_status"), [
+    (1, "failed", "TEST_FAILED"),
+    (5, "no_tests", "NO_TESTS"),
+])
+def test_pytest_evidence_blocks_finish_without_counting_tool_error(tmp_path, exit_code, outcome, history_status):
+    commands = iter([CommandResult(exit_code, "Not passing\n", ""), CommandResult(0, "1 passed\n", "")])
+    runtime = SimpleNamespace(exec_args=lambda *args, **kwargs: next(commands))
+    result, backend, events = _run(
+        tmp_path,
+        [_tool_action("test"), _finish_action(), _tool_action("test"), _finish_action()],
+        ToolRegistry().register(PytestTool(runtime=runtime, default_cwd=str(tmp_path / "repo"))),
+        require_tests=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert not any(event.event_type == EventType.TOOL_EXECUTION_FAILED for event in events)
+    assert [event.payload["test_outcome"] for event in events
+            if event.event_type == EventType.TOOL_EXECUTION_FINISHED] == [outcome, "passed"]
+    assert [event.payload["outcome"] for event in events
+            if event.event_type == EventType.COMPLETION_CHECK] == ["failed", "passed"]
+    assert any(message.content.startswith(f"[Tool: test | {history_status}]")
+               for message in backend.received_messages[1])
+    assert any(event.event_type == EventType.COMPLETION_REJECTED
+               and event.payload["code"] == "LATEST_TEST_FAILED" for event in events)
 
 
 def test_write_after_test_rejection_then_retest_recovers(tmp_path):

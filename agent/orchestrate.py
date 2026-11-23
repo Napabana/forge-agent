@@ -76,6 +76,7 @@ async def _stop_forwarder(q: asyncio.Queue | None, task: asyncio.Task | None) ->
     """哨兵终止 forwarder 并等它退出。None 时空操作。"""
     if q is None or task is None:
         return
+    await asyncio.sleep(0)  # Drain callbacks scheduled from Worker threads before the sentinel.
     try:
         q.put_nowait(None)
     except Exception:  # noqa: BLE001
@@ -240,9 +241,10 @@ async def orchestrate_run(
         bus_q = asyncio.Queue()
         forwarder_task = asyncio.create_task(_bus_forwarder(bus_q, bus, task_id))
     if bus_q is not None or on_event is not None:
+        loop = asyncio.get_running_loop()
         def _observe(event) -> None:
             if bus_q is not None:
-                bus_q.put_nowait(event)
+                loop.call_soon_threadsafe(bus_q.put_nowait, event)
             if on_event is not None:
                 on_event(event)
 
@@ -356,9 +358,11 @@ async def orchestrate_run(
                     registry.register(MemoryProposeTool(memory, run_id=task_id, trace_path=str(log.path),
                                                         log=log, isolate=True))
             if coordinator_factory is not None:
-                from agent.coordinator import DelegateTasksTool
                 coordinator = coordinator_factory(str(wt.path), task_id, runtime_cfg, engine)
-                registry.register(DelegateTasksTool(coordinator))
+                coordinator.register_tools(registry)
+                runtime_cfg = dataclasses.replace(runtime_cfg, worker_coordinator=coordinator)
+                if coordinator.background is not None:
+                    coordinator.background.attach(log)
             from mcp_integration.registry import attach_mcp_tools
             mcp_manager = attach_mcp_tools(registry, mcp_config)
             if mcp_manager is not None:
@@ -395,6 +399,10 @@ async def orchestrate_run(
             # Agent.run() 保持同步；EventLog 事件先入队，随后由 forwarder 转发。
             result = agent.run(task_in_wt, log)
         finally:
+            if coordinator is not None and coordinator.background is not None:
+                coordinator.background.close(preserve=bool(durable and (
+                    result is None or result.termination_reason == "paused"
+                )))
             if mcp_manager is not None:
                 mcp_manager.close()
             # runtime 生命周期与 worktree 成果保留策略彼此独立。

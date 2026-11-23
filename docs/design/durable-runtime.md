@@ -18,6 +18,8 @@ Durable Runtime Store 是按项目划分的 SQLite WAL 数据库。Scope Owner �
 
 `DurableRun` 保存 Run 请求、模型动作、History、Planning、Recovery、Skills、Usage 和仓库签名。Tool Journal 提交 Intent、Started 和 Result。Unknown Outcome 会在接管后等待人工确认。`runtime recover list --run-id RUN_ID` 查看指定运行的未决操作。用 `inspect` 核对证据、`resolve` 记录决定、`retry` 执行受控重试、`delivery` 查看远端交付回执。
 
+权限决策决定调用能否执行。工具日志通过 Runtime 的进程状态确认 Shell 结果。命令正常退出后提交它的退出码和输出，非零退出也会交回 Agent。发生部分写入时，工作区变更随操作结果记录，恢复时仍复用已提交结果。执行超时、终止信号或失去执行回执时，操作进入 `outcome_unknown`，已核对前暂停后续写入。Docker 使用容器内的退出回执区分命令退出和 Docker 客户端断开。GitHub 交付和 MCP 外部操作继续依据各自的回执规则。
+
 ### 归档与请求计量
 
 `ContextArchive` 保存原文、摘要、裁剪和来源。`ArchiveRead` 按 Scope 分页读取。`runtime archive-export` 与 `archive-import` 在同一项目内复制归档根及来源闭包，保持目标会话现有视图。`runtime import-chat` 导入旧 Chat 历史，`/rewind ROUND` 创建新会话分支。Prefix Cache Audit 记录最终请求指纹、SDK 可观察的物理尝试和供应商回传用量。`runtime cache` 查询，`--prune-expired` 清理过期记录。

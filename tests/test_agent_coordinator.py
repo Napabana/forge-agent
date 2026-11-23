@@ -101,9 +101,9 @@ def test_default_worker_budget_allows_two_24k_workers(tmp_path, monkeypatch):
     allocated = []
     run_worker = coordinator._run_worker
 
-    def capture_budget(task_id, agent_id, request, token_limit, cancel):
+    def capture_budget(task_id, agent_id, request, token_limit, cancel, **kwargs):
         allocated.append(token_limit)
-        return run_worker(task_id, agent_id, request, token_limit, cancel)
+        return run_worker(task_id, agent_id, request, token_limit, cancel, **kwargs)
 
     monkeypatch.setattr(coordinator, "_run_worker", capture_budget)
     results = coordinator.delegate([
@@ -124,6 +124,24 @@ def test_worker_can_finish_read_only_analysis_when_lead_requires_plan(tmp_path):
     assert result.status == "success"
     assert result.findings
     assert "[Structured Planning]" not in backend.received_messages[0][0].content
+
+
+def test_worker_returns_evidence_before_sending_an_unaffordable_request(tmp_path, record_property):
+    (tmp_path / "fixture.txt").write_text("fixture evidence", encoding="utf-8")
+    backend = MockBackend([
+        Action(ActionType.TOOL_CALL, "read evidence", ToolCall("file_read", {"path": "fixture.txt"})),
+        Action(ActionType.FINISH, "", message="unexpected second request"),
+    ], input_tokens=23_880, output_tokens=25)
+    coordinator = _coordinator(tmp_path, lambda role: backend)
+    result = coordinator.delegate([WorkerRequest("explorer", "Find fixture evidence")])[0]
+    assert backend.call_count == 1
+    assert result.status == "incomplete" and result.resource_reason == "total_tokens"
+    assert result.token_limit == 24_000 and result.token_usage["total_tokens"] == 23_905
+    assert result.evidence[0]["location"] == {"path": "fixture.txt"}
+    assert "fixture evidence" in result.evidence[0]["excerpt"]
+    assert any("24,000 remaining" in item.content for item in backend.received_messages[0])
+    record_property("worker_tokens", result.token_usage["total_tokens"])
+    record_property("worker_evidence_count", len(result.evidence))
 
 
 def test_worker_registry_cannot_write_shared_workspace(tmp_path):

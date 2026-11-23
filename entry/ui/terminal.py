@@ -84,6 +84,7 @@ class TerminalUI:
         self.close()
         self.seen = set()
         self.tools = Counter()
+        self.test_outcomes = Counter()
         self.last_answer = ""
         self.pending_answer = ""
         self.fragments = []
@@ -273,7 +274,10 @@ class TerminalUI:
             if self.chat and not self.verbose:
                 return
         elif kind == E.OBSERVATION:
-            self.tools[payload.get("observation", {}).get("status", "unknown")] += 1
+            observation = payload.get("observation", {})
+            self.tools[observation.get("status", "unknown")] += 1
+            if outcome := observation.get("test_outcome"):
+                self.test_outcomes[outcome] += 1
         elif kind in (E.TOOL_EXECUTION_FINISHED, E.TOOL_EXECUTION_FAILED) and payload.get("duration_ms") is not None:
             self.durations[payload.get("step"), payload.get("tool_name")] = payload["duration_ms"]
         elif kind == E.SKILL_LOADED:
@@ -300,6 +304,9 @@ class TerminalUI:
                     for s in plan.get("steps", [])]}
         view = present(event, self.config, verbose=self.verbose, reasoning=self.show_reasoning)
         if view is None or (kind == E.TASK_START and not self.show_task):
+            return
+        if kind in (E.WORKER_FINISHED, E.WORKER_PARTIAL_READY):
+            self.line(view.title, view.style)
             return
         self._flush()
         if kind in (E.RECOVERY_SELECTED, E.RECOVERY_EXHAUSTED, E.RECOVERY_BLOCKED):
@@ -337,7 +344,8 @@ class TerminalUI:
     @display_only
     def finish(self, result, elapsed):
         self.close()
-        rows = summary_fields(result, elapsed, self.tools, show_tokens=self.config.show_token_usage)
+        rows = summary_fields(result, elapsed, self.tools, tests=self.test_outcomes,
+                              show_tokens=self.config.show_token_usage)
         summary = getattr(result, "summary", "")
         if summary and summary.strip() != self.last_answer:
             rows["Summary"] = summary

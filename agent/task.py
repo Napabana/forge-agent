@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from llm.usage import SessionUsage
 
@@ -87,6 +87,13 @@ class EventType(str, Enum):
     ACCEPTANCE = "acceptance"
     DELIVERY = "delivery"
     WORKERS_SUMMARY = "workers_summary"
+    WORKER_DISPATCHED = "worker_dispatched"
+    WORKER_STARTED = "worker_started"
+    WORKER_WRAPUP_STARTED = "worker_wrapup_started"
+    WORKER_PARTIAL_READY = "worker_partial_ready"
+    WORKER_FINISHED = "worker_finished"
+    WORKER_RESULT_DELIVERED = "worker_result_delivered"
+    WORKER_RESULT_READ = "worker_result_read"
     RUN_CHECKPOINT_COMMITTED = "run_checkpoint_committed"
     TOOL_INTENT_COMMITTED = "tool_intent_committed"
     TOOL_OPERATION_STARTED = "tool_operation_started"
@@ -116,6 +123,9 @@ class ObservationStatus(str, Enum):
     SUCCESS = "success"
     ERROR   = "error"
     TIMEOUT = "timeout"
+
+
+TestOutcome = Literal["passed", "failed", "no_tests"]
 
 
 class RunStatus(str, Enum):
@@ -262,9 +272,13 @@ class Observation:
     tokens_used: int = 0                # 这条 observation 消耗的 token 数（估算）
     error: str | None = None            # status == ERROR 时的错误信息
     error_type: str | None = None
+    test_outcome: TestOutcome | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        if self.test_outcome is None:
+            del data["test_outcome"]
+        return data
 
     def is_success(self) -> bool:
         return self.status == ObservationStatus.SUCCESS

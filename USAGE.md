@@ -20,10 +20,13 @@ forgeAgent chat --repo /path/to/repo
 ```bash
 forgeAgent run --repo /path/to/repo --isolate --sandbox --task "修复测试失败"
 forgeAgent --multi-agent run --repo /path/to/repo --plan --task "审查实现，按需委派分析"
+forgeAgent --multi-agent --worker-mode background run --repo /path/to/repo --task "委派审查当前补丁，同时运行测试"
 python -m entry.github_issue --help
 ```
 
 `--isolate` 使用 Git worktree，`--sandbox` 启用 Docker，默认成果策略 `keep-if-changed` 保留有变更的工作树。GitHub Issue 命令可在独立验收后交付 PR。
+
+后台 Worker 完成或触及限额时会主动送回结论或已有证据。主 Agent 通过 `worker_status` 查看进度和剩余额度，通过 `worker_wait` 按需读取完整结果。启用多 Agent 后，简单工作仍可由主 Agent 直接完成。用 `--worker-mode sync` 执行同步对照。详情见 [Supervisor 与 Worker](docs/design/workers.md)。
 
 ## 终端显示与 Chat 输入
 

@@ -12,6 +12,7 @@ nav = [
   { "源码阅读路线" = "source-navigation.md" },
   { "命令查阅" = "reference.md" },
   { "项目状态" = "PROJECT_STATE.md" },
+  { "Worker 协作设计" = "design/worker-delegation-proposal.md" },
   { "文档维护" = "design/MAINTENANCE.md" },
 ]
 

@@ -31,7 +31,7 @@ def patch_stat(patch):
     return "\n".join(lines)
 
 
-def summary_fields(result, elapsed, tools, *, show_tokens):
+def summary_fields(result, elapsed, tools, *, show_tokens, tests=None):
     rows = {"Status": result.status.value.upper(), "Time": f"{elapsed:.1f}s", "Steps": result.steps_taken}
     usage = getattr(result, "usage", None)
     if usage and usage.llm_calls:
@@ -47,6 +47,10 @@ def summary_fields(result, elapsed, tools, *, show_tokens):
             rows["Usage coverage"] = "partial or estimated"
     if tools:
         rows["Tools"] = " · ".join(f"{count} {status}" for status, count in sorted(tools.items()))
+    if tests:
+        rows["Test runs"] = " · ".join(
+            f"{count} {outcome.replace('_', ' ')}" for outcome, count in sorted(tests.items())
+        )
     for key in ("acceptance_status", "acceptance_error", "delivery_status", "termination_reason",
                 "resource_reason", "error"):
         rows[key.replace("_status", "").replace("_", " ").capitalize()] = getattr(result, key, None)

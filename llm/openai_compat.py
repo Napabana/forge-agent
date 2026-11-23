@@ -24,6 +24,7 @@ from typing import Any
 
 from agent.task import Action, ActionType, ToolCall
 from llm.base import LLMBackend, LLMMessage, LLMResponse, LLMToolSchema
+from llm.request_budget import request_output_limit
 from llm.tool_schema import strictify_tool_parameters
 from llm.usage import TokenUsage
 
@@ -108,10 +109,9 @@ class OpenAICompatBackend(LLMBackend):
 
         response = call_provider("chat_completions", self._client.chat.completions.create,
             model=self._model,
-            max_tokens=self._max_tokens,
+            max_tokens=request_output_limit(self._max_tokens),
             messages=api_messages,
-            tools=api_tools,
-            tool_choice="auto",
+            **({"tools": api_tools, "tool_choice": "auto"} if api_tools else {}),
         )
 
         choices = getattr(response, "choices", None) or []
@@ -169,7 +169,7 @@ class OpenAICompatBackend(LLMBackend):
 
         response = call_provider("chat_completions", self._client.chat.completions.create,
             model=self._model,
-            max_tokens=self._max_tokens,
+            max_tokens=request_output_limit(self._max_tokens),
             messages=augmented,
         )
 
@@ -598,7 +598,7 @@ def _stream_with_tools(self, api_messages, tools, on_text, on_thought=None):
 
     kwargs = dict(
         model=self._model,
-        max_tokens=self._max_tokens,
+        max_tokens=request_output_limit(self._max_tokens),
         messages=api_messages,
         stream=True,
         stream_options={"include_usage": True},
@@ -728,7 +728,7 @@ def _stream_text_only(self, api_messages, tools, on_text):
     full_text = ""
     stream = call_provider("chat_completions", self._client.chat.completions.create,
         model=self._model,
-        max_tokens=self._max_tokens,
+        max_tokens=request_output_limit(self._max_tokens),
         messages=augmented,
         stream=True,
         stream_options={"include_usage": True},

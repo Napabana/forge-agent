@@ -174,13 +174,17 @@ def _build_run_registry(
               help="Run profile; overrides agent.run_profile in YAML")
 @click.option("--multi-agent/--single-agent", default=None,
               help="Enable or disable Supervisor workers")
+@click.option("--worker-mode", type=click.Choice(["sync", "background"]), default=None,
+              help="Override the Supervisor dispatch mode")
 @click.pass_context
-def cli(ctx: click.Context, config: str | None, profile: str | None, multi_agent: bool | None) -> None:
+def cli(ctx: click.Context, config: str | None, profile: str | None, multi_agent: bool | None,
+        worker_mode: str | None) -> None:
     """Coding Agent — autonomous code editing and bug fixing."""
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
     ctx.obj["run_profile"] = profile
     ctx.obj["multi_agent"] = multi_agent
+    ctx.obj["worker_mode"] = worker_mode
 
 
 def _load_cli_config(ctx: click.Context):
@@ -189,6 +193,8 @@ def _load_cli_config(ctx: click.Context):
         cfg.agent.run_profile = ctx.obj["run_profile"]
     if ctx.obj.get("multi_agent") is not None:
         cfg.agent.multi_agent_enabled = ctx.obj["multi_agent"]
+    if ctx.obj.get("worker_mode") is not None:
+        cfg.agent.worker_mode = ctx.obj["worker_mode"]
     return cfg
 
 

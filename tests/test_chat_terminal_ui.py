@@ -100,7 +100,7 @@ def test_chat_approval_applies_to_the_next_round_and_restores_ask(tmp_path, monk
     outside.write_text("outside fixture\n", encoding="utf-8")
     config = AppConfig()
     config.agent.log_dir = str(tmp_path / "logs")
-    shell = Action(ActionType.TOOL_CALL, "read", ToolCall("shell", {"cmd": "sed -n '1p' example.txt"}))
+    shell = Action(ActionType.TOOL_CALL, "write", ToolCall("shell", {"cmd": "printf fixture > example.txt"}))
     view = Action(ActionType.TOOL_CALL, "read", ToolCall("file_view", {"path": str(outside)}))
     finish = Action(ActionType.FINISH, "", message="read complete")
     script = [shell, finish, shell, view, finish, shell, finish, shell, finish]

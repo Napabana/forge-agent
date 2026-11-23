@@ -14,6 +14,7 @@ Forge Agent 面向可验收、可追踪和可恢复的编码任务。这里介�
 - [隔离、验收与 GitHub 交付](design/isolation-acceptance.md) · 隔离执行为变更提供独立工作目录，验收判断变更是否满足要求，交付把已验证成果发布到远端。
 - [评测与经验迭代](design/evaluation.md) · 评测把模型行为与独立评分放入可复现实验。经验模块把通过验证的轨迹加工成候选知识。
 - [Supervisor 与 Worker](design/workers.md) · 主 Agent 可以把仓库探索、测试分析和审查并行分派，并在同一个任务里汇总发现。
+- [Worker 协作设计](design/worker-delegation-proposal.md) · 共享执行层的委派策略、预算分配、结果交付和评测。
 - [项目记忆](design/project-memory.md) · 跨任务保留经过验证、可归属到仓库的项目知识，减少重复探索。
 - [长时运行与恢复](design/durable-runtime.md) · 进程中断后复用已提交的动作和结果，并为无法确认的外部副作用保留核查路径。
 - [配置、模型与用量](design/configuration.md) · 配置层把用户设置与模型、工具和运行时能力连接起来，Provider 适配器统一协议与用量语义。

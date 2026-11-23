@@ -228,7 +228,7 @@ def build_deterministic_evidence(
         ):
             latest_test_index = interaction.observation_index
             latest_test_ref = interaction.observation.event_ref
-            status = "PASS" if interaction.observation.status == "SUCCESS" else "FAIL"
+            status = {"SUCCESS": "PASS", "NO_TESTS": "NO TESTS"}.get(interaction.observation.status, "FAIL")
             detail = _compact_text(interaction.observation.body, 260) or "No detail recorded."
             verification = [
                 status,

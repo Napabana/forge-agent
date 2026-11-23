@@ -82,7 +82,7 @@ class ExecutionConstraints:
 
 _STRICT_READ_TOOLS = frozenset({
     "file_read", "file_view", "git_status", "git_diff",
-    "search_text", "find_files", "find_symbol", "delegate_tasks",
+    "search_text", "find_files", "find_symbol", "delegate_tasks", "worker_status", "worker_wait",
 })
 
 

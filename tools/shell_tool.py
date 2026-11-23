@@ -50,7 +50,7 @@ _READONLY_PREFIXES: tuple[str, ...] = (
     "echo", "printf",
     "pwd", "whoami", "which", "type",
     "find", "locate",
-    "grep", "egrep", "fgrep", "rg", "ag",
+    "grep", "egrep", "fgrep", "ag",
     "wc", "sort", "uniq", "cut",
     "diff", "diff3",
     "file", "stat", "od", "xxd", "strings",
@@ -171,7 +171,7 @@ class ShellTool(BaseTool):
         cwd: str | None = params.get("cwd", None) or self._default_cwd
 
         if not cmd:
-            return ToolResult(success=False, output="", error="cmd is required")
+            return ToolResult(False, "", "cmd is required", ToolErrorType.INVALID_ARGUMENTS)
 
         if _references_internal_agent_path(cmd):
             return ToolResult(
@@ -199,6 +199,7 @@ class ShellTool(BaseTool):
                 success=False,
                 output="",
                 error=f"Command blocked for safety: matched '{blocked}'",
+                error_type=ToolErrorType.PERMISSION_DENIED,
             )
 
         # 层 2：白名单免确认
@@ -213,6 +214,7 @@ class ShellTool(BaseTool):
                     success=False,
                     output="",
                     error=f"Command rejected by user: {cmd!r}",
+                    error_type=ToolErrorType.PERMISSION_DENIED,
                 )
         # confirm_callback 为 None → 跳过确认直接执行（run 模式）
 
@@ -226,14 +228,26 @@ class ShellTool(BaseTool):
         """通过 runtime 执行命令（本地或 Docker 沙箱）。"""
         result = self._runtime.exec(cmd, cwd=cwd, timeout=timeout)
         output = _truncate(result.output, MAX_OUTPUT_CHARS)
-        if not result.success:
-            # 区分 timeout 和普通错误，error 字段包含可读原因
-            if "timed out" in result.stderr.lower():
-                error = result.stderr.strip()
-            else:
-                error = f"Exit code: {result.returncode}"
-        else:
+        state = getattr(result, "process_state", None)
+        if state == "exited":
+            return ToolResult(result.success, output,
+                              None if result.success else f"Exit code: {result.returncode}",
+                              None if result.success else ToolErrorType.TOOL_EXECUTION,
+                              process_state=state, exit_code=result.returncode)
+        if state == "timed_out":
+            return ToolResult(False, output, result.stderr.strip(), ToolErrorType.TIMEOUT, process_state=state)
+        if state == "not_started":
+            return ToolResult(False, output, result.stderr.strip(), ToolErrorType.INFRASTRUCTURE, process_state=state)
+        if state in {"interrupted", "unknown"}:
+            return ToolResult(False, output, result.stderr.strip() or "Shell completion could not be confirmed",
+                              process_state=state)
+        # Existing Runtime adapters can still return output without a completion receipt.
+        if result.success:
             error = None
+        elif "timed out" in result.stderr.lower():
+            error = result.stderr.strip()
+        else:
+            error = f"Exit code: {result.returncode}"
         return ToolResult(success=result.success, output=output, error=error)
 
 
@@ -248,6 +262,9 @@ def _check_blocked(cmd: str) -> str | None:
         if pattern.lower() in cmd_lower:
             return pattern
     return None
+
+
+_SED_LINE_PRINT = re.compile(r"sed[ \t]+-n[ \t]+'[0-9]+(?:,[0-9]+)?p'(?:[ \t]+[./\w][./\w-]*)+")
 
 
 def _is_readonly(cmd: str) -> bool:
@@ -266,6 +283,11 @@ def _is_readonly(cmd: str) -> bool:
         return True
     if stripped == "find" or stripped.startswith("find "):
         return _find_is_readonly(stripped)
+    if re.match(r"rg(?:[ \t]|$)", cmd.strip()):
+        return _is_literal_rg_query(cmd.strip())
+    # shortcut: recognize numeric line printing only; audit sed scripts and flags before expanding.
+    if _SED_LINE_PRINT.fullmatch(cmd.strip()):
+        return True
 
     for prefix in _READONLY_PREFIXES:
         if stripped == prefix or stripped.startswith(prefix + " "):
@@ -311,42 +333,50 @@ def _contains_mutating_git_command(cmd: str) -> bool:
     ) is not None
 
 
-def _is_repository_readonly(cmd: str) -> bool:
-    """Conservatively classify a small, provably read-only shell subset.
+_SHELL_QUOTED_OR_OPERATOR = re.compile(
+    r"""'[^'\r\n]*'|"(?:\\[^\r\n]|[^"\\\r\n])*"|\\[^\r\n]|&&|\|\||[;&|'"\\]"""
+)
 
-    Supported composition:
-    - simple read-only commands from _READONLY_PREFIXES;
-    - cd as a standalone chain segment;
-    - ; / && chains of those commands;
-    - pipelines where every stage is independently read-only.
 
-    Everything with redirection, command substitution, background execution,
-    ||, or an unknown/expressive command fails safe as mutation-capable.
-    """
+def _simple_shell_chains(cmd: str) -> list[list[str]]:
     stripped = cmd.strip()
     if not stripped:
-        return False
+        return []
 
     if any(token in stripped for token in ("$(", "`", ">", "<", "\n", "\r")):
-        return False
-    if "||" in stripped or re.search(r"(?<!&)&(?!&)", stripped):
-        return False
+        return []
+    chains: list[list[str]] = [[]]
+    start = 0
+    for match in _SHELL_QUOTED_OR_OPERATOR.finditer(stripped):
+        token = match.group()
+        if token in {"||", "&", "'", '"', "\\"}:
+            return []
+        if token not in {"&&", ";", "|"}:
+            continue
+        stage = stripped[start:match.start()].strip()
+        if not stage:
+            return []
+        chains[-1].append(stage)
+        if token != "|":
+            chains.append([])
+        start = match.end()
 
-    chains = [
-        part.strip()
-        for part in re.split(r"\s*(?:&&|;)\s*", stripped)
-        if part.strip()
-    ]
+    tail = stripped[start:].strip()
+    if tail:
+        chains[-1].append(tail)
+    elif stripped.endswith(";"):
+        chains.pop()
+    else:
+        return []
+    return chains
+
+
+def _is_repository_readonly(cmd: str) -> bool:
+    """Classify simple queries and shell chains for confirmation and planning."""
+    chains = _simple_shell_chains(cmd)
     if not chains:
         return False
-
-    for chain in chains:
-        stages = [
-            part.strip()
-            for part in re.split(r"(?<!\|)\|(?!\|)", chain)
-        ]
-        if not stages or any(not stage for stage in stages):
-            return False
+    for stages in chains:
 
         if len(stages) == 1:
             lowered = stages[0].lower()
@@ -362,6 +392,34 @@ def _is_repository_readonly(cmd: str) -> bool:
         if not all(_is_readonly(stage) for stage in stages):
             return False
 
+    return True
+
+
+_LITERAL_SHELL_STAGE = re.compile(r"""[a-z]+(?:[ \t]+(?:[-a-zA-Z0-9_./:=+,]|'[^'\r\n]*'|"[^"$\\\r\n]*")+)*""")
+_RG_READ_FLAGS = {
+    "--files", "--hidden", "--no-ignore", "--no-config", "--line-number", "--files-with-matches",
+    "--fixed-strings", "--ignore-case", "--smart-case", "--word-regexp", "--count",
+    "-n", "-l", "-F", "-i", "-S", "-w", "-v", "-c",
+}
+_RG_VALUE_FLAGS = {"-g", "--glob", "-e", "--regexp", "-t", "--type", "-A", "-B", "-C", "-m"}
+
+
+def _is_literal_rg_query(stage: str) -> bool:
+    # shortcut: recognize common literal rg queries for approval; audit options before expanding.
+    if not _LITERAL_SHELL_STAGE.fullmatch(stage):
+        return False
+    arguments = iter(shlex.split(stage)[1:])
+    for arg in arguments:
+        if arg == "--":
+            return True
+        if arg in _RG_VALUE_FLAGS:
+            value = next(arguments, None)
+            if value is None or value.startswith("-"):
+                return False
+        elif arg.startswith("--") and "=" in arg and arg.partition("=")[0] in _RG_VALUE_FLAGS:
+            continue
+        elif arg.startswith("-") and arg not in _RG_READ_FLAGS:
+            return False
     return True
 
 

@@ -129,11 +129,16 @@ class ToolOperation:
         ambiguous = False
         with run.transaction() as db:
             row = db.execute("SELECT effect FROM operations WHERE operation_id=?", (self.operation_id,)).fetchone()
-            ambiguous = (
-                row is not None and row["effect"] != "read_only"
-                and not result.success
-                and result.error_type not in {ToolErrorType.INVALID_ARGUMENTS, ToolErrorType.PERMISSION_DENIED}
-            )
+            if self.kind == "tool" and name == "shell" and result.process_state is not None:
+                ambiguous = result.process_state != "not_started" and (
+                    result.process_state != "exited" or result.exit_code is None
+                )
+            else:
+                ambiguous = (
+                    row is not None and row["effect"] != "read_only"
+                    and not result.success
+                    and result.error_type not in {ToolErrorType.INVALID_ARGUMENTS, ToolErrorType.PERMISSION_DENIED}
+                )
             changed = db.execute(
                 """UPDATE operations SET state=?, result_json=?, result_digest=?,
                    observation_json=?, updated_at=? WHERE operation_id=? AND run_id=? AND state='started'
@@ -144,7 +149,9 @@ class ToolOperation:
             )
             if changed.rowcount != 1:
                 raise StoreFormatError("operation cannot commit its result")
+        process = ({"process_state": result.process_state, "exit_code": result.exit_code}
+                   if result.process_state is not None else {})
         run.trace(EventType.TOOL_OUTCOME_UNKNOWN if ambiguous else EventType.TOOL_RESULT_COMMITTED,
-                  self.step, operation_id=self.operation_id)
+                  self.step, operation_id=self.operation_id, **process)
         if ambiguous:
             raise OutcomeUnknown(f"operation {self.operation_id} returned without a confirmed effect")

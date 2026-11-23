@@ -311,6 +311,22 @@ class TestDockerRuntimeUnit:
         container_cwd = docker_exec_call[workdir_idx + 1]
         assert container_cwd == f"{CONTAINER_WORKDIR}/src/module"
 
+    @pytest.mark.parametrize("receipt", [True, False])
+    def test_docker_shell_distinguishes_command_exit_from_client_failure(self, tmp_path, receipt):
+        rt = self._make_runtime(tmp_path)
+        rt._container_id = "fake-container-id"
+
+        def mock_run(args, **kwargs):
+            marker = args[-1]
+            stderr = f"actual error\n\n{marker}:127\n" if receipt else "Docker client disconnected"
+            return subprocess.CompletedProcess(args, 127, "", stderr)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            result = rt.exec("exit 127")
+        assert result.returncode == 127
+        assert result.process_state == ("exited" if receipt else "unknown")
+        assert result.stderr == ("actual error\n" if receipt else "Docker client disconnected")
+
     def test_cwd_translation_prefers_worktree_mount(self, tmp_path):
         """worktree_mount 映射应优先于主 repo 前缀映射。"""
         wt = tmp_path / ".worktrees" / "task1"

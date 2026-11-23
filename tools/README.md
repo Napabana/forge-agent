@@ -6,10 +6,16 @@
 
 让 Agent 在运行任务时调用。直接集成时按工具 schema 注册和传参。
 
+`test` 的调用状态与 `test_outcome` 分开。调用方读取 `passed`、`failed` 或 `no_tests` 判断 pytest 的结论，参数、进程及环境故障按工具错误类型处理。
+
+`shell` 从 Runtime 读取进程状态和退出码。持久化用这份证据区分正常退出、超时和回执丢失。
+
 ## 从哪里读代码
 
 - [`base.py`](base.py)
 - [`file_tool.py`](file_tool.py)
+- [`test_tool.py`](test_tool.py)
+- [`shell_tool.py`](shell_tool.py)
 - [`git_tool.py`](git_tool.py)
 - [`runtime.py`](runtime.py)
 - [`archive_read.py`](archive_read.py)

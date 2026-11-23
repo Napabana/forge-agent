@@ -53,6 +53,7 @@ def configured_agent_options(config):
         "finish_policy": config.agent.finish_policy,
         "run_profile": config.agent.run_profile,
         "multi_agent_enabled": config.agent.multi_agent_enabled,
+        "worker_mode": config.agent.worker_mode,
         "max_workers": config.agent.max_workers,
         "max_delegate_tasks": config.agent.max_delegate_tasks,
         "total_worker_tokens": config.agent.total_worker_tokens,

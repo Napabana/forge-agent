@@ -16,6 +16,7 @@
     "docs/design/project-memory.md",
     "docs/design/source-index.md",
     "docs/design/workers.md",
+    "docs/design/worker-delegation-proposal.md",
     "docs/PROJECT_STATE.md",
     "docs/README.md",
     "docs/reference.md",
@@ -92,6 +93,7 @@
         "agent/runner.py",
         "agent/orchestrate.py",
         "agent/coordinator.py",
+        "agent/background_workers.py",
         "agent/task.py",
         "entry/*.py",
         "ipc/*.py",
@@ -100,6 +102,8 @@
       "related_documents": [
         "docs/design/architecture.md",
         "docs/design/workers.md",
+        "docs/design/worker-delegation-proposal.md",
+        "docs/design/durable-runtime.md",
         "docs/design/source-index.md",
         "docs/README.md"
       ],
@@ -135,6 +139,7 @@
         "agent/event_log.py",
         "agent/loop_detector.py",
         "agent/prompt.py",
+        "agent/task.py",
         "agent/trace_v2.py",
         "config/schema.py",
         "harness/__init__.py",
@@ -159,6 +164,8 @@
       "related_documents": [
         "docs/design/architecture.md",
         "docs/design/isolation-acceptance.md",
+        "docs/design/planning-recovery.md",
+        "docs/design/terminal-ui.md",
         "docs/design/source-index.md"
       ],
       "cross_impacts": [
@@ -426,6 +433,8 @@
         "agent/session.py",
         "agent/session_store.py",
         "harness/executor.py",
+        "tools/runtime.py",
+        "tools/shell_tool.py",
         "entry/chat.py",
         "entry/github_issue.py",
         "entry/cli.py",

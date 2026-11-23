@@ -3,8 +3,26 @@
 The caller must supply a trusted input upper bound and enforce the returned
 output limit on the physical request. Estimates alone are not upper bounds.
 """
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import Lock
+
+_output_limit: ContextVar[int | None] = ContextVar("request_output_limit", default=None)
+
+
+@contextmanager
+def limit_request_output(limit: int | None):
+    token = _output_limit.set(limit)
+    try:
+        yield
+    finally:
+        _output_limit.reset(token)
+
+
+def request_output_limit(configured: int) -> int:
+    limit = _output_limit.get()
+    return configured if limit is None else min(configured, limit)
 
 
 class RequestBudgetExhausted(RuntimeError):

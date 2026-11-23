@@ -78,7 +78,7 @@ def test_eval_supervisor_budget_split_uses_same_total_cap(tmp_path):
         "supervisor_workers", 60_000,
     )(None, tmp_path, tmp_path / "supervisor", "supervisor")
     assert baseline.config.max_total_tokens == 60_000
-    assert supervisor.config.max_total_tokens == 40_000
+    assert supervisor.config.max_total_tokens == baseline.config.max_total_tokens
     assert supervisor.config.total_worker_tokens == 20_000
     assert supervisor.config.multi_agent_enabled
     assert supervisor.worker_backend_factory is not None

@@ -116,3 +116,12 @@ def test_failed_observation_surfaces_output_and_error(capsys):
     assert "from calc_core import CalculatorError" in output
     assert "1 more lines" in output
     assert "Error: pytest exited with code 2" in output
+
+
+def test_red_test_is_displayed_as_a_test_outcome(capsys):
+    RunEventRenderer()(_event(EventType.OBSERVATION, {"observation": {
+        "tool_name": "test", "status": "success", "test_outcome": "failed", "output": "12 failed, 1 passed",
+    }}))
+    output = capsys.readouterr().out
+    assert "Observation [test]: tests failed" in output
+    assert "12 failed, 1 passed" in output

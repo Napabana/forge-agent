@@ -16,6 +16,10 @@ Chat 的 `/approval` 复用 Run 的审批方式。`ask` 和 `auto` 使用受限�
 
 Agent 循环执行 `LLM → Action → ToolCall → Observation`，并处理计划、反思、完成请求和退出。工具提供 schema、参数校验和结果结构。执行器串联 Hooks、Permission 和执行约束，并在持久化模式提交操作日志。文件、搜索、符号、测试、Shell 和 Git 等工具使用统一结果类型。Completion Guard 根据工作区变更和测试证据决定是否接受完成。
 
+Shell 的进程状态与工具成败分别记录。只要收到了正常退出回执，Agent 就能看到原始输出和退出码，并决定下一步。审批和计划继续根据命令判断权限，持久化使用 Runtime 的执行证据。
+
+`test` 工具分别记录调用状态和 pytest 的 `test_outcome`。断言失败（退出码 1）和未收集到用例（退出码 5）都能产生有效的工具观察。Trace 记录 `tool_execution_finished` 及测试结论，终端单独统计测试执行结果。只有通过的测试才能提供完成证据。参数无效、权限拒绝、超时和执行环境异常有各自的工具错误类型。
+
 ## 预期效果
 
 工具调用可计量、可审计。独立的完成门禁使模型的 FINISH 请求具备可检查依据。

@@ -15,7 +15,7 @@ import pytest
 from tools.file_tool import FileEditTool, FileReadTool, FileViewTool, FileWriteTool
 from tools.git_tool import GitAddTool, GitCommitTool, GitDiffTool, GitStatusTool
 from tools.search_tool import FindFilesTool, FindSymbolTool, SearchTextTool
-from tools.shell_tool import ShellTool, _check_blocked, _truncate
+from tools.shell_tool import ShellTool, _check_blocked, _needs_confirm, _truncate
 from tools.test_tool import PytestTool
 
 
@@ -293,6 +293,26 @@ class TestFileWriteTool:
 # ===========================================================================
 
 class TestShellTool:
+    @pytest.mark.parametrize(("cmd", "read_only"), [
+        ("rg --files -g '!*.pyc'", True),
+        ("rg -n 'build_solver' smt_engine.py", True),
+        ("pwd && rg --files", True),
+        ('pwd && rg -n "grid|GridRequest|solve_full|ValueError|candidates" . --glob \'!*.jpg\'', True),
+        ("rg -n 'grid||solver; next' fixture.txt", True),
+        ("rg -n 'grid|solver' . --glob='!*.jpg'", True),
+        ("rg -n 'grid|solver' fixture.txt | rg -n 'grid|solver'", True),
+        ("rg -n 'grid|solver' fixture.txt || touch fixture", False),
+        ("rg -n 'grid|solver' fixture.txt & touch fixture", False),
+        ('rg -n "grid|solver fixture.txt', False),
+        ("rg --pre=formatter 'x' file.txt", False),
+        ("rg $SEARCH_OPTIONS 'x' file.txt", False),
+        ("rg -n \"$PATTERN\" file.txt", False),
+        ("rg --files && sed -i '1d' file.txt", False),
+        ("rg --files > output.txt", False),
+    ])
+    def test_confirmation_separates_quoted_rg_arguments_from_shell_operators(self, cmd, read_only):
+        assert _needs_confirm(cmd) is not read_only
+
     tool = ShellTool()
 
     def test_simple_command(self):
@@ -533,13 +553,16 @@ class TestTestTool:
         result = self.tool.execute({"path": str(tests), "cwd": str(tmp_path)})
         assert result.success
         assert result.error is None
+        assert result.test_outcome == "passed"
 
     def test_failing_tests(self, pytest_repo):
         result = self.tool.execute({
             "path": str(pytest_repo / "tests"),
             "cwd": str(pytest_repo),
         })
-        assert not result.success
+        assert result.success
+        assert result.test_outcome == "failed"
+        assert result.error is None
         assert "test_fail" in result.output
 
     def test_output_contains_failure_info(self, pytest_repo):

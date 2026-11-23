@@ -42,6 +42,14 @@ def present(event: Event, config: UIConfig, *, verbose=False, reasoning=False) -
     kind, p = event.event_type, redact_trace_value(event.payload)
     if not isinstance(kind, E):
         return None
+    if kind in (E.WORKER_FINISHED, E.WORKER_PARTIAL_READY):
+        if p.get("partial_already_notified"):
+            return None
+        status = p.get("worker_status", "unknown")
+        worker = p.get("worker_id", "")
+        label = "partial result" if kind == E.WORKER_PARTIAL_READY else status
+        return TerminalEvent(f"Worker {label} · {p.get('worker_role', '')} · {worker}",
+                             "status.success" if status == "success" else "status.warning")
     if kind == E.ACTION:
         action = p.get("action", {})
         name = action.get("action_type", "unknown")
@@ -61,21 +69,28 @@ def present(event: Event, config: UIConfig, *, verbose=False, reasoning=False) -
     if kind == E.OBSERVATION:
         obs = p.get("observation", {})
         status = obs.get("status", "unknown")
-        success = status == "success"
+        tool_succeeded = status == "success"
+        test_outcome = obs.get("test_outcome")
+        status = {"passed": "tests passed", "failed": "tests failed", "no_tests": "no tests collected"}.get(
+            test_outcome, status
+        )
+        style = "status.error" if not tool_succeeded else (
+            "status.warning" if test_outcome in {"failed", "no_tests"} else "status.success"
+        )
         mode = "all" if verbose else config.tool_output_mode
         lines = str(obs.get("output") or "").strip().splitlines()
         limit = len(lines) if mode == "all" else config.tool_output_preview_lines
-        if success and mode == "on_error":
+        if style == "status.success" and mode == "on_error":
             limit = 1
         preview = lines[:limit] if mode != "none" else []
         if mode != "all":
             preview = [line[:240] + "…" if len(line) > 240 else line for line in preview]
         if preview and len(preview) < len(lines):
             preview.append(f"... ({len(lines) - len(preview)} more lines)")
-        if not success and obs.get("error"):
+        if not tool_succeeded and obs.get("error"):
             preview.append(f"Error: {obs['error']}")
         tool = obs.get("tool_name", "unknown")
-        return TerminalEvent(f"Observation [{tool}]: {status}", "status.success" if success else "status.error",
+        return TerminalEvent(f"Observation [{tool}]: {status}", style,
                              "\n".join(preview), rich_title=f"{tool} · {status}")
     if kind == E.TASK_START:
         return TerminalEvent(f"Task: {p.get('task', {}).get('description', '')}", "app.title")

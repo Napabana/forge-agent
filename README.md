@@ -20,7 +20,7 @@ forgeAgent chat --repo .
 - 模型与工具共享执行链，支持仓库符号导航、上下文预算和可追溯压缩。
 - Git worktree 与 Docker 提供隔离执行，独立验收为任务结果提供可检查依据。
 - 运行时可保存检查点、恢复工具回执、导入归档包，并从历史 Chat 轮次分支继续。
-- Skills、MCP、Worker 和项目记忆通过同一执行机制集成。
+- Skills、MCP 和项目记忆通过同一执行机制集成。后台 Worker 在分配的额度内独立取证，主动交回结论或已有证据，主 Agent 可以同时推进其他工作。 [Worker 使用方式](docs/design/workers.md)
 - 本地故障注入和编码评测保存独立结果、用量和 Trace。
 
 [使用手册](USAGE.md) · [设计文档](docs/README.md) · [源码索引](docs/design/source-index.md)
